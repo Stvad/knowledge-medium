@@ -331,7 +331,7 @@ const panelsInColumn = (column: HTMLElement): HTMLElement[] =>
  * backlink entry containers) because we only check for the nearest
  * shell, ignoring any wrapper chrome in between.
  */
-const closestBlockAncestor = (
+export const closestBlockAncestor = (
   instanceEl: HTMLElement,
   panel: HTMLElement,
 ): HTMLElement | null => {
@@ -577,39 +577,16 @@ export const rowSlotIn = (
 }
 
 /**
- * The nearest row that is RESERVED but not yet mounted between `from` and the
- * mounted neighbour `to` (or anywhere beyond `from`, when nothing is mounted
- * that way). Document order, so "nearest" is the first one in the direction of
- * travel.
- *
- * This is what a caller needs at a boundary its model can't see past: within a
- * scope the model names the next row, but at the EDGE of one — stepping out of
- * an embed, out of a backlink entry — the rendered order decides, and a row
- * that has a place reserved is part of that order even though no walk names it
- * and no query for mounted rows finds it.
- *
- * Two kinds of reserved row are NOT part of that order, and both would be a
- * focus write onto a row the user can't reach or see:
- *
- *   - anything in `from`'s OWN scope. A caller only asks at an edge, which
- *     means the model found no next row in this scope — so a slot claiming to
- *     be one is stale: a just-collapsed subtree's child, a deleted sibling's
- *     reservation. The model is what validates a row of this scope, everywhere,
- *     and at an edge it has already said there is none. (A NESTED surface's
- *     slot carries a different scope, and stepping into that is the point.)
- *   - anything inside an excluded surface. Its rows are not navigable, so
- *     landing there leaves the next keystroke with no anchor at all.
- *
- * `ownScope: 'include'` is for a caller that steps by drawn order with no model
- * to validate the rows of `from`'s scope: there a slot in that scope is the
- * next row, not a stale one.
+ * The nearest reserved row before the mounted or model destination. Only
+ * consider scopes the model could not enumerate: a reservation in a scope the
+ * model just walked may be stale after a collapse, deletion or move.
  */
 export const reservedRowBetween = (
   from: HTMLElement,
   to: HTMLElement | null,
   direction: 'up' | 'down',
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-  ownScope: 'skip' | 'include' = 'skip',
+  {modelScope, descend = true}: {modelScope?: string; descend?: boolean} = {},
 ): FocusedBlockLocation | null => {
   const panel = panelOf(from)
   if (!panel) return null
@@ -620,7 +597,9 @@ export const reservedRowBetween = (
     // Past the mounted neighbour it isn't "between" — the neighbour is then the
     // nearer answer and nothing is missing before it.
     (!to || aheadOf(slot, to, direction)) &&
-    (ownScope === 'include' || slot.dataset.lazyRenderScopeId !== fromScope) &&
+    slot.dataset.lazyRenderScopeId !== fromScope &&
+    slot.dataset.lazyRenderScopeId !== modelScope &&
+    (descend || !from.contains(slot)) &&
     laneOf(slot) === fromLane &&
     !isInExcludedSurface(slot, excludedSurfaces) &&
     // Never picks a half-labelled slot and then gives up on it, which would
@@ -733,6 +712,7 @@ export const verticalNeighbor = (
   current: HTMLElement,
   direction: 'up' | 'down',
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+  descend = true,
 ): HTMLElement | null => {
   const panel = panelOf(current)
   if (!panel) return null
@@ -741,7 +721,10 @@ export const verticalNeighbor = (
   if (idx === -1) return null
 
   if (direction === 'down') {
-    if (idx + 1 < instances.length) return instances[idx + 1]
+    for (let index = idx + 1; index < instances.length; index++) {
+      const next = instances[index]!
+      if (descend || !current.contains(next)) return next
+    }
   } else {
     if (idx - 1 >= 0) return instances[idx - 1]
   }

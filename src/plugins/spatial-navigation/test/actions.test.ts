@@ -3,6 +3,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { outlineSurfaceOf } from '@/data/outlineSurface.js'
+import { childrenViewFacet, surfaceOwnerFacet, type DrawnChild } from '@/data/childrenView.js'
+import { HandleStore, LoaderHandle } from '@/data/internals/handleStore.js'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -170,6 +172,26 @@ const buildPanelDom = (instances: NavInstance[]): void => {
   document.body.appendChild(panel)
 }
 
+const FOREIGN_SCOPE = 'surface.test:foreign'
+
+const declareForeignMembers = async (withNote = false) => {
+  const outer = outlineSurfaceOf({scopeRootId: 'top', renderScopeId: 'panel:outline'})!
+  const store = new HandleStore({gcTimeMs: 0})
+  const key = 'test.foreign-members'
+  const children = store.getOrCreate(key, () => new LoaderHandle<DrawnChild[]>({
+    store, key, loader: async () => [{kind: 'nested-surface', renderScopeId: FOREIGN_SCOPE, foreign: true, members: ['X', 'Q']}],
+  }))
+  env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    childrenViewFacet.of(({parent}) => parent.id === 'B' ? {id: key, read: () => children} : null),
+    surfaceOwnerFacet.of(({renderScopeId}) => renderScopeId === FOREIGN_SCOPE ? {blockId: 'B', surface: outer} : null),
+  ]))
+  await env.repo.tx(async tx => {
+    await tx.create({id: 'Q', workspaceId: WS, parentId: null, orderKey: 'f0', content: 'Q'})
+    if (withNote) await tx.create({id: 'note', workspaceId: WS, parentId: 'X', orderKey: 'a0', content: 'note'})
+  }, {scope: ChangeScope.UiState})
+}
+
 /** Two panels stacked in one layout column, so `verticalNeighbor` can fall
  *  through from the end of the upper panel's MOUNTED rows into the lower one. */
 const buildStackedColumnDom = (upper: NavInstance[], lower: NavInstance[]): void => {
@@ -319,6 +341,27 @@ afterEach(async () => {
 })
 
 describe('spatial navigation selection actions', () => {
+  it('stops keyboard extension at a query member on another page in the same render scope', async () => {
+    await declareForeignMembers()
+    buildPanelDom([{blockId: 'B', renderScopeId: 'panel:outline', nested: [
+      {blockId: 'X', renderScopeId: FOREIGN_SCOPE},
+      {blockId: 'Q', renderScopeId: FOREIGN_SCOPE},
+    ]}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: FOREIGN_SCOPE})
+    await panel.set(selectionStateProp, {anchorBlockId: 'X', selectedBlockIds: ['X']})
+
+    const {structuralExtend} = await pressExtendSelectionDown({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      renderScopeId: FOREIGN_SCOPE,
+    })
+
+    expect(structuralExtend).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['X'])
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'X', renderScopeId: FOREIGN_SCOPE})
+  })
+
   it('extends normal-mode selection through DOM order instead of structural order', async () => {
     buildPanelDom([
       {blockId: 'A', renderScopeId: 'panel:outline'},
@@ -446,6 +489,81 @@ describe('spatial navigation selection actions', () => {
 })
 
 describe('spatial navigation shift-click selection', () => {
+  it('extends within one foreign member when the note renders in its own scope', async () => {
+    await declareForeignMembers(true)
+    const noteScope = 'embed:foreign-note'
+    buildPanelDom([{blockId: 'B', renderScopeId: 'panel:outline', nested: [
+      {blockId: 'X', renderScopeId: FOREIGN_SCOPE, nested: [{blockId: 'note', renderScopeId: noteScope}]},
+    ]}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: FOREIGN_SCOPE})
+
+    await shiftClick({block: env.repo.block('note'), uiStateBlock: panel, targetElement: blockNavItem('note')})
+
+    expect(panel.peekProperty(selectionStateProp)).toEqual({anchorBlockId: 'X', selectedBlockIds: ['X']})
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'note', renderScopeId: noteScope})
+  })
+
+  it('stops a range from a foreign member into a different page embedded beneath it', async () => {
+    await declareForeignMembers()
+    const embedScope = 'embed:foreign-other-page'
+    buildPanelDom([{blockId: 'B', renderScopeId: 'panel:outline', nested: [
+      {blockId: 'X', renderScopeId: FOREIGN_SCOPE, nested: [{blockId: 'Q', renderScopeId: embedScope}]},
+    ]}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: FOREIGN_SCOPE})
+
+    const {structuralSelect} = await shiftClick({
+      block: env.repo.block('Q'), uiStateBlock: panel, targetElement: blockNavItem('Q'),
+    })
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toBeUndefined()
+  })
+
+  it('consumes a range whose target is a foreign query member', async () => {
+    await declareForeignMembers()
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {blockId: 'B', renderScopeId: 'panel:outline', nested: [{blockId: 'X', renderScopeId: FOREIGN_SCOPE}]},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+
+    const {structuralSelect} = await shiftClick({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('X'),
+    })
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toBeUndefined()
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'A', renderScopeId: 'panel:outline'})
+  })
+
+  it.each([
+    {blockId: 'X', renderScopeId: FOREIGN_SCOPE},
+    {deferredBlockId: 'Q', deferredScopeId: FOREIGN_SCOPE},
+  ])('refuses a range that passes a foreign query member (%j) with both endpoints outside it', async member => {
+    await declareForeignMembers()
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {blockId: 'B', renderScopeId: 'panel:outline', nested: [member]},
+      {blockId: 'C', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+
+    const {structuralSelect} = await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+    })
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toBeUndefined()
+  })
+
   const blockNavItem = (blockId: string): HTMLElement => {
     const el = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"]`)
     if (!el) throw new Error(`missing nav item ${blockId}`)
@@ -973,7 +1091,10 @@ describe('spatial navigation vertical actions', () => {
   // a whole subtree tall, which puts the row after it far outside the overscan.
   // The deferred row still HOLDS ITS PLACE in the document, which is all the
   // decision needs.
-  it('steps into a nested surface even when the model row after it has not mounted', async () => {
+  it.each([
+    {blockId: 'X', renderScopeId: 'embed:A:X', surface: 'embedded'},
+    {deferredBlockId: 'X', deferredScopeId: 'embed:A:X'},
+  ])('steps onto a mounted or reserved nested row before the model slot (%j)', async nestedRow => {
     buildPanelDom([{
       blockId: 'top',
       renderScopeId: 'panel:outline',
@@ -983,7 +1104,7 @@ describe('spatial navigation vertical actions', () => {
           blockId: 'A',
           renderScopeId: 'panel:outline',
           surface: 'outline',
-          nested: [{blockId: 'X', renderScopeId: 'embed:A:X', surface: 'embedded'}],
+          nested: [nestedRow],
         },
         // 'B' follows 'A' in the model; its row is still a placeholder.
         {deferredBlockId: 'B', deferredScopeId: 'panel:outline'},

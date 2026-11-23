@@ -16,12 +16,16 @@ import { useFocusPlacedChildIds } from '@/hooks/focusedChild'
 import { openQueryValue } from './query/queryValue'
 import { useQueryFieldId, type TableQuery } from './query/source'
 import { queryProp } from './schema'
+import { notesInScope } from './registry'
 
 /** Is a block in this render scope being edited? */
 export const useEditingIn = (uiStateBlock: Block, renderScopeId: string): boolean =>
-  useHandle(uiStateBlock, {selector: data => !!data &&
-    focusedBlockLocationFromProperties(data.properties)?.renderScopeId === renderScopeId &&
-    safeDecodeRowProperty(data, isEditingProp)})
+  useHandle(uiStateBlock, {selector: data => {
+    if (!data || !safeDecodeRowProperty(data, isEditingProp)) return false
+    const focusedScope = focusedBlockLocationFromProperties(data.properties)?.renderScopeId
+    return focusedScope === renderScopeId || (focusedScope !== undefined &&
+      notesInScope(focusedScope)?.grid.renderScopeId === renderScopeId)
+  }})
 
 /** The ids whose blocks still exist: a row made here and then deleted leaves the grid. */
 export const useLiveRows = (repo: Block['repo'], ids: readonly string[]): readonly string[] => {

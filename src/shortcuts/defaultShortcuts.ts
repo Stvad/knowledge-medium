@@ -18,11 +18,10 @@ import { holdsSource } from '@/data/blockTypes'
 import { bothShowIndependentChildren, mergeUp } from './blockMergeGesture'
 import {
   nextDrawnStep,
-  nextVisibleBlock,
   previousDrawnStep,
-  previousVisibleBlock,
   getRootBlock,
-  blockAfterSubtreeRemoval,
+  locationAfterSubtreeRemoval,
+  type DrawnLocation,
 } from '@/utils/selection.js'
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
@@ -884,10 +883,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, surface)
+        const {block: prevVisible, surface: destination} = await previousDrawnStep(block, surface)
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
-        if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last')) {
+        if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last', destination.renderScopeId)) {
           setIsEditing(uiStateBlock, false)
           return
         }
@@ -898,7 +897,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           x: caretX,
         })
 
-        await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
+        await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: destination.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowUp',
@@ -928,12 +927,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        if (focusPropertyRow(block.id, 'first')) {
+        if (focusPropertyRow(block.id, 'first', surface.renderScopeId)) {
           setIsEditing(uiStateBlock, false)
           return
         }
 
-        const nextVisible = await nextVisibleBlock(block, surface)
+        const {block: nextVisible, surface: destination} = await nextDrawnStep(block, surface)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -941,7 +940,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           x: caretX,
         })
 
-        await focusBlock(uiStateBlock, nextVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
+        await focusBlock(uiStateBlock, nextVisible.id, {edit: true, renderScopeId: destination.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowDown',
@@ -963,7 +962,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, surface)
+        const {block: prevVisible, surface: destination} = await previousDrawnStep(block, surface)
         if (!prevVisible) return
 
         const prevData = await prevVisible.load()
@@ -972,7 +971,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           start: prevData?.content.length ?? 0,
         })
 
-        await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
+        await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: destination.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowLeft',
@@ -994,7 +993,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const nextVisible = await nextVisibleBlock(block, surface)
+        const {block: nextVisible, surface: destination} = await nextDrawnStep(block, surface)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -1002,7 +1001,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           start: 0,
         })
 
-        await focusBlock(uiStateBlock, nextVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
+        await focusBlock(uiStateBlock, nextVisible.id, {edit: true, renderScopeId: destination.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowRight',
@@ -1050,21 +1049,29 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           // actually happened. A refusal must not leave the cursor somewhere
           // else on a block that survived, which is what "it looks like the
           // block vanished" means here.
-          const landing: {at: {id: string; start: number} | null} = {at: null}
+          const landings: DrawnLocation[] = []
           const deleted = await deleteBlockThroughUi(block, {
             beforeWrite: async () => {
-              const prevVisible = await previousVisibleBlock(block, surface)
-              if (!prevVisible) return
-              const prevData = await prevVisible.load()
-              landing.at = {id: prevVisible.id, start: prevData?.content.length ?? 0}
+              const previous = await previousDrawnStep(block, surface)
+              if (!previous.block) return
+              landings.push({block: previous.block, surface: previous.surface})
+              if (previous.crossed) {
+                const fallback = await locationAfterSubtreeRemoval(block, surface, new Set([block.id]))
+                if (fallback) landings.push(fallback)
+              }
             },
           })
-          if (deleted && landing.at) {
+          if (!deleted) return
+          for (const target of landings) {
+            // A nested surface can draw another occurrence of a removed block.
+            const data = await target.block.load()
+            if (!data) continue
             await uiStateBlock.set(editorSelection, {
-              blockId: landing.at.id,
-              start: landing.at.start,
+              blockId: target.block.id,
+              start: target === landings[0] ? data.content.length : 0,
             })
-            await focusBlock(uiStateBlock, landing.at.id, {edit: true, renderScopeId: deps.renderScopeId})
+            await focusBlock(uiStateBlock, target.block.id, {edit: true, renderScopeId: target.surface.renderScopeId})
+            break
           }
           return
         }
@@ -1122,7 +1129,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // The next visible block is the one that folds away — the same block
         // Backspace would merge upward if the caret sat at its start
-        // (previousVisibleBlock and nextVisibleBlock are inverses over the
+        // (previousDrawnStep and nextDrawnStep are inverses over the
         // visible-order list, so this stays at the same boundary).
         const {block: nextVisible, crossed} = await nextDrawnStep(block, surface)
         if (!nextVisible || crossed) return
@@ -1267,21 +1274,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     if (!selectedBlocks.length) return
 
     const surface = outlineSurfaceOf(deps)
-    const focus: {target: Block | null} = {target: null}
+    const focus: {target: DrawnLocation | null} = {target: null}
     const deleted = await deleteBlocksThroughUi(selectedBlocks, {
       animate: true,
       beforeWrite: async () => {
         const selectedIds = new Set(selectedBlocks.map(block => block.id))
         const after = surface
-          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], surface, selectedIds)
+          ? await locationAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], surface, selectedIds)
           : null
-        focus.target = after && !selectedIds.has(after.id) ? after : null
+        focus.target = after && !selectedIds.has(after.block.id) ? after : null
       },
     })
     if (!deleted) return
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
     if (focus.target) {
-      void focusBlock(uiStateBlock, focus.target.id)
+      void focusBlock(uiStateBlock, focus.target.block.id, {renderScopeId: focus.target.surface.renderScopeId})
     }
   }
 
@@ -1296,7 +1303,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * selection: with supplied deps the two can differ.
    */
   const cutBlocks = async (deps: Pick<BlockShortcutDependencies, 'uiStateBlock' | 'scopeRootId' | 'scopeRootForcesOpen' | 'renderScopeId' | 'propertyDisplay'> & {selectedBlocks: Block[]}): Promise<void> => {
-    const {uiStateBlock, selectedBlocks, renderScopeId, propertyDisplay} = deps
+    const {uiStateBlock, selectedBlocks, propertyDisplay} = deps
     const surface = outlineSurfaceOf(deps)
     if (!selectedBlocks.length) return
     let outcome: 'cut' | 'empty'
@@ -1317,9 +1324,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     // `p` is a move down) would otherwise land inside the cut and be refused.
     const selectedIds = new Set(selectedBlocks.map(block => block.id))
     const after = surface
-      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], surface, selectedIds)
+      ? await locationAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], surface, selectedIds)
       : null
-    if (after && !selectedIds.has(after.id)) void focusBlock(uiStateBlock, after.id, {renderScopeId})
+    if (after && !selectedIds.has(after.block.id)) void focusBlock(uiStateBlock, after.block.id, {renderScopeId: after.surface.renderScopeId})
 
     const cutId = getArmedCut()?.cutId
     showInfo(`Cut ${pluralize(selectedBlocks.length, 'block')}: paste to move`, {

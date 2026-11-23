@@ -8,9 +8,9 @@ import {
   uiStateRenderScopeId,
 } from '@/data/properties.js'
 import {
-  getLastVisibleDescendant,
-  nextVisibleBlock,
-  previousVisibleBlock,
+  lastDrawnStep,
+  nextDrawnStep,
+  previousDrawnStep,
 } from '@/utils/selection.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { actionsFacet } from '@/extensions/core.js'
@@ -52,27 +52,21 @@ const focusMovedDuringWalk = (deps: BlockShortcutDependencies): boolean => {
   )
 }
 
-/** Walk up to `count` visible blocks in `direction`, stopping early at the
- *  scope boundary. Returns the landing block, or null when the start block is
- *  already at the boundary (no movement). Exported for direct testing — the
- *  jump_many_{up,down} actions are thin focus wrappers around it. */
+/** Count drawn rows until the requested distance or the edge of the walk. */
 export const jumpVisibleBlocks = async (
   startBlock: BlockShortcutDependencies['block'],
   surface: OutlineSurface,
   count: number,
   direction: 'up' | 'down',
 ) => {
-  let current = startBlock
-  let last = startBlock
+  const step = direction === 'up' ? previousDrawnStep : nextDrawnStep
+  let location = {block: startBlock, surface}
   for (let i = 0; i < count; i++) {
-    const next = direction === 'up'
-      ? await previousVisibleBlock(current, surface)
-      : await nextVisibleBlock(current, surface)
-    if (!next) break
-    current = next
-    last = next
+    const next = await step(location.block, location.surface)
+    if (!next.block) break
+    location = {block: next.block, surface: next.surface}
   }
-  return last === startBlock ? null : last
+  return location.block === startBlock && location.surface === surface ? null : location
 }
 
 export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] {
@@ -120,9 +114,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const surface = outlineSurfaceOf(deps)
         if (!block || !uiStateBlock || !surface) return
 
-        const next = await nextVisibleBlock(block, surface)
+        const {block: next, surface: destination} = await nextDrawnStep(block, surface)
         if (next && !focusMovedDuringWalk(deps)) {
-          void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+          void focusBlock(uiStateBlock, next.id, {renderScopeId: destination.renderScopeId})
         }
       },
       defaultBinding: {
@@ -137,9 +131,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const surface = outlineSurfaceOf(deps)
         if (!block || !uiStateBlock || !surface) return
 
-        const prev = await previousVisibleBlock(block, surface)
+        const {block: prev, surface: destination} = await previousDrawnStep(block, surface)
         if (prev && !focusMovedDuringWalk(deps)) {
-          void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
+          void focusBlock(uiStateBlock, prev.id, {renderScopeId: destination.renderScopeId})
         }
       },
       defaultBinding: {
@@ -227,15 +221,14 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'jump_to_last_visible_block',
       description: 'Jump to last visible block',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {uiStateBlock, renderScopeId} = deps
+        const {uiStateBlock} = deps
         const surface = outlineSurfaceOf(deps)
         if (!surface) return
 
-        const lastBlock = await getLastVisibleDescendant(repo.block(surface.scopeRootId), surface)
-        if (!lastBlock) return
+        const {block: lastBlock, surface: destination} = await lastDrawnStep(repo.block(surface.scopeRootId), surface)
 
         void focusBlock(uiStateBlock, lastBlock.id, {
-          renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, surface.scopeRootId),
+          renderScopeId: destination.renderScopeId ?? uiStateRenderScopeId(uiStateBlock, destination.scopeRootId),
         })
       },
       defaultBinding: {
@@ -246,12 +239,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'jump_many_down',
       description: 'Jump down several blocks',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock, renderScopeId} = deps
+        const {block, uiStateBlock} = deps
         const surface = outlineSurfaceOf(deps)
         if (!surface) return
 
         const target = await jumpVisibleBlocks(block, surface, JUMP_BLOCK_COUNT, 'down')
-        if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
+        if (target) void focusBlock(uiStateBlock, target.block.id, {renderScopeId: target.surface.renderScopeId})
       },
       defaultBinding: {
         keys: 'Control+d',
@@ -261,12 +254,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'jump_many_up',
       description: 'Jump up several blocks',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock, renderScopeId} = deps
+        const {block, uiStateBlock} = deps
         const surface = outlineSurfaceOf(deps)
         if (!surface) return
 
         const target = await jumpVisibleBlocks(block, surface, JUMP_BLOCK_COUNT, 'up')
-        if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
+        if (target) void focusBlock(uiStateBlock, target.block.id, {renderScopeId: target.surface.renderScopeId})
       },
       defaultBinding: {
         keys: 'Control+u',

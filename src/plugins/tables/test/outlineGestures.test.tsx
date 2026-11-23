@@ -41,7 +41,9 @@ import { propertyDisplayProp } from '@/data/propertyDisplayMode'
 import { turnIntoTable } from '../convert'
 import { tablesPlugin } from '../index'
 import { CELL_CONTROL_SELECTOR } from '../controller'
-import { gridOfHost, tableRenderScopeId } from '../registry'
+import { TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT } from '../keys'
+import { gridOfHost, tableNotesScopeId, tableRenderScopeId } from '../registry'
+import { queryProp } from '../schema'
 
 const USER: User = {id: 'test-user', name: 'Test user'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
@@ -180,11 +182,11 @@ const editorOn = async (blockId: string) => {
 }
 
 /** Open an editor on `blockId` in the table, with the caret at `at`. */
-const editAt = async (blockId: string, at: 'start' | 'end') => {
+const editAt = async (blockId: string, at: 'start' | 'end', renderScopeId = SCOPE) => {
   const length = (await repo.load(blockId))?.content.length ?? 0
   await act(async () => {
     await ui().set(editorSelection, {blockId, start: at === 'start' ? 0 : length})
-    await focusBlock(ui(), blockId, {edit: true, renderScopeId: SCOPE})
+    await focusBlock(ui(), blockId, {edit: true, renderScopeId})
   })
   const view = await editorOn(blockId)
   await waitFor(() => expect(view.state.selection.main.head).toBe(at === 'start' ? 0 : length))
@@ -803,5 +805,83 @@ describe('the outline around a table', () => {
     expect(await repo.load('after')).toMatchObject({content: 'after'})
     expect(await db.db.getAll('SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY id', [HOST]))
       .toEqual(machinery)
+  })
+})
+
+it('focuses both occurrences of a query result and keeps each occurrence’s gestures', async () => {
+  configureRuntime(vimNormalModePlugin({repo}))
+  const middle = crypto.randomUUID()
+  await repo.tx(async tx => {
+    await tx.create({id: middle, parentId: 'row-0', workspaceId: WS, orderKey: 'a1', content: 'Middle'})
+    await tx.create({id: 'leaf', parentId: middle, workspaceId: WS, orderKey: 'a1', content: 'Leaf'})
+    await tx.create({id: 'direct', parentId: 'row-0', workspaceId: WS, orderKey: 'a2', content: 'Direct child'})
+  }, {scope: ChangeScope.BlockDefault})
+  await db.db.execute("UPDATE blocks SET created_at = 100000 WHERE id = 'row-0'")
+  await db.db.execute("UPDATE blocks SET created_at = 200000 WHERE id = 'leaf'")
+  await db.db.execute("UPDATE blocks SET created_at = 300000 WHERE id = 'direct'")
+  await repo.block(HOST).set(queryProp, 'created<2000-01-01')
+  await repo.awaitReprojections()
+  mount()
+  const notesScope = tableNotesScopeId(SCOPE, 'row-0')
+  await waitFor(() => {
+    const shells = [...document.querySelectorAll<HTMLElement>('[data-block-shell][data-block-id="leaf"]')]
+    expect(shells.map(shell => shell.dataset.renderScopeId)).toEqual([notesScope, SCOPE])
+    expect(shells[0]?.closest('[data-table-notes]')).not.toBeNull()
+    const direct = [...document.querySelectorAll<HTMLElement>('[data-block-shell][data-block-id="direct"]')]
+    expect(direct.map(shell => shell.dataset.renderScopeId)).toEqual([SCOPE])
+  })
+
+  const focusLeafAndMoveUp = async (renderScopeId: string) => {
+    await act(async () => { await focusBlock(ui(), 'leaf', {renderScopeId}) })
+    await waitFor(() => expect(activeContexts.get(ActionContextTypes.NORMAL_MODE)).toMatchObject({
+      block: {id: 'leaf'}, renderScopeId,
+    }))
+    await act(async () => { await runActionById('move_up', new KeyboardEvent('keydown')) })
+  }
+  await focusLeafAndMoveUp(notesScope)
+  await waitFor(() => expect(focused()).toEqual({blockId: middle, renderScopeId: notesScope}))
+  await waitFor(() => expect(activeContexts.get(ActionContextTypes.NORMAL_MODE)).toMatchObject({
+    block: {id: middle}, renderScopeId: notesScope,
+  }))
+  await act(async () => { await runActionById('move_up', new KeyboardEvent('keydown')) })
+  await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
+  await focusLeafAndMoveUp(SCOPE)
+  await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
+
+  const editor = await editAt('leaf', 'start', notesScope)
+  act(() => { editor.dispatch({selection: {anchor: 2}}) })
+  press(editor, 'Enter')
+  await waitFor(async () => expect(await contentsUnder(middle)).toEqual(['Le', 'af']))
+  expect(focused()?.renderScopeId).toBe(notesScope)
+})
+
+it('merges sibling notes within a query row and keeps the editor in their scope', async () => {
+  const top = await repo.mutate.createChild({parentId: 'row-0', content: 'First note', position: {kind: 'last'}})
+  const bottom = await repo.mutate.createChild({parentId: 'row-0', content: 'Second note', position: {kind: 'last'}})
+  await db.db.execute("UPDATE blocks SET created_at = 100000 WHERE id = 'row-0'")
+  await repo.block(HOST).set(queryProp, 'created<2000-01-01')
+  await repo.awaitReprojections()
+  mount()
+  const notesScope = tableNotesScopeId(SCOPE, 'row-0')
+  press(await editAt(bottom!, 'start', notesScope), 'Backspace')
+  await waitFor(async () => expect(await repo.load(top!)).toMatchObject({content: 'First noteSecond note'}))
+  expect(await repo.load(bottom!)).toBeNull()
+  await waitFor(() => expect(focused()).toEqual({blockId: top, renderScopeId: notesScope}))
+  expect(ui().peekProperty(isEditingProp)).toBe(true)
+})
+
+it('starts selection on a grid row and releases its cell shortcuts', async () => {
+  configureRuntime(vimNormalModePlugin({repo}))
+  mount()
+  await act(async () => { await focusBlock(ui(), 'row-0', {renderScopeId: SCOPE}) })
+  await waitFor(() => {
+    expect(activeContexts.get(ActionContextTypes.NORMAL_MODE)).toMatchObject({block: {id: 'row-0'}})
+    expect(activeContexts.has(TABLE_ROW_CONTEXT)).toBe(true)
+  })
+  await act(async () => { await runActionById('select_focused_block_and_start_selection', new KeyboardEvent('keydown')) })
+  await waitFor(() => {
+    expect(ui().peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['row-0'])
+    expect(activeContexts.has(TABLE_ROW_CONTEXT)).toBe(false)
+    expect(activeContexts.has(TABLE_TYPING_CONTEXT)).toBe(false)
   })
 })

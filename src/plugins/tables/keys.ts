@@ -222,12 +222,12 @@ type Step = Edge | 'sideways' | 'here'
  *  The walk is async, so the key's default is prevented first, as the
  *  outline's verbs do on the same test: otherwise the caret moves before
  *  either handler runs. */
-const crossing = (step: Step): Applies => (deps, trigger, grid) => {
+const crossing = (step: Step, includeRowNotes = true): Applies => (deps, trigger, grid) => {
   const {block} = deps as BlockShortcutDependencies
   const surface = outlineSurfaceOf(deps as BlockShortcutDependencies)
   if (!block || !surface) return true
   const place = placeOf(grid, block.id, surface.scopeRootId)
-  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : step === 'bottom' && place === 'rowChild'
+  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : includeRowNotes && step === 'bottom' && place === 'rowChild'
   if (!walks) return place === 'value' || place === 'rowText' || (place === 'member' && step === 'sideways')
   trigger.preventDefault()
   return leavesScope(block, surface, step as Edge)
@@ -239,18 +239,16 @@ const leavingAt = (edge: Edge): Applies => (deps, trigger, grid) => {
   return editorView !== undefined && atEditorEdge(editorView, edge) && crossing(edge)(deps, trigger, grid)
 }
 
-/** No block selection starts inside a grid. Block selection runs in the
- *  panel's own surface, whose walk follows the data tree: extended from a
- *  block the grid draws it reaches blocks it does not (a row's other
- *  properties, its children), which a selection's Delete would then remove.
- *  In an editor the key stays CodeMirror's own text selection. Every action
- *  that starts one is listed in `SELECTION_STARTS`. */
-const noBlockSelection = (context: ActionContextType, actionId: string): ActionDispatchDecorator => ({
+/** Cells have their own editing root and are absent from the grid's
+ *  navigable member list. Their keys still select text inside the editor. */
+const noCellSelection = (context: ActionContextType, actionId: string): ActionDispatchDecorator => ({
   actionId,
   context,
   wrap: (deps, trigger, next) => {
-    const {block, renderScopeId} = deps as BlockShortcutDependencies
-    if (!gridDrawing(renderScopeId, block?.id)) return next(deps, trigger)
+    const {block, renderScopeId, scopeRootId} = deps as BlockShortcutDependencies
+    const grid = gridDrawing(renderScopeId, block?.id)
+    if (!grid || grid.renderScopeId !== renderScopeId ||
+        grid.isRow(block.id) || (scopeRootId && grid.isRow(scopeRootId))) return next(deps, trigger)
   },
 })
 
@@ -315,7 +313,7 @@ const SELECTION_STARTS: readonly (readonly [ActionContextType, string])[] = [
 ]
 
 export const tableOutlineVerbRedirects = [
-  redirect(NORMAL, 'move_down', 'down', crossing('bottom')),
+  redirect(NORMAL, 'move_down', 'down', crossing('bottom', false)),
   redirect(NORMAL, 'move_up', 'up', crossing('top')),
   redirect(NORMAL, 'move_left', 'left', crossing('sideways')),
   redirect(NORMAL, 'move_right', 'right', crossing('sideways')),
@@ -328,7 +326,7 @@ export const tableOutlineVerbRedirects = [
   redirect(EDITING, 'move_down_from_cm_end', 'down', leavingAt('bottom')),
   redirect(EDITING, 'move_left_from_cm_start', 'previous', leavingAt('start')),
   redirect(EDITING, 'move_right_from_cm_end', 'next', leavingAt('end')),
-  ...SELECTION_STARTS.map(([context, actionId]) => noBlockSelection(context, actionId)),
+  ...SELECTION_STARTS.map(([context, actionId]) => noCellSelection(context, actionId)),
   onTableHost(NORMAL, 'create_block_below_and_edit', createsFirstChild('createBelowPlacement')),
   onTableHost(NORMAL, 'create_block_above_and_edit', createsFirstChild('createAbovePlacement')),
   onTableHost(EDITING, 'split_block_cm', hostEnter),

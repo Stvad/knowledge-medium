@@ -29,10 +29,11 @@ import {
   ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import {
-  blockAfterSubtreeRemoval,
+  locationAfterSubtreeRemoval,
   extendSelection,
-  nextVisibleBlock,
-  previousVisibleBlock,
+  nextDrawnStep,
+  previousDrawnStep,
+  surfaceForFocus,
 } from '@/utils/selection'
 
 export interface BlockAction {
@@ -114,62 +115,31 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   requestEditorFocus(uiStateBlock)
 }
 
-/** Extend the block selection to the next visible block. Returns whether a
- *  selection was actually extended — false at the last visible block in the
- *  surface (no next block) or if the range resolved empty. Edit-mode callers
- *  use this to avoid leaving edit mode for nothing, and pass `clearEditing` so
- *  the exit folds into the selection's transaction (see extendSelectionDownEdit). */
-export const extendSelectionDown = async (
-  uiStateBlock: Block,
-  repo: Repo,
-  surface: OutlineSurface | null,
-  clearEditing = false,
-): Promise<boolean> => {
-  if (!surface) return false
-
-  const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  if (!focusedId) return false
-
-  // Roam-style: the first press selects just the focused block (so a single
-  // block can be selected/deleted); subsequent presses extend downward. Don't
-  // select the surface's own root — acting on the view root within its view is
-  // meaningless, so leave the keystroke native (matches the old no-op there).
+/** First press selects the focused block. Further presses extend through
+ *  the drawn order from the focused occurrence, including in panel-level
+ *  multi-select mode. A panel's own root cannot start a block range. */
+async function extendVerticalSelection(
+  step: typeof previousDrawnStep, uiStateBlock: Block, repo: Repo,
+  surface: OutlineSurface | null, clearEditing: boolean,
+): Promise<boolean> {
+  const focused = peekFocusedBlockLocation(uiStateBlock)
+  if (!surface || !focused) return false
+  const block = repo.block(focused.blockId)
+  const here = await surfaceForFocus(block, focused.renderScopeId, surface)
   if (!hasBlockSelection(uiStateBlock)) {
-    if (focusedId === surface.scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, surface, {clearEditing})
+    if (block.id === here.scopeRootId && !(await previousDrawnStep(block, here)).block) return false
+    return extendSelection(block.id, uiStateBlock, repo, here, {clearEditing})
   }
-
-  const nextBlock = await nextVisibleBlock(repo.block(focusedId), surface)
-  if (!nextBlock) return false
-
-  return extendSelection(nextBlock.id, uiStateBlock, repo, surface, {clearEditing})
+  const next = await step(block, here)
+  if (!next.block) return false
+  return extendSelection(next.block.id, uiStateBlock, repo, next.surface, {clearEditing})
 }
 
-/** Mirror of {@link extendSelectionDown} for the previous visible block.
- *  Returns false at the first visible block in the surface (the focused block
- *  is the scope root) or if the range resolved empty. */
-export const extendSelectionUp = async (
-  uiStateBlock: Block,
-  repo: Repo,
-  surface: OutlineSurface | null,
-  clearEditing = false,
-): Promise<boolean> => {
-  if (!surface) return false
+export const extendSelectionDown = (ui: Block, repo: Repo, surface: OutlineSurface | null, clearEditing = false) =>
+  extendVerticalSelection(nextDrawnStep, ui, repo, surface, clearEditing)
 
-  const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  if (!focusedId) return false
-
-  // Roam-style first press — see extendSelectionDown.
-  if (!hasBlockSelection(uiStateBlock)) {
-    if (focusedId === surface.scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, surface, {clearEditing})
-  }
-
-  const prevBlock = await previousVisibleBlock(repo.block(focusedId), surface)
-  if (!prevBlock) return false
-
-  return extendSelection(prevBlock.id, uiStateBlock, repo, surface, {clearEditing})
-}
+export const extendSelectionUp = (ui: Block, repo: Repo, surface: OutlineSurface | null, clearEditing = false) =>
+  extendVerticalSelection(previousDrawnStep, ui, repo, surface, clearEditing)
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
   // In-place structural shifts deliberately run WITHOUT
@@ -303,16 +273,16 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // Read in `beforeWrite`, so the target is found after the user has
       // answered rather than before — the tree can move while a dialog is
       // open — and while the subtree it skips is still there to skip.
-      const focus: {next: Block | null} = {next: null}
+      const focus: {next: Awaited<ReturnType<typeof locationAfterSubtreeRemoval>>} = {next: null}
       const deleted = await deleteBlockThroughUi(block, {
         animate: true,
         beforeWrite: async () => {
           const surface = outlineSurfaceOf(deps)
-          focus.next = surface ? await blockAfterSubtreeRemoval(block, surface) : null
+          focus.next = surface ? await locationAfterSubtreeRemoval(block, surface) : null
         },
       })
       // Don't move focus for a delete a guard refused, or the user cancelled.
-      if (deleted && focus.next) void focusBlock(uiStateBlock, focus.next.id, {renderScopeId: deps.renderScopeId})
+      if (deleted && focus.next) void focusBlock(uiStateBlock, focus.next.block.id, {renderScopeId: focus.next.surface.renderScopeId})
     },
     defaultBinding: {
       keys: 'Delete',

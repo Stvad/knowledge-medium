@@ -7,21 +7,32 @@
 import { z } from 'zod'
 import { defineQuery, type BlockData, type Query } from '@/data/api'
 import type { Block } from '@/data/block'
-import { childrenViewFacet, type ChildrenView, type DrawnChild } from '@/data/childrenView'
+import { childrenViewFacet, surfaceOwnerFacet, type ChildrenView, type DrawnChild, type NestedSurface } from '@/data/childrenView'
 import { queriesFacet } from '@/data/facets'
 import { hasBlockType } from '@/data/properties'
-import type { Repo } from '@/data/repo'
+import { propertyDisplayScopeSchema } from '@/data/propertyDisplayMode'
 import type { AppExtension } from '@/facets/facet'
-import { gridDrawing, gridOfHost, tableRenderScopeId } from './registry'
+import { gridInScope, gridOfHost, notesInScope, tableRenderScopeId } from './registry'
 import { hostChildrenQuery, queryFieldIdOf, TABLE_TYPE } from './schema'
+
+const nestedSurfaceSchema = z.object({
+  kind: z.literal('nested-surface'),
+  renderScopeId: z.string(),
+  members: z.array(z.string()).optional(),
+  propertyDisplay: propertyDisplayScopeSchema.optional(),
+  scopeRootId: z.string().optional(),
+  foreign: z.boolean().optional(),
+}).strict()
 
 const ROW_NOTES_QUERY = 'tables.rowNotes'
 const HOST_MEMBERS_QUERY = 'tables.hostMembers'
+const ROW_MEMBERS_QUERY = 'tables.rowMembers'
 
 declare module '@/data/api' {
   interface QueryRegistry {
     [ROW_NOTES_QUERY]: typeof rowNotesQuery
     [HOST_MEMBERS_QUERY]: typeof hostMembersQuery
+    [ROW_MEMBERS_QUERY]: typeof rowMembersQuery
   }
 }
 
@@ -35,17 +46,29 @@ const rowNotesQuery: Query<{id: string; rows: string[]}, string[]> = defineQuery
   name: ROW_NOTES_QUERY,
   argsSchema: z.object({id: z.string(), rows: z.array(z.string())}).strict(),
   resultSchema: z.array(z.string()),
-  resolve: async ({id, rows}, ctx) =>
-    notesAmong(await ctx.run('core.childIds', {id, propertyChildren: 'none' as const}), child => rows.includes(child)),
+  resolve: async ({id, rows}, ctx) => {
+    const selected = new Set(rows)
+    return notesAmong(await ctx.run('core.childIds', {id, propertyChildren: 'none' as const}), child => selected.has(child))
+  },
+})
+
+type RowMembersArgs = {id: string; rows: string[]; notes: NestedSurface}
+
+const rowMembersQuery: Query<RowMembersArgs, DrawnChild[]> = defineQuery<RowMembersArgs, DrawnChild[]>({
+  name: ROW_MEMBERS_QUERY,
+  argsSchema: z.object({id: z.string(), rows: z.array(z.string()), notes: nestedSurfaceSchema}).strict(),
+  resultSchema: {parse: input => input as DrawnChild[]},
+  resolve: async ({id, rows, notes}, ctx) => {
+    const members = await ctx.run(ROW_NOTES_QUERY, {id, rows})
+    return members.length > 0 ? [{...notes, members}] : []
+  },
 })
 
 type HostMembersArgs = {
   hostId: string
   workspaceId: string
   queryFieldId: string | null
-  gridScope: string
-  /** Under a query, the rows that are the host's own children; null without one. */
-  rows: string[] | null
+  grid: NestedSurface
 }
 
 /** A host's query field rows (`QueryFields`), its grid, then under a query
@@ -53,28 +76,25 @@ type HostMembersArgs = {
 const hostMembersQuery: Query<HostMembersArgs, DrawnChild[]> = defineQuery<HostMembersArgs, DrawnChild[]>({
   name: HOST_MEMBERS_QUERY,
   argsSchema: z.object({
-    hostId: z.string(), workspaceId: z.string(), queryFieldId: z.string().nullable(), gridScope: z.string(),
-    rows: z.array(z.string()).nullable(),
+    hostId: z.string(), workspaceId: z.string(), queryFieldId: z.string().nullable(),
+    grid: nestedSurfaceSchema,
   }).strict(),
   resultSchema: {parse: input => input as DrawnChild[]},
-  resolve: async ({hostId, workspaceId, queryFieldId, gridScope, rows}, ctx) => {
+  resolve: async ({hostId, workspaceId, queryFieldId, grid}, ctx) => {
     const fields = queryFieldId === null
       ? []
       : (await ctx.run('core.propertyRows', {ownerId: hostId, fieldId: queryFieldId})).fields.map(({field}) => field.id)
-    const outside = rows === null
-      ? []
-      : (await ctx.run('core.typedBlockIds', hostChildrenQuery(hostId, workspaceId))).filter(id => !rows.includes(id))
-    return [...fields, {kind: 'nested-surface', renderScopeId: gridScope}, ...outside]
+    const shown = new Set(grid.members)
+    const outside = grid.foreign
+      ? (await ctx.run('core.typedBlockIds', hostChildrenQuery(hostId, workspaceId))).filter(id => !shown.has(id))
+      : []
+    return [...fields, grid, ...outside]
   },
 })
 
-/** Of `rows`, those that are `parentId`'s own children, in a stable order. */
-const rowsUnder = (repo: Repo, parentId: string, rows: Iterable<string>): string[] =>
-  [...rows].filter(id => repo.block(id).peek()?.parentId === parentId).sort()
-
 /** The notes a row draws, given the grid's rows. */
-export const rowNotes = (row: Block, rows: Iterable<string>) =>
-  row.repo.query[ROW_NOTES_QUERY]({id: row.id, rows: rowsUnder(row.repo, row.id, rows)})
+export const rowNotes = (row: Block, rows: readonly string[]) =>
+  row.repo.query[ROW_NOTES_QUERY]({id: row.id, rows: [...rows]})
 
 const hostView = (parent: Block, data: BlockData, renderScopeId: string): ChildrenView => {
   const grid = gridOfHost(renderScopeId, parent.id)
@@ -84,25 +104,50 @@ const hostView = (parent: Block, data: BlockData, renderScopeId: string): Childr
       hostId: parent.id,
       workspaceId: data.workspaceId,
       queryFieldId: queryFieldIdOf(parent.repo.propertyDefinitions) ?? null,
-      gridScope: tableRenderScopeId(renderScopeId, parent.id),
-      rows: grid?.hasQuery ? rowsUnder(parent.repo, parent.id, grid.rows) : null,
+      grid: {
+        kind: 'nested-surface',
+        renderScopeId: tableRenderScopeId(renderScopeId, parent.id),
+        ...(grid && {members: grid.rows, propertyDisplay: grid.rowsDisplayScope, foreign: grid.hasQuery}),
+      },
     }),
   }
 }
 
 const viewOf = (parent: Block, data: BlockData, renderScopeId: string | undefined): ChildrenView | null => {
   if (renderScopeId === undefined) return null
-  const grid = gridDrawing(renderScopeId, parent.id)
-  if (grid?.isRow(parent.id)) return {id: 'tables.row', read: () => rowNotes(parent, grid.rows)}
+  const notes = notesInScope(renderScopeId)
+  if (notes?.rowId === parent.id) return {id: 'tables.row', read: () => rowNotes(parent, notes.grid.rows)}
+  const grid = gridInScope(renderScopeId)
+  if (grid?.isRow(parent.id)) {
+    return {
+      id: 'tables.row',
+      read: () => grid.hasQuery ? parent.repo.query[ROW_MEMBERS_QUERY]({
+        id: parent.id,
+        rows: [...grid.rows],
+        notes: {
+          kind: 'nested-surface', renderScopeId: grid.notesScopeId(parent.id),
+          scopeRootId: parent.id, propertyDisplay: grid.rowsDisplayScope,
+        },
+      }) : rowNotes(parent, grid.rows),
+    }
+  }
   return hasBlockType(data, TABLE_TYPE) ? hostView(parent, data, renderScopeId) : null
 }
 
 /** The queries the views read: data-level, so `tablesDataExtension` carries them. */
 export const tableChildrenQueries: AppExtension = [
+  queriesFacet.of(rowMembersQuery, {source: 'tables'}),
   queriesFacet.of(rowNotesQuery, {source: 'tables'}),
   queriesFacet.of(hostMembersQuery, {source: 'tables'}),
 ]
 
 export const tableChildrenViews: AppExtension = [
+  surfaceOwnerFacet.of(({repo, renderScopeId}) => {
+    const notes = notesInScope(renderScopeId)
+    if (notes?.grid.host.repo === repo) return {blockId: notes.rowId, surface: notes.grid.rowSurface(notes.rowId)}
+    const grid = gridInScope(renderScopeId)
+    if (grid?.host.repo !== repo || !grid.parentSurface) return null
+    return {blockId: grid.host.id, surface: grid.parentSurface}
+  }, {source: 'tables'}),
   childrenViewFacet.of(({parent, data, surface}) => viewOf(parent, data, surface.renderScopeId), {source: 'tables'}),
 ]

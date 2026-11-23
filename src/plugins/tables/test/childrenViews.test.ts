@@ -15,7 +15,7 @@ import { GridController } from '../controller'
 import { turnIntoTable } from '../convert'
 import { tablesDataExtension } from '../dataExtension'
 import { openQueryValue } from '../query/queryValue'
-import { registerGrid, tableRenderScopeId } from '../registry'
+import { registerGrid, tableNotesScopeId, tableRenderScopeId } from '../registry'
 import { queryProp } from '../schema'
 
 const workspaceId = 'ws-table-children-views'
@@ -23,7 +23,9 @@ const options = {scope: ChangeScope.BlockDefault}
 const PAGE = 'panel:page'
 const TABLE = tableRenderScopeId(PAGE, 'host')
 const ROWS = ['row-0', 'row-1']
-const GRID = {kind: 'nested-surface', renderScopeId: TABLE}
+const grid = (members: readonly string[], foreign = false) => ({
+  kind: 'nested-surface', renderScopeId: TABLE, members, foreign, propertyDisplay: controller.rowsDisplayScope,
+})
 
 let db: TestDb
 let repo: Repo
@@ -51,6 +53,7 @@ beforeEach(async () => {
   await turnIntoTable(repo, 'host')
   controller = new GridController(repo.block('host'), repo.block('ui'), TABLE, PAGE)
   controller.setRows(ROWS, ROWS.length)
+  controller.parentSurface = surface()
   releaseGrid = registerGrid(TABLE, controller)
 })
 
@@ -70,21 +73,32 @@ const withQuery = async () => {
 }
 
 describe('a table host’s drawn members', () => {
-  it('without a query: the grid alone, its rows and configuration never walked', async () => {
-    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([GRID])
-    expect(await previousDrawnStep(repo.block('after'), surface())).toMatchObject({block: {id: 'host'}, crossed: true})
+  it('without a query: walks the grid’s rows in their own scope and skips its configuration', async () => {
+    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([grid(ROWS)])
+    expect(await previousDrawnStep(repo.block('after'), surface())).toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}, crossed: true})
   })
 
   it('without a query, a child the grid does not draw (past its cap) is no child outside a query', async () => {
     controller.setRows(['row-0'], ROWS.length)
-    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([GRID])
+    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([grid(['row-0'])])
   })
 
   it('under a query: its field row, the grid, then its children outside the query', async () => {
-    const {fieldRowId, valueId} = await withQuery()
-    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([fieldRowId, GRID, 'outside-0', 'outside-1'])
+    const {fieldRowId} = await withQuery()
+    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([fieldRowId, grid(ROWS, true), 'outside-0', 'outside-1'])
     expect(await nextDrawnStep(repo.block('outside-0'), surface())).toMatchObject({block: {id: 'outside-1'}, crossed: false})
     expect(await previousDrawnStep(repo.block('after'), surface())).toMatchObject({block: {id: 'outside-1'}, crossed: false})
-    expect(await previousDrawnStep(repo.block('outside-0'), surface())).toMatchObject({block: {id: valueId}, crossed: true})
+    expect(await previousDrawnStep(repo.block('outside-0'), surface())).toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}, crossed: true})
   })
+})
+
+it('walks from an unmounted query note through its declared row owner', async () => {
+  await withQuery()
+  await repo.tx(tx => tx.create({id: 'note', workspaceId, parentId: 'row-0', orderKey: 'a0', content: 'A note'}), options)
+  const notesScope = tableNotesScopeId(TABLE, 'row-0')
+  const notes = {...controller.rowSurface('row-0'), renderScopeId: notesScope}
+  expect(await previousDrawnStep(repo.block('note'), notes))
+    .toMatchObject({block: {id: 'row-0'}, surface: {renderScopeId: TABLE}, crossed: true})
+  expect(await nextDrawnStep(repo.block('note'), notes))
+    .toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}, crossed: true})
 })
