@@ -1,6 +1,7 @@
 import {provideRuntimeGlobals} from '../agent-eval/nodeShims'
 import {setTimeout as nextTimerTurn} from 'node:timers/promises'
 import {PowerSyncDatabase} from '@powersync/node'
+import type {SupabaseClient} from '@supabase/supabase-js'
 import {createClientPowerSyncSchema, initializeClientDatabase, type AnalyzeCheck} from '@/data/internals/initializeClientDatabase'
 import {dbFilenameForUser} from '@/data/localDbStorage'
 import {BlockCache} from '@/data/blockCache'
@@ -27,6 +28,7 @@ import {executeHeadlessCommand} from './commands'
 import {connectBridge, type HostBridge} from './bridge'
 import type {HeadlessConfig} from './config'
 import {readWorkspaceKey} from './workspaceKey'
+import {NO_MEDIA_REMOTE, openHostMedia, supabaseMediaRemote, type HostMediaRemote} from './media'
 
 async function waitForWorkspace(db: PowerSyncDatabase, workspaceId: string, signal: AbortSignal) {
   for await (const result of db.watch(SELECT_LOCAL_WORKSPACE_BY_ID_SQL, [workspaceId], {signal})) {
@@ -40,10 +42,17 @@ async function waitForWorkspace(db: PowerSyncDatabase, workspaceId: string, sign
 const untilAbort = (signal: AbortSignal): Promise<void> =>
   signal.aborted ? Promise.resolve() : new Promise(resolve => signal.addEventListener('abort', () => resolve(), {once: true}))
 
+export interface ServeOptions {
+  connect?: typeof connectWorkspaceSync
+  register?: typeof connectBridge
+  releaseStaleQueue?: boolean
+  media?: HostMediaRemote
+}
+
 /** Owns sync and the Repo. The caller owns the open database. */
 export async function serveDatabase(
   db: PowerSyncDatabase, config: HeadlessConfig, user: User, signal: AbortSignal,
-  connect = connectWorkspaceSync, register = connectBridge, releaseStaleQueue = false,
+  {connect = connectWorkspaceSync, register = connectBridge, releaseStaleQueue = false, media: remote = NO_MEDIA_REMOTE}: ServeOptions = {},
 ) {
   const {workspaceId} = config
   // Before anything connects: a key that cannot be read fails the boot first.
@@ -62,6 +71,10 @@ export async function serveDatabase(
     throw new Error('Read-only host found queued writes. Preserve this database for recovery.')
   }
   const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore(), id => readWorkspaceEncryptionMode(db, id))
+  const media = openHostMedia({
+    db, stateDir: config.stateDir, userId: user.id, keys: resolver, ...remote,
+    writeRefusal: () => gate ? gate.writeRefusal() : 'Starting gate',
+  })
   let repo: Repo | undefined
   let bridge: HostBridge | undefined
   let releaseBulk: (() => void) | undefined
@@ -90,9 +103,10 @@ export async function serveDatabase(
     active.setFacetRuntime(runtime)
     const commit = resolveAppVersion().sha
     const context = createAgentRuntimeContext({
-      repo: active, runtime, safeMode: false,
+      repo: active, runtime, safeMode: false, media: media.agent,
       hostHealth: async () => ({
         ...await hold.health(),
+        mediaUploads: await media.health(),
         commit, readOnly: active.isReadOnly,
         baselineSyncedAt: baseline ?? null,
         lastSyncedAt: db.currentStatus.lastSyncedAt?.getTime() ?? null,
@@ -116,6 +130,7 @@ export async function serveDatabase(
         analyzing ??= analyzeCheck('first-open')
         releaseBulk?.()
         releaseBulk = undefined
+        media.start(active)
         watchEventsRegistry.setTransport(transport)
       } else {
         watchEventsRegistry.disposeAll()
@@ -129,6 +144,7 @@ export async function serveDatabase(
       watchEventsRegistry.disposeAll()
       watchEventsRegistry.setTransport(null)
       await gate?.stop()
+      await media.stop()
       releaseBulk?.()
       // The caller closes the database next; an ANALYZE must not be cut off.
       await analyzing
@@ -147,7 +163,9 @@ export async function serveDatabase(
   }
 }
 
-export async function runHost(config: HeadlessConfig, user: User, signal: AbortSignal, releaseStaleQueue = false) {
+export async function runHost(
+  config: HeadlessConfig, user: User, signal: AbortSignal, supabase: SupabaseClient, releaseStaleQueue = false,
+) {
   if (!hasRemoteSyncConfig) throw new Error('Set VITE_POWERSYNC_URL to run the headless host')
   provideRuntimeGlobals()
   const db = new PowerSyncDatabase({
@@ -155,7 +173,7 @@ export async function runHost(config: HeadlessConfig, user: User, signal: AbortS
     database: {dbLocation: config.stateDir, dbFilename: dbFilenameForUser(user.id), readWorkerCount: 1},
   })
   try {
-    await serveDatabase(db, config, user, signal, undefined, undefined, releaseStaleQueue)
+    await serveDatabase(db, config, user, signal, {releaseStaleQueue, media: supabaseMediaRemote(supabase)})
   } catch (error) {
     if (!signal.aborted || error !== signal.reason) throw error
   } finally {

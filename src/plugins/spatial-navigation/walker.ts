@@ -599,12 +599,17 @@ export const rowSlotIn = (
  *     slot carries a different scope, and stepping into that is the point.)
  *   - anything inside an excluded surface. Its rows are not navigable, so
  *     landing there leaves the next keystroke with no anchor at all.
+ *
+ * `ownScope: 'include'` is for a caller that steps by drawn order with no model
+ * to validate the rows of `from`'s scope: there a slot in that scope is the
+ * next row, not a stale one.
  */
 export const reservedRowBetween = (
   from: HTMLElement,
   to: HTMLElement | null,
   direction: 'up' | 'down',
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+  ownScope: 'skip' | 'include' = 'skip',
 ): FocusedBlockLocation | null => {
   const panel = panelOf(from)
   if (!panel) return null
@@ -615,7 +620,7 @@ export const reservedRowBetween = (
     // Past the mounted neighbour it isn't "between" — the neighbour is then the
     // nearer answer and nothing is missing before it.
     (!to || aheadOf(slot, to, direction)) &&
-    slot.dataset.lazyRenderScopeId !== fromScope &&
+    (ownScope === 'include' || slot.dataset.lazyRenderScopeId !== fromScope) &&
     laneOf(slot) === fromLane &&
     !isInExcludedSurface(slot, excludedSurfaces) &&
     // Never picks a half-labelled slot and then gives up on it, which would

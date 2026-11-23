@@ -143,7 +143,7 @@ describe('readMedia', () => {
   it('says why when the workspace cannot be decoded', async () => {
     await createMedia()
     await expect(readMedia(context.repo, WS, MEDIA, {resolve: async () => ({ok: false, reason: 'deferred'})}))
-      .rejects.toThrow(/locked, or the app tab is signed out/)
+      .rejects.toThrow(/locked, or this client is signed out/)
   })
 
   it('refuses bytes past what the bridge can carry, naming both sizes', async () => {
@@ -172,7 +172,7 @@ describe('the read-media command', () => {
   it('reaches the app resolver, which fails closed while signed out', async () => {
     await createMedia()
     await expect(executeCommand({type: 'read-media', ref: MEDIA, commandId: 'c1'} as never, context))
-      .rejects.toThrow(/locked, or the app tab is signed out/)
+      .rejects.toThrow(/locked, or this client is signed out/)
   })
 
   it('binds the workspace named in the call', async () => {

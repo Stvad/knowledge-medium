@@ -28,15 +28,12 @@ import { remoteSyncGated } from './assetResolver.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
 import { withLock } from '@/utils/webLock.js'
-import { resolveCaptureMime } from './mediaBlock.js'
 import { refreshUploadLaneStatus } from './uploadLaneStatus.js'
 import {
-  captureMedia,
-  DEFAULT_MAX_CAPTURE_BYTES,
+  CAPTURE_FAILURE_MESSAGE,
+  captureMediaFiles,
   type MediaCaptureDeps,
-  type MediaCaptureFailure,
   type MediaCaptureResult,
-  type MediaSource,
 } from './mediaCapture.js'
 import { drainUploads } from './uploadDrain.js'
 import { recoverFailedUploads } from './uploadRecovery.js'
@@ -199,13 +196,7 @@ const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({
 /** Read each File's bytes and capture them as content-addressed media blocks (under
  *  the workspace ASSETS container). Returns one result per file — the caller builds +
  *  places the `((assetBlockId))` references. Needs no lock: every queue op is idempotent
- *  and the reconciler only promotes, so a concurrent capture/reconcile converges.
- *
- *  Files are read + captured ONE AT A TIME (bounded memory), and a grossly-oversize
- *  file is rejected by its declared `size` BEFORE `arrayBuffer()` — a multi-GB paste
- *  must not allocate its full size (× every file, the old `Promise.all`) just to be
- *  rejected by the post-read byteLength guard. `captureMedia` still applies the
- *  precise, mode-aware limit (the e2ee envelope overhead) on the bytes it reads. */
+ *  and the reconciler only promotes, so a concurrent capture/reconcile converges. */
 export const captureMediaFromFiles = async (
   repo: Repo,
   workspaceId: string,
@@ -218,38 +209,10 @@ export const captureMediaFromFiles = async (
   // switch can't split it across accounts.
   const userId = repo.user.id
   if (!userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
-  const deps = {...captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) }), ...options}
-  const results: MediaCaptureResult[] = []
-  for (const file of files) {
-    if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {
-      results.push({ ok: false, reason: 'too-large' }) // reject without reading
-      continue
-    }
-    const bytes = new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>
-    const source: MediaSource = {
-      bytes,
-      // Derive the MIME from the bytes when File.type is missing/generic — a typeless
-      // image must still render inline, and the stored MIME must be a function of the
-      // bytes so it can't disagree with a content-dedup'd row.
-      mime: resolveCaptureMime(file.type, bytes),
-      filename: file.name || undefined,
-    }
-    results.push(await captureMedia({ workspaceId, source }, deps))
-  }
-  return results
-}
-
-/** User-facing message per capture failure. `captureMediaFromFiles` returns failures
- *  as RESOLVED `{ok:false}` values (not throws), so without this a paste that's
- *  rejected (oversize, locked workspace, …) does nothing visible — the user believes
- *  it worked. */
-export const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
-  'no-user': 'Sign in to attach media.',
-  empty: 'That file is empty — nothing to attach.',
-  'too-large': 'That file is too large to attach.',
-  'unsupported-mime': 'That file type can’t be attached.',
-  'workspace-locked': 'Unlock this workspace to attach media.',
-  'no-content-key': 'Re-paste your workspace key to attach media.',
+  return captureMediaFiles(workspaceId, files, {
+    ...captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) }),
+    ...options,
+  })
 }
 
 /** Toast the distinct failure reasons from a (possibly multi-file) capture. Call on
