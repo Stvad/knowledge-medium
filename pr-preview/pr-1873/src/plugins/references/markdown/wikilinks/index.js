@@ -1,1 +1,0 @@
-export{NS as wikilinkMarkdownExtension}from"../../../../../chunks/app-CeoayB1P.js";

@@ -1,1 +1,0 @@
-export{LL as appUpdatePromptExtension}from"../../../chunks/app-CeoayB1P.js";

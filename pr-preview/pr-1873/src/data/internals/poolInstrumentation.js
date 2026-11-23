@@ -1,1 +1,0 @@
-export{g8 as instrumentAdapter}from"../../../chunks/app-CeoayB1P.js";

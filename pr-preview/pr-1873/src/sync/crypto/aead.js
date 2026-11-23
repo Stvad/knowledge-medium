@@ -1,1 +1,0 @@
-export{fat as open,pat as seal}from"../../../chunks/app-CeoayB1P.js";

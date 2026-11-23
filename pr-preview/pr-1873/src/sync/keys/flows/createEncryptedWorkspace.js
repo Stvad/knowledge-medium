@@ -1,1 +1,0 @@
-export{Vk as createEncryptedWorkspace}from"../../../../chunks/app-CeoayB1P.js";

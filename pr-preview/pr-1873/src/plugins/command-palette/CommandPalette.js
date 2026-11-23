@@ -1,1 +1,0 @@
-export{UP as CommandPalette}from"../../../chunks/app-CeoayB1P.js";

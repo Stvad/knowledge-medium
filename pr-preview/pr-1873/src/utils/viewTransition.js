@@ -1,1 +1,0 @@
-export{vJ as withMoveTransition}from"../../chunks/app-CeoayB1P.js";

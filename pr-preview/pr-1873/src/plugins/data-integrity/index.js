@@ -1,1 +1,0 @@
-export{ql as dataIntegrityPlugin}from"../../../chunks/app-CeoayB1P.js";
