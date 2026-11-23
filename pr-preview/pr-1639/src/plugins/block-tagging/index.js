@@ -1,1 +1,1 @@
-export{Jf as ADD_TAG_ACTION_ID,Yf as ADD_TAG_BLOCKS_ACTION_ID,$f as appendTagToBlocks,ep as appendTagToContent,qf as blockTaggingPlugin,lp as blockTagsConfigProp}from"../../../chunks/app-DQYmysvq.js";
+export{ap as ADD_TAG_ACTION_ID,op as ADD_TAG_BLOCKS_ACTION_ID,up as appendTagToBlocks,dp as appendTagToContent,ip as blockTaggingPlugin,bp as blockTagsConfigProp}from"../../../chunks/app-Bt7LxnO-.js";
