@@ -8,7 +8,7 @@ import type { Block } from '@/data/block'
 import {
   PropertyEditRefusedError, clearPropertyValue, finishPropertyValueEdit, openPropertyValue,
 } from '@/data/internals/propertyValueEdits'
-import { editorSelection, focusBlock, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { focusBlock, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { NO_PROPERTY_DISPLAY_SCOPE, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { OutlineSurface } from '@/data/outlineSurface'
 import { lastDrawnStep } from '@/utils/drawnWalk'
@@ -196,12 +196,13 @@ export class GridController {
   }
 
   /** The last block a row draws: its last note followed down as the outline
-   *  draws it (a table there ends the descent at its title), or the row itself. */
-  async lastDrawnIn(rowId: string): Promise<Block> {
+   *  draws it, or the row itself. `crossed` when a table there ends what the
+   *  row draws: the block named is above that table's grid, not beside the next row. */
+  async lastDrawnIn(rowId: string): Promise<{block: Block; crossed: boolean}> {
     const lastNote = (await this.drawnChildIds(rowId)).at(-1)
-    if (lastNote === undefined) return this.host.repo.block(rowId)
+    if (lastNote === undefined) return {block: this.host.repo.block(rowId), crossed: false}
     const surface = {...this.rowSurface(rowId), renderScopeId: this.notesScopeId(rowId)}
-    return (await lastDrawnStep(this.host.repo.block(lastNote), surface, {withinScope: true})).block
+    return lastDrawnStep(this.host.repo.block(lastNote), surface, {withinScope: true})
   }
 
   /** ArrowDown from a row's text: its first drawn child, edited from its
@@ -215,8 +216,11 @@ export class GridController {
       this.focusRow(clamp(row + 1, this.rowIds.length - 1))
       return
     }
-    await this.uiStateBlock.set(editorSelection, {blockId: first, start: 0})
-    await focusBlock(this.uiStateBlock, first, {edit: true, renderScopeId: this.notesScopeId(rowId)})
+    await focusBlock(this.uiStateBlock, first, {
+      edit: true,
+      renderScopeId: this.notesScopeId(rowId),
+      selection: {start: 0},
+    })
   }
 
   /** ArrowUp from a row's text: the last block the row above draws, edited
@@ -224,14 +228,17 @@ export class GridController {
   private async editLastDrawnAbove(row: number) {
     const aboveId = this.rowIds[row - 1]!
     const moves = this.cursorMoves
-    const target = await this.lastDrawnIn(aboveId)
+    const {block: target} = await this.lastDrawnIn(aboveId)
     if (this.cursorMoves !== moves) return
     if (target.id === aboveId) {
       this.focusRow(row - 1)
       return
     }
-    await this.uiStateBlock.set(editorSelection, {blockId: target.id, line: 'last'})
-    await focusBlock(this.uiStateBlock, target.id, {edit: true, renderScopeId: this.notesScopeId(aboveId)})
+    await focusBlock(this.uiStateBlock, target.id, {
+      edit: true,
+      renderScopeId: this.notesScopeId(aboveId),
+      selection: {line: 'last'},
+    })
   }
 
   /** The row drawn above `rowId`, if any. */

@@ -39,6 +39,9 @@ import * as toast from '@/utils/toast'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
 import { propertyDisplayProp } from '@/data/propertyDisplayMode'
 import { turnIntoTable } from '../convert'
+import { openQueryValue } from '../query/queryValue'
+import { queryProp } from '../schema'
+import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { tablesPlugin } from '../index'
 import { CELL_CONTROL_SELECTOR } from '../controller'
 import { TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT } from '../keys'
@@ -392,7 +395,6 @@ describe('a row draws its children', () => {
 
 describe('the outline’s verbs between rows', () => {
   const contentOf = async (id: string) => (await repo.load(id))?.content
-  const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
 
   it('Enter at the end of a row’s text adds the next row', async () => {
     mount()
@@ -494,15 +496,18 @@ describe('the outline’s verbs between rows', () => {
   })
 
   // Refused merges: the outline's own refusals, and a nested table's machinery.
+  /** Backspace in the focused editor, awaited through every wrap to the outline's handler. */
+  const backspace = () => act(async () => {
+    await runActionById('delete_empty_block_cm', new KeyboardEvent('keydown', {key: 'Backspace'}))
+  })
+
   const refusedMerge = async (setup: () => Promise<string>) => {
     const target = await setup()
     const before = await contentOf(target)
     mount()
-    const view = await editAt('row-1', 'start')
-    // The refusal makes no write; the gesture's walk ends at `getLastVisibleDescendant`
-    // or the merge's own checks, so wait for the key to be handled, then compare.
-    press(view, 'Backspace')
-    await settle()
+    await editAt('row-1', 'start')
+    // The refusal makes no write: run the key's action through its wraps and await it, then compare.
+    await backspace()
     expect(await rowsUnderHost()).toEqual(['row-0', 'row-1'])
     expect(await contentOf(target)).toBe(before)
   }
@@ -513,14 +518,20 @@ describe('the outline’s verbs between rows', () => {
     return id!
   }))
 
-  it('merges a row into a nested table’s title, never its machinery', async () => {
+  it('merges no row across a nested table ending the row above, into its title or its machinery', () => refusedMerge(async () => {
     const id = await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}})
     await turnIntoTable(repo, id!)
-    mount()
-    press(await editAt('row-1', 'start'), 'Backspace')
-    await waitFor(async () => expect(await contentOf(id!)).toBe('Nestedsecond'))
-    await waitFor(() => expect(focused()).toEqual({blockId: id, renderScopeId: SCOPE}))
-  })
+    return id!
+  }))
+
+  it('merges no row into the query of a nested table ending the row above', () => refusedMerge(async () => {
+    const id = await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}})
+    await turnIntoTable(repo, id!)
+    await materializePropertySeeds(repo, WS, [queryProp])
+    const valueId = await openQueryValue(repo, id!, propertyDefinitionBlockId(WS, queryProp.seedKey))
+    await repo.block(valueId).setContent('[[Nested]]')
+    return valueId
+  }))
 
   it('ArrowUp from a row’s text edits a nested table’s title above it, not its rows', async () => {
     const id = await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}})
@@ -799,9 +810,10 @@ describe('the outline around a table', () => {
     await waitFor(() => expect((activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as {block?: {id: string}})?.block?.id).toBe('after'))
     const machinery = await db.db.getAll<{id: string; content: string}>(
       'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY id', [HOST])
-    press(EditorView.findFromDOM(node)!, 'Backspace')
-    // The merge, when it runs, lands within a few macrotasks; nothing may have moved by then.
-    for (let turn = 0; turn < 5; turn++) await act(() => new Promise(resolve => setTimeout(resolve, 20)))
+    expect(EditorView.findFromDOM(node)!.state.selection.main.head).toBe(0)
+    await act(async () => {
+      await runActionById('delete_empty_block_cm', new KeyboardEvent('keydown', {key: 'Backspace'}))
+    })
     expect(await repo.load('after')).toMatchObject({content: 'after'})
     expect(await db.db.getAll('SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY id', [HOST]))
       .toEqual(machinery)

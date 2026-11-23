@@ -19,7 +19,6 @@ import { useTypes } from '@/hooks/typeRegistry.js'
 import { propertyEditorOverridesFacet } from '../data/facets.ts'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import {
-  editorSelection,
   requestEditorFocus,
   focusBlock,
 } from '@/data/properties.js'
@@ -155,11 +154,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     selection: { start?: number; line?: 'first' | 'last'; x?: number },
     targetRenderScopeId: string | undefined,
   ) => {
-    await uiStateBlock.set(editorSelection, {
-      blockId: target.id,
-      ...selection,
-    })
-    await focusBlock(uiStateBlock, target.id, {edit: true, renderScopeId: targetRenderScopeId})
+    await focusBlock(uiStateBlock, target.id, {edit: true, selection, renderScopeId: targetRenderScopeId})
     requestEditorFocus(uiStateBlock)
   }
 

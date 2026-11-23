@@ -6,7 +6,7 @@
  *  outline's handler runs with the host as the scope root. */
 import type { Block } from '@/data/block'
 import { listingSurfaceOf } from '@/data/childrenView'
-import { editorSelection, focusBlock } from '@/data/properties'
+import { focusBlock } from '@/data/properties'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import { requestEditorFocusIfEditing } from '@/shortcuts/blockActions'
 import { mergeUp } from '@/shortcuts/blockMergeGesture'
@@ -110,11 +110,12 @@ const carriesValues = (row: Block): boolean => {
 }
 
 /** Backspace at the start of a row's text: the row merges into the last block
- *  drawn above it (`GridController.lastDrawnIn`: a nested table's title, never
- *  its machinery), by the outline's own merge and its refusals. An empty row
- *  with nothing under it is deleted. Refused: under a query (the row above may
- *  be on another page), and for a row carrying property values (they would
- *  fold into another block). */
+ *  drawn above it (`GridController.lastDrawnIn`), by the outline's own merge
+ *  and its refusals. An empty row with nothing under it is deleted. Refused:
+ *  under a query (the row above may be on another page), for a row carrying
+ *  property values (they would fold into another block), and across a nested
+ *  table ending the row above, as the outline's Backspace refuses across a
+ *  nested surface. */
 const mergeRowUp: ActionDispatchDecorator = {
   actionId: 'delete_empty_block_cm',
   context: EDITING,
@@ -134,16 +135,20 @@ const mergeRowUp: ActionDispatchDecorator = {
       showInfo('This row has values: merge it in the outline.')
       return
     }
-    const into = await grid.lastDrawnIn(aboveId)
+    const {block: into, crossed} = await grid.lastDrawnIn(aboveId)
     const intoData = into.peek()
     const liveContent = editorView!.state.doc.toString()
     // Every child counts, collapsed or not: deleting the row would delete them.
     if (liveContent === '' && (await grid.childIdsOf(block.id)).length === 0) {
       if (!await deleteBlockThroughUi(block)) return
-      await uiStateBlock.set(editorSelection, {blockId: into.id, start: intoData?.content.length ?? 0})
-      await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId})
+      await focusBlock(uiStateBlock, into.id, {
+        edit: true,
+        renderScopeId,
+        selection: {start: intoData?.content.length ?? 0},
+      })
       return
     }
+    if (crossed) return
     await mergeUp({from: block, into, liveContent, surface: listingSurfaceOf(editDeps), uiStateBlock})
   },
 }
