@@ -83,6 +83,14 @@ describe('a table host’s drawn members', () => {
     expect(await previousDrawnStep(repo.block('after'), surface())).toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}, crossed: true})
   })
 
+  it('keeps a row walk bounded until its enclosing surface is available', async () => {
+    const row = repo.block('row-0')
+    const rowSurface = controller.rowSurface(row.id)
+    expect((await previousDrawnStep(row, rowSurface)).block?.id).toBe('host')
+    controller.setSurfaces(controller.rowsDisplayScope, null)
+    expect((await previousDrawnStep(row, rowSurface)).block).toBeNull()
+  })
+
   it('without a query, a child the grid does not draw (past its cap) is no child outside a query', async () => {
     controller.setRows(['row-0'], ROWS.length)
     expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([grid(['row-0'])])
