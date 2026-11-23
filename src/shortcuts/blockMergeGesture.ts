@@ -2,7 +2,7 @@ import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import { holdsSource } from '@/data/blockTypes'
 import { merge } from '@/data/mutators'
-import { editorSelection, focusBlock } from '@/data/properties'
+import { focusBlock } from '@/data/properties'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import type { ListingSurface } from '@/data/childrenView'
 import { visibleChildIds } from '@/data/visibleChildren'
@@ -60,7 +60,10 @@ export const mergeUp = async (
     await tx.update(from.id, {content: liveContent})
     await tx.run(merge, {intoId: into.id, fromId: from.id})
   }, {scope: ChangeScope.BlockDefault, description: 'merge into previous block'})
-  await uiStateBlock.set(editorSelection, {blockId: into.id, start: joinOffset})
-  await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId: surface.renderScopeId})
+  await focusBlock(uiStateBlock, into.id, {
+    edit: true,
+    renderScopeId: surface.renderScopeId,
+    selection: {start: joinOffset},
+  })
   return true
 }

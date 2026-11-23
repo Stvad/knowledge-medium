@@ -1,6 +1,5 @@
 import type { Block } from '@/data/block'
 import {
-  editorSelection,
   focusBlock,
   requestEditorFocus,
   topLevelBlockIdProp,
@@ -19,8 +18,8 @@ const focusVideoNoteChild = async (
   await focusBlock(uiStateBlock, noteId, {
     edit: !uiStateBlock.repo.isReadOnly,
     renderScopeId,
+    selection: {start: 0},
   })
-  await uiStateBlock.set(editorSelection, {blockId: noteId, start: 0})
 
   if (uiStateBlock.repo.isReadOnly) return
 

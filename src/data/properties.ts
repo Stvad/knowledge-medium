@@ -654,15 +654,20 @@ export const focusedBlockLocationFromProperties = (
 export const peekFocusedBlockLocation = (uiStateBlock: Block): FocusedBlockLocation | undefined =>
   focusedBlockLocationFromProperties(uiStateBlock.peek()?.properties)
 
+const isLocationOfBlock = (
+  location: FocusedBlockLocation | undefined,
+  blockId: string,
+  renderScopeId?: string,
+): boolean => {
+  if (!location || location.blockId !== blockId) return false
+  return renderScopeId ? location.renderScopeId === renderScopeId : true
+}
+
 export const isFocusedBlock = (
   uiStateBlock: Block,
   blockId: string,
   renderScopeId?: string,
-): boolean => {
-  const location = peekFocusedBlockLocation(uiStateBlock)
-  if (!location || location.blockId !== blockId) return false
-  return renderScopeId ? location.renderScopeId === renderScopeId : true
-}
+): boolean => isLocationOfBlock(peekFocusedBlockLocation(uiStateBlock), blockId, renderScopeId)
 
 /** Whether `blockId` (in `renderScopeId`, when given) is the block being
  *  text-edited — focused, with edit mode on. */
@@ -707,14 +712,25 @@ export const uiStateRenderScopeId = (uiStateBlock: Block, blockId: string): stri
  *  embeds at once. The render scope disambiguates those copies while
  *  keeping selection state separately keyed by block id.
  *
+ *  `selection` is where the target's editor puts the caret, in the commit
+ *  that mounts it, so it is written in this same tx. Written after the focus
+ *  move, it misses that mount. Written before, in a tx of its own, a pending
+ *  selection write from the editor being left can land between the two and
+ *  replace it, because focus has not moved yet (see
+ *  `storeEditorSelectionIfFocused`).
+ *
  *  Returns the tx-commit promise so callers that need to observe
  *  focus-derived state next can `await` instead of racing propagation. */
 export const focusBlock = async (
   uiStateBlock: Block,
   blockId: string,
-  options: {edit?: boolean; renderScopeId?: string} = {},
+  options: {
+    edit?: boolean
+    renderScopeId?: string
+    selection?: Omit<EditorSelectionState, 'blockId'>
+  } = {},
 ): Promise<void> => {
-  const {edit = false, renderScopeId} = options
+  const {edit = false, renderScopeId, selection} = options
   // Match the legacy `setIsEditing` read-only gate: a viewer can't
   // transition into edit mode, but it can still mark focus (highlight,
   // nav anchor).
@@ -734,9 +750,32 @@ export const focusBlock = async (
       sameFocusedBlockLocation(focusedBlockLocationFromProperties(current?.properties), location) &&
       isEditingFromProperties(current?.properties)
 
+    if (selection) await tx.setProperty(uiStateBlock.id, editorSelection, {...selection, blockId})
     await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, location)
     await tx.setProperty(uiStateBlock.id, isEditingProp, preserveCurrentEditMode || targetEdit)
   }, {scope: ChangeScope.UiState, description: 'focus block'})
+}
+
+/** Store an editor's own selection — but only if its block (in
+ *  `renderScopeId`, when given) still has focus when the tx commits.
+ *
+ *  An editor stores its selection on a debounce, so the write can fire while
+ *  a navigation away from it is under way. Once focus moves, the stored
+ *  selection is the navigation's placement for the target, and this write
+ *  would replace it. The focus check reads INSIDE the tx for the reason
+ *  `exitEditModeForBlock` gives: the cache does not show a focus move until
+ *  its tx commits, so a check against it passes for a write queued behind
+ *  that tx. */
+export const storeEditorSelectionIfFocused = async (
+  uiStateBlock: Block,
+  selection: EditorSelectionState,
+  renderScopeId?: string,
+): Promise<void> => {
+  await uiStateBlock.repo.tx(async tx => {
+    const location = focusedBlockLocationFromProperties((await tx.get(uiStateBlock.id))?.properties)
+    if (!isLocationOfBlock(location, selection.blockId, renderScopeId)) return
+    await tx.setProperty(uiStateBlock.id, editorSelection, selection)
+  }, {scope: ChangeScope.UiState, description: 'store editor selection'})
 }
 
 /** Exit edit mode on behalf of `blockId` — but only if that block still

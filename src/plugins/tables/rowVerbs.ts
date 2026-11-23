@@ -6,7 +6,7 @@
  *  outline's handler runs with the host as the scope root. */
 import type { Block } from '@/data/block'
 import { listingSurfaceOf } from '@/data/childrenView'
-import { editorSelection, focusBlock } from '@/data/properties'
+import { focusBlock } from '@/data/properties'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import { requestEditorFocusIfEditing } from '@/shortcuts/blockActions'
 import { mergeUp } from '@/shortcuts/blockMergeGesture'
@@ -140,8 +140,11 @@ const mergeRowUp: ActionDispatchDecorator = {
     // Every child counts, collapsed or not: deleting the row would delete them.
     if (liveContent === '' && (await grid.childIdsOf(block.id)).length === 0) {
       if (!await deleteBlockThroughUi(block)) return
-      await uiStateBlock.set(editorSelection, {blockId: into.id, start: intoData?.content.length ?? 0})
-      await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId})
+      await focusBlock(uiStateBlock, into.id, {
+        edit: true,
+        renderScopeId,
+        selection: {start: intoData?.content.length ?? 0},
+      })
       return
     }
     await mergeUp({from: block, into, liveContent, surface: listingSurfaceOf(editDeps), uiStateBlock})
