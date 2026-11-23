@@ -13,7 +13,7 @@ import type { Block } from '@/data/block'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
 import { isPropertyValueEditable } from '@/data/internals/propertyValueEdits'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
-import { focusedBlockLocationFromProperties, isEditingProp, selectionStateProp } from '@/data/properties'
+import { focusedBlockLocationFromProperties, isEditingProp } from '@/data/properties'
 import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
@@ -311,7 +311,6 @@ const RowKeys = ({controller, rows, renderScopeId}: {
     return {
       blockId: location.blockId,
       editing: safeDecodeRowProperty(data, isEditingProp),
-      selecting: Boolean(safeDecodeRowProperty(data, selectionStateProp)?.selectedBlockIds.length),
     }
   }})
   const pending = useSyncExternalStore(controller.subscribePending, controller.getPendingRow)
@@ -319,7 +318,7 @@ const RowKeys = ({controller, rows, renderScopeId}: {
   const normalMode = useActiveContextsState().has(ActionContextTypes.NORMAL_MODE)
   const panelActive = useIsActivePanel(uiStateBlock)
   const rowId = pending ?? focus?.blockId
-  const onRow = panelActive && !inControl && !focus?.selecting && rowId !== undefined &&
+  const onRow = panelActive && !inControl && rowId !== undefined &&
     rows.has(rowId) && (pending !== null || !focus?.editing)
   const dependencies = useMemo(() => ({gridCommand: controller.command}), [controller])
   // Stable, or every render would release and re-claim the contexts.

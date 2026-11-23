@@ -41,8 +41,8 @@ export interface NestedSurface {
    *  Omit when each member is the structural root of its own subtree. */
   readonly scopeRootId?: string
   readonly propertyDisplay?: PropertyDisplayScopeLevels
-  /** Members may belong to different pages. Each one's subtree bounds a range. */
-  readonly foreign?: boolean
+  /** Each member's subtree bounds a selection range. */
+  readonly isolateSelection?: boolean
 }
 
 interface OwnerContext {

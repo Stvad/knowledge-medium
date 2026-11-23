@@ -263,14 +263,8 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // Don't gate the delete on it, so non-React runners that can't
       // inject a scope (the agent-runtime bridge) still delete — they
       // just skip focus recovery.
-      // Same-depth next sibling is the natural shift-up target. When
-      // `block` has descendants those vanish too, so we can't use
-      // `nextVisibleBlock` (which would descend into the doomed
-      // subtree). `blockAfterSubtreeRemoval` walks the data tree
-      // skipping `block`'s subtree entirely: next sibling → prev
-      // sibling → parent. This mirrors what the proactive
-      // `PanelFocusRecovery` does on the DOM side, so manual deletes
-      // and surprise disappearances both land on the same target.
+      // Removing a subtree shifts its next drawn sibling into its place.
+      // At the end of a list prefer the previous sibling, then the owner.
       // Read in `beforeWrite`, so the target is found after the user has
       // answered rather than before — the tree can move while a dialog is
       // open — and while the subtree it skips is still there to skip.

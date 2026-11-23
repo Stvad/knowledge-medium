@@ -9,7 +9,7 @@ import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { drawnChildrenOf } from '@/data/visibleChildren'
-import { nextDrawnStep, previousDrawnStep } from '@/utils/selection'
+import { getBlocksInRange, nextDrawnStep, previousDrawnStep } from '@/utils/selection'
 import { tableChildrenViews } from '../childrenViews'
 import { GridController } from '../controller'
 import { turnIntoTable } from '../convert'
@@ -23,8 +23,8 @@ const options = {scope: ChangeScope.BlockDefault}
 const PAGE = 'panel:page'
 const TABLE = tableRenderScopeId(PAGE, 'host')
 const ROWS = ['row-0', 'row-1']
-const grid = (members: readonly string[], foreign = false) => ({
-  kind: 'nested-surface', renderScopeId: TABLE, members, foreign, propertyDisplay: controller.rowsDisplayScope,
+const grid = (members: readonly string[]) => ({
+  kind: 'nested-surface', renderScopeId: TABLE, members, isolateSelection: true, propertyDisplay: controller.rowsDisplayScope,
 })
 
 let db: TestDb
@@ -83,9 +83,19 @@ describe('a table host’s drawn members', () => {
     expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([grid(['row-0'])])
   })
 
+  it.each([
+    {name: 'plain', rows: ROWS, sorted: false},
+    {name: 'sorted', rows: [...ROWS].reverse(), sorted: true},
+  ])('stops an outline selection at the $name grid', async ({rows, sorted}) => {
+    controller.setSorted(sorted)
+    controller.setRows(rows, rows.length)
+    expect(await getBlocksInRange('host', rows[0]!, surface(), repo, TABLE)).toEqual([])
+    expect(await getBlocksInRange('host', 'after', surface(), repo, PAGE)).toEqual([])
+  })
+
   it('under a query: its field row, the grid, then its children outside the query', async () => {
     const {fieldRowId} = await withQuery()
-    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([fieldRowId, grid(ROWS, true), 'outside-0', 'outside-1'])
+    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([fieldRowId, grid(ROWS), 'outside-0', 'outside-1'])
     expect(await nextDrawnStep(repo.block('outside-0'), surface())).toMatchObject({block: {id: 'outside-1'}, crossed: false})
     expect(await previousDrawnStep(repo.block('after'), surface())).toMatchObject({block: {id: 'outside-1'}, crossed: false})
     expect(await previousDrawnStep(repo.block('outside-0'), surface())).toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}, crossed: true})

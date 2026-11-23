@@ -63,7 +63,7 @@ const membersQuery = defineQuery<{members: string[]}, DrawnChild[]>({
     if (member === AT_SURFACE) return SURFACE
     if (member === '<grid>') return GRID
     if (member === '<projection>') return {
-      kind: 'nested-surface', renderScopeId: PROJECTION_SCOPE, members: ['projected-child'], foreign: true,
+      kind: 'nested-surface', renderScopeId: PROJECTION_SCOPE, members: ['projected-child'], isolateSelection: true,
     }
     return member
   }),

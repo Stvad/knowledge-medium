@@ -105,13 +105,12 @@ export async function surfaceForFocus(block: Block, renderScopeId: string, surfa
   }
 }
 
-/** A foreign result is its own selection boundary, including any surfaces
- *  mounted inside it. A range spanning results could delete another page. */
+/** An isolated member bounds a range, including any surfaces owned within it. */
 export async function selectionBoundaryOf(block: Block, renderScopeId: string | undefined): Promise<FocusedBlockLocation | null> {
   const declaration = await declarationOf(block.repo, renderScopeId)
   if (!declaration) return null
   const {nested, parent} = declaration
-  if (nested.foreign) {
+  if (nested.isolateSelection) {
     let id: string | null = block.id
     while (id !== null && !nested.members?.includes(id)) id = (await block.repo.load(id))?.parentId ?? null
     if (id !== null) return {blockId: id, renderScopeId: nested.renderScopeId}
@@ -127,7 +126,7 @@ async function siblingsOf({block, surface}: DrawnLocation) {
     const slots = slotsOf(declaration.members)
     const at = slots.findIndex(slot => slot && typeof slot !== 'string' &&
       slot.nested === declaration.nested && slot.id === block.id)
-    return {parent: declaration.parent, slots, at, listed: true, isolated: !declaration.nested.scopeRootId || declaration.nested.foreign}
+    return {parent: declaration.parent, slots, at, listed: true, isolated: !declaration.nested.scopeRootId || declaration.nested.isolateSelection}
   }
   if (block.id === surface.scopeRootId) return null
   const data = block.peek() ?? await block.load()

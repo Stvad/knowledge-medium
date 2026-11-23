@@ -48,7 +48,7 @@ beforeEach(async () => {
   release = registerGrid(GRID_SCOPE, grid)
 })
 
-it('bulk indent on a selected query row refuses to reparent its source block', async () => {
+it('refuses to select a query row so bulk indent cannot reparent its source block', async () => {
   const {multiSelectModeActions} = getDefaultActionGroups({repo})
   const normalModeActions = getVimNormalModeActions({repo})
   const indent = normalModeActions.find(action => action.id === 'indent_block')!
@@ -64,8 +64,15 @@ it('bulk indent on a selected query row refuses to reparent its source block', a
   expect((await block.load())?.parentId).toBe('source')
 
   await invokeAction(runtime, {action: select, deps, trigger})
-  expect(uiStateBlock.get(selectionStateProp)).toEqual({selectedBlockIds: ['result'], anchorBlockId: 'result'})
-  const bulkDeps = {selectedBlocks: [block], anchorBlock: block, scopeRootId: 'page', uiStateBlock}
+  const selection = uiStateBlock.get(selectionStateProp)
+  const bulkDeps = {
+    selectedBlocks: (selection?.selectedBlockIds ?? []).map(id => repo.block(id)),
+    anchorBlock: selection?.anchorBlockId ? repo.block(selection.anchorBlockId) : null,
+    scopeRootId: 'page',
+    uiStateBlock,
+  }
   await invokeAction(runtime, {action: bulkIndent, deps: bulkDeps, trigger})
   expect((await block.load())?.parentId).toBe('source')
+  expect((await repo.load('sibling'))?.parentId).toBe('source')
+  expect(uiStateBlock.get(selectionStateProp)?.selectedBlockIds ?? []).toEqual([])
 })

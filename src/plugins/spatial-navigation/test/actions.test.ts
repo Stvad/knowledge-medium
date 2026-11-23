@@ -180,7 +180,7 @@ const declareForeignMembers = async (withNote = false) => {
   const store = new HandleStore({gcTimeMs: 0})
   const key = 'test.foreign-members'
   const children = store.getOrCreate(key, () => new LoaderHandle<DrawnChild[]>({
-    store, key, loader: async () => [{kind: 'nested-surface', renderScopeId: FOREIGN_SCOPE, foreign: true, members: ['X', 'Q']}],
+    store, key, loader: async () => [{kind: 'nested-surface', renderScopeId: FOREIGN_SCOPE, isolateSelection: true, members: ['X', 'Q']}],
   }))
   env.repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,

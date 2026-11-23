@@ -40,11 +40,9 @@ import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
 import { propertyDisplayProp } from '@/data/propertyDisplayMode'
 import { turnIntoTable } from '../convert'
 import { openQueryValue } from '../query/queryValue'
-import { queryProp } from '../schema'
 import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { tablesPlugin } from '../index'
 import { CELL_CONTROL_SELECTOR } from '../controller'
-import { TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT } from '../keys'
 import { gridOfHost, tableNotesScopeId, tableRenderScopeId } from '../registry'
 import { queryProp } from '../schema'
 
@@ -882,18 +880,22 @@ it('merges sibling notes within a query row and keeps the editor in their scope'
   expect(ui().peekProperty(isEditingProp)).toBe(true)
 })
 
-it('starts selection on a grid row and releases its cell shortcuts', async () => {
+it('refuses to start selection on a query row or its notes', async () => {
   configureRuntime(vimNormalModePlugin({repo}))
+  const note = await repo.mutate.createChild({parentId: 'row-0', content: 'A note', position: {kind: 'last'}})
+  await db.db.execute("UPDATE blocks SET created_at = 100000 WHERE id = 'row-0'")
+  await repo.block(HOST).set(queryProp, 'created<2000-01-01')
+  await repo.awaitReprojections()
   mount()
-  await act(async () => { await focusBlock(ui(), 'row-0', {renderScopeId: SCOPE}) })
-  await waitFor(() => {
-    expect(activeContexts.get(ActionContextTypes.NORMAL_MODE)).toMatchObject({block: {id: 'row-0'}})
-    expect(activeContexts.has(TABLE_ROW_CONTEXT)).toBe(true)
-  })
-  await act(async () => { await runActionById('select_focused_block_and_start_selection', new KeyboardEvent('keydown')) })
-  await waitFor(() => {
-    expect(ui().peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['row-0'])
-    expect(activeContexts.has(TABLE_ROW_CONTEXT)).toBe(false)
-    expect(activeContexts.has(TABLE_TYPING_CONTEXT)).toBe(false)
-  })
+
+  const trySelection = async (blockId: string, renderScopeId: string) => {
+    await act(async () => { await focusBlock(ui(), blockId, {renderScopeId}) })
+    await waitFor(() => expect(activeContexts.get(ActionContextTypes.NORMAL_MODE)).toMatchObject({
+      block: {id: blockId}, renderScopeId,
+    }))
+    await act(async () => { await runActionById('select_focused_block_and_start_selection', new KeyboardEvent('keydown')) })
+    expect(ui().peekProperty(selectionStateProp)?.selectedBlockIds ?? []).toEqual([])
+  }
+  await trySelection('row-0', SCOPE)
+  await trySelection(note!, tableNotesScopeId(SCOPE, 'row-0'))
 })

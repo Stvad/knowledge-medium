@@ -21,7 +21,7 @@ const nestedSurfaceSchema = z.object({
   members: z.array(z.string()).optional(),
   propertyDisplay: propertyDisplayScopeSchema.optional(),
   scopeRootId: z.string().optional(),
-  foreign: z.boolean().optional(),
+  isolateSelection: z.boolean().optional(),
 }).strict()
 
 const ROW_NOTES_QUERY = 'tables.rowNotes'
@@ -68,6 +68,7 @@ type HostMembersArgs = {
   hostId: string
   workspaceId: string
   queryFieldId: string | null
+  hasQuery: boolean
   grid: NestedSurface
 }
 
@@ -77,17 +78,17 @@ const hostMembersQuery: Query<HostMembersArgs, DrawnChild[]> = defineQuery<HostM
   name: HOST_MEMBERS_QUERY,
   argsSchema: z.object({
     hostId: z.string(), workspaceId: z.string(), queryFieldId: z.string().nullable(),
+    hasQuery: z.boolean(),
     grid: nestedSurfaceSchema,
   }).strict(),
   resultSchema: {parse: input => input as DrawnChild[]},
-  resolve: async ({hostId, workspaceId, queryFieldId, grid}, ctx) => {
+  resolve: async ({hostId, workspaceId, queryFieldId, hasQuery, grid}, ctx) => {
     const fields = queryFieldId === null
       ? []
       : (await ctx.run('core.propertyRows', {ownerId: hostId, fieldId: queryFieldId})).fields.map(({field}) => field.id)
+    if (!hasQuery) return [...fields, grid]
     const shown = new Set(grid.members)
-    const outside = grid.foreign
-      ? (await ctx.run('core.typedBlockIds', hostChildrenQuery(hostId, workspaceId))).filter(id => !shown.has(id))
-      : []
+    const outside = (await ctx.run('core.typedBlockIds', hostChildrenQuery(hostId, workspaceId))).filter(id => !shown.has(id))
     return [...fields, grid, ...outside]
   },
 })
@@ -104,10 +105,11 @@ const hostView = (parent: Block, data: BlockData, renderScopeId: string): Childr
       hostId: parent.id,
       workspaceId: data.workspaceId,
       queryFieldId: queryFieldIdOf(parent.repo.propertyDefinitions) ?? null,
+      hasQuery: grid?.hasQuery ?? false,
       grid: {
         kind: 'nested-surface',
         renderScopeId: tableRenderScopeId(renderScopeId, parent.id),
-        ...(grid && {members: grid.rows, propertyDisplay: grid.rowsDisplayScope, foreign: grid.hasQuery}),
+        ...(grid && {members: grid.rows, propertyDisplay: grid.rowsDisplayScope, isolateSelection: true}),
       },
     }),
   }

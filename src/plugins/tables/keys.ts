@@ -239,16 +239,14 @@ const leavingAt = (edge: Edge): Applies => (deps, trigger, grid) => {
   return editorView !== undefined && atEditorEdge(editorView, edge) && crossing(edge)(deps, trigger, grid)
 }
 
-/** Cells have their own editing root and are absent from the grid's
- *  navigable member list. Their keys still select text inside the editor. */
-const noCellSelection = (context: ActionContextType, actionId: string): ActionDispatchDecorator => ({
+/** Bulk selection stores block IDs, so a grid occurrence could turn a
+ *  selection gesture into an edit on its source outline. */
+const noBlockSelection = (context: ActionContextType, actionId: string): ActionDispatchDecorator => ({
   actionId,
   context,
   wrap: (deps, trigger, next) => {
-    const {block, renderScopeId, scopeRootId} = deps as BlockShortcutDependencies
-    const grid = gridDrawing(renderScopeId, block?.id)
-    if (!grid || grid.renderScopeId !== renderScopeId ||
-        grid.isRow(block.id) || (scopeRootId && grid.isRow(scopeRootId))) return next(deps, trigger)
+    const {block, renderScopeId} = deps as BlockShortcutDependencies
+    if (!gridDrawing(renderScopeId, block?.id)) return next(deps, trigger)
   },
 })
 
@@ -326,7 +324,7 @@ export const tableOutlineVerbRedirects = [
   redirect(EDITING, 'move_down_from_cm_end', 'down', leavingAt('bottom')),
   redirect(EDITING, 'move_left_from_cm_start', 'previous', leavingAt('start')),
   redirect(EDITING, 'move_right_from_cm_end', 'next', leavingAt('end')),
-  ...SELECTION_STARTS.map(([context, actionId]) => noCellSelection(context, actionId)),
+  ...SELECTION_STARTS.map(([context, actionId]) => noBlockSelection(context, actionId)),
   onTableHost(NORMAL, 'create_block_below_and_edit', createsFirstChild('createBelowPlacement')),
   onTableHost(NORMAL, 'create_block_above_and_edit', createsFirstChild('createAbovePlacement')),
   onTableHost(EDITING, 'split_block_cm', hostEnter),
