@@ -1,1 +1,1 @@
-export{vF as ensureExtensionUtilitiesCss}from"../../chunks/app-DggkGp59.js";
+export{JR as ensureExtensionUtilitiesCss}from"../../chunks/app-tRxVs4EP.js";

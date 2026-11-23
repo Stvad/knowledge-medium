@@ -1,1 +1,1 @@
-export{gz as ExtensionRenderBoundary}from"../../chunks/app-DggkGp59.js";
+export{eU as ExtensionRenderBoundary}from"../../chunks/app-tRxVs4EP.js";

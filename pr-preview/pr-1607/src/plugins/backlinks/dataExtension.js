@@ -1,1 +1,1 @@
-export{zZ as backlinksDataExtension}from"../../../chunks/app-DggkGp59.js";
+export{D4 as backlinksDataExtension}from"../../../chunks/app-tRxVs4EP.js";

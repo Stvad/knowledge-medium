@@ -1,1 +1,1 @@
-export{Sj as useCommandPaletteActions}from"../../../chunks/app-DggkGp59.js";
+export{WP as useCommandPaletteActions}from"../../../chunks/app-tRxVs4EP.js";

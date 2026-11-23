@@ -1,1 +1,1 @@
-export{kb as normalizeClipboardDom}from"../../../chunks/app-DggkGp59.js";
+export{QC as normalizeClipboardDom}from"../../../chunks/app-tRxVs4EP.js";

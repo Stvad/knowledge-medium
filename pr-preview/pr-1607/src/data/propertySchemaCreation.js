@@ -1,0 +1,1 @@
+export{CY as adoptOrCreatePropertySchema}from"../../chunks/app-tRxVs4EP.js";

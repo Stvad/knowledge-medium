@@ -1,0 +1,1 @@
+export{GW as typePropertyGroups}from"../../chunks/app-tRxVs4EP.js";

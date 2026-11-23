@@ -1,1 +1,1 @@
-export{K6 as KERNEL_PROCESSORS}from"../../../chunks/app-DggkGp59.js";
+export{Ott as KERNEL_PROCESSORS}from"../../../chunks/app-tRxVs4EP.js";

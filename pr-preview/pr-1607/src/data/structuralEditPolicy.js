@@ -1,1 +1,1 @@
-export{wN as resolveStructuralEditPolicy,TN as structuralEditPolicyForBlock}from"../../chunks/app-DggkGp59.js";
+export{QI as indentDrawnBlock,$I as memberMergePlacement,eL as moveDrawnBlock,tL as outdentDrawnBlock,nL as refusesMerge}from"../../chunks/app-tRxVs4EP.js";
