@@ -18,7 +18,7 @@ const request = (
   const {text = '', intent = 'split', surface = 'editor', caret, files} = over
   return surface === 'shell'
     ? {text, intent, surface, files}
-    : {text, intent, surface, files, caret: caret ?? {line: 1, lineCount: 1, from: 0, to: 0}}
+    : {text, intent, surface, files, caret: caret ?? {line: 1, lineStart: 0, lineCount: 1, from: 0, to: 0}}
 }
 
 const pngFile = () => new File([new Uint8Array([1, 2, 3])], 'cat.png', {type: 'image/png'})

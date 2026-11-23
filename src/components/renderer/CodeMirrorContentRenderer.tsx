@@ -17,7 +17,7 @@ import {
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
-import { editorPasteRequest, readClipboardContent } from '@/paste/clipboard.js'
+import { editorPasteRequest, readClipboardContent, readPasteCaret } from '@/paste/clipboard.js'
 import { flushEditorContent } from '@/editor/contentFlush.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -101,17 +101,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // below, so text lands where the caret is when it is inserted.
     const editorView = editorRef.current?.view
     if (!editorView) return
-    const selection = editorView.state.selection.main
-    const caret = {
-      line: editorView.state.doc.lineAt(selection.from).number,
-      lineCount: editorView.state.doc.lines,
-      from: selection.from,
-      to: selection.to,
-    }
     const renderScopeId = typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
       : undefined
-    const request = editorPasteRequest(content, block, intent, caret)
+    const request = editorPasteRequest(content, block, intent, readPasteCaret(editorView.state))
 
     // The stored row lags the view by the content debounce. Both writes below
     // need it current: the cut move reads it (a blank target is replaced), and

@@ -58,6 +58,8 @@ export interface PasteCaret {
    *  keeps newlines after a single-block paste, so this can exceed 1. This
    *  is an editor-doc line, NOT an outline position. */
   line: number
+  /** Offset of the start of the line containing `from`. */
+  lineStart: number
   /** Total lines in the block's editor document (`doc.lines`); `line ===
    *  lineCount` ⟺ caret on the last line. */
   lineCount: number
