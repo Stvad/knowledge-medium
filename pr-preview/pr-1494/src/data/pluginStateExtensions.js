@@ -1,1 +1,1 @@
-export{O4 as pluginPrefsExtension,k4 as pluginUIStateExtension}from"../../chunks/app-D0ruc82j.js";
+export{O4 as pluginPrefsExtension,k4 as pluginUIStateExtension}from"../../chunks/app-D_RF6T6W.js";
