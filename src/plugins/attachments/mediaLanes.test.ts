@@ -30,6 +30,8 @@ it('stops uploading mid-pass once the client may no longer write, leaving the re
   }
   const lanes = createMediaLanes({
     userId: USER, byteStore, uploadStore: store, blobStore,
+    getAccessToken: async () => null,
+    exclusive: work => work(),
     keys: { getMaterializability: async () => 'copy' as const, getCek: async () => null, getContentKeyHmac: async () => null },
     readLiveWorkspace: async () => ({
       kind: 'read', state: { encryptionMode: 'none', conversionPhase: null, wkCanary: null, ownerUserId: USER },
