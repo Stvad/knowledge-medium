@@ -1,1 +1,1 @@
-export{TR as dynamicExtensionsExtension}from"../../chunks/app-jJF15_j7.js";
+export{TR as dynamicExtensionsExtension}from"../../chunks/app-CqABzAT6.js";
