@@ -1,0 +1,1 @@
+export{cz as BlockLoadingPlaceholder}from"../../chunks/app-Behb-jUV.js";

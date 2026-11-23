@@ -1,0 +1,1 @@
+export{wB as GESTURE_ACTIVE,TB as GESTURE_CANCEL,EB as GESTURE_IDLE,DB as NO_BLOCK_GESTURES_ATTRIBUTE,OB as TOUCH_HOLD_MS,kB as TOUCH_SLOP_PX,AB as allowsBlockGestures,jB as continuousGestureRecognizersFacet,MB as createBlockGestureController,NB as enabledTouchAction,PB as suppressNextClick,FB as unionTouchAction,IB as useContinuousGestures}from"../../chunks/app-Behb-jUV.js";

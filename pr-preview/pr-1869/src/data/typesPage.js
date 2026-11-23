@@ -1,0 +1,1 @@
+export{pdt as getOrCreateTypesPage,mdt as typesPageBlockId,hdt as typesPageSpec}from"../../chunks/app-Behb-jUV.js";

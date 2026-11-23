@@ -1,0 +1,1 @@
+export{pc as propertyReadContentContribution}from"../../../chunks/app-Behb-jUV.js";

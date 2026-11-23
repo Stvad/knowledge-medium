@@ -1,0 +1,1 @@
+export{ez as LazyBlockComponent}from"../../chunks/app-Behb-jUV.js";

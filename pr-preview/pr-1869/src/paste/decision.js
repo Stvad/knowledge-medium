@@ -1,0 +1,1 @@
+export{HV as defaultPasteDecision,UV as pasteDecisionVerb}from"../../chunks/app-Behb-jUV.js";

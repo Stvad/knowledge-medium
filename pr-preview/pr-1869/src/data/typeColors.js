@@ -1,0 +1,1 @@
+export{xI as DEFAULT_TYPE_COLORS,SI as defaultTypeColor,CI as pickLeastUsedTypeColor}from"../../chunks/app-Behb-jUV.js";

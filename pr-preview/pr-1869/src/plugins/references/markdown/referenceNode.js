@@ -1,0 +1,1 @@
+export{VS as EmbedComponent,HS as referenceTargetOf}from"../../../../chunks/app-Behb-jUV.js";

@@ -1,0 +1,1 @@
+export{iJ as withMoveTransition}from"../../chunks/app-Behb-jUV.js";

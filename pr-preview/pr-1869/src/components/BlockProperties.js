@@ -1,0 +1,1 @@
+export{vW as BlockProperties}from"../../chunks/app-Behb-jUV.js";

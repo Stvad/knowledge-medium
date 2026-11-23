@@ -1,0 +1,1 @@
+export{KO as PromotableBreadcrumbList}from"../../../chunks/app-Behb-jUV.js";

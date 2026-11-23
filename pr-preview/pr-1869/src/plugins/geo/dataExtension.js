@@ -1,0 +1,1 @@
+export{JQ as geoDataExtension}from"../../../chunks/app-Behb-jUV.js";

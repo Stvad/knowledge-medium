@@ -1,0 +1,1 @@
+export{GO as usePromotableBreadcrumb}from"../../../chunks/app-Behb-jUV.js";

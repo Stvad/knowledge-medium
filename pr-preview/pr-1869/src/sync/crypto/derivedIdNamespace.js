@@ -1,0 +1,1 @@
+export{$dt as deriveWorkspaceIdNamespace}from"../../../chunks/app-Behb-jUV.js";

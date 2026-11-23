@@ -1,0 +1,1 @@
+export{LX as staticDataExtensions}from"../../chunks/app-Behb-jUV.js";

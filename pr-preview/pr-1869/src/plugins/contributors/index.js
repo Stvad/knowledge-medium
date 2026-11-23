@@ -1,0 +1,1 @@
+export{y_ as contributorsPlugin}from"../../../chunks/app-Behb-jUV.js";

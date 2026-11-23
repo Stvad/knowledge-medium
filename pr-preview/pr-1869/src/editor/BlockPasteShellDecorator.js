@@ -1,0 +1,1 @@
+export{sL as BlockPasteShellDecorator,cL as blockPasteShellDecorator}from"../../chunks/app-Behb-jUV.js";

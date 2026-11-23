@@ -1,0 +1,1 @@
+export{bQ as htmlDocumentTypeSeed}from"../../../chunks/app-Behb-jUV.js";

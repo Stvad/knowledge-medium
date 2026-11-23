@@ -1,0 +1,1 @@
+export{QV as BlockEditor}from"../../chunks/app-Behb-jUV.js";

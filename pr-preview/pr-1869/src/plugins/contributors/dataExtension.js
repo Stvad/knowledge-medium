@@ -1,0 +1,1 @@
+export{D2 as contributorsDataExtension}from"../../../chunks/app-Behb-jUV.js";

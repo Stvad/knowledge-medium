@@ -1,0 +1,1 @@
+export{_F as CommandPaletteHeaderItem}from"../../../chunks/app-Behb-jUV.js";

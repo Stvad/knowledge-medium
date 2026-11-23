@@ -1,0 +1,1 @@
+export{sp as blockTagsConfigUi}from"../../../chunks/app-Behb-jUV.js";

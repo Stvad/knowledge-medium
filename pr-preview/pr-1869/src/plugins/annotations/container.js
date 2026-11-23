@@ -1,0 +1,1 @@
+export{r2 as COMMENTS_PAGE_ALIAS,i2 as commentsPageBlockId,a2 as commentsPageSpec,o2 as getOrCreateCommentsPage}from"../../../chunks/app-Behb-jUV.js";

@@ -1,0 +1,1 @@
+export{jj as openRecentsPage}from"../../../chunks/app-Behb-jUV.js";

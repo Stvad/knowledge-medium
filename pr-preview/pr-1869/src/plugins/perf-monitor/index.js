@@ -1,0 +1,1 @@
+export{Qr as perfMonitorPlugin}from"../../../chunks/app-Behb-jUV.js";

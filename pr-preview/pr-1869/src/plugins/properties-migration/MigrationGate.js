@@ -1,0 +1,1 @@
+export{Kc as MigrationGate}from"../../../chunks/app-Behb-jUV.js";

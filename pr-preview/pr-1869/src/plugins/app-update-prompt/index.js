@@ -1,0 +1,1 @@
+export{PL as appUpdatePromptExtension}from"../../../chunks/app-Behb-jUV.js";

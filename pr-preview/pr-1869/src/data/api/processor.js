@@ -1,0 +1,1 @@
+export{cgt as definePostCommitProcessor}from"../../../chunks/app-Behb-jUV.js";

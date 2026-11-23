@@ -1,0 +1,1 @@
+export{vv as extensionApiCatalog,yv as extensionApiRuntimeExports}from"../../chunks/app-Behb-jUV.js";

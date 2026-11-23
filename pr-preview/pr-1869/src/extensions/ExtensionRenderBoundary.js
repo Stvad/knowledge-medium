@@ -1,0 +1,1 @@
+export{QH as ExtensionRenderBoundary}from"../../chunks/app-Behb-jUV.js";

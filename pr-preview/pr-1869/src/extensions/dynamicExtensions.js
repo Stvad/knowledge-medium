@@ -1,0 +1,1 @@
+export{yR as dynamicExtensionsExtension}from"../../chunks/app-Behb-jUV.js";

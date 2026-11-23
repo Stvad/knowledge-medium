@@ -1,0 +1,1 @@
+export{Yc as migratePropertiesToBlocksAction,Gc as propertiesMigrationPlugin}from"../../../chunks/app-Behb-jUV.js";

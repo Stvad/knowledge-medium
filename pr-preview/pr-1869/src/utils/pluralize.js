@@ -1,0 +1,1 @@
+export{Ftt as agree,Itt as pluralize}from"../../chunks/app-Behb-jUV.js";

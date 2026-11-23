@@ -1,0 +1,1 @@
+export{QJ as usePropertySchemas}from"../../chunks/app-Behb-jUV.js";

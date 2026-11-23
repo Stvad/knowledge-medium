@@ -1,0 +1,1 @@
+export{uI as BlockEmbed}from"../../../chunks/app-Behb-jUV.js";

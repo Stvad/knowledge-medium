@@ -1,0 +1,1 @@
+export{_N as dailyDateWikilinkDecorator}from"../../../chunks/app-Behb-jUV.js";

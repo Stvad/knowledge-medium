@@ -1,0 +1,1 @@
+export{up as blockTaggingDataExtension}from"../../../chunks/app-Behb-jUV.js";
