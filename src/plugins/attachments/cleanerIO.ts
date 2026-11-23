@@ -2,8 +2,8 @@ import type { AttachmentCleanerIOResult } from '@/data/attachmentCleanerIOVerb.j
 import type { Repo } from '@/data/repo.js'
 import { isRemoteSyncActive } from '@/data/repoProvider.js'
 import { supabase } from '@/services/supabase.js'
-import { buildBlobStore } from './assetResolver.js'
 import { createAttachmentCleanerIO } from './attachmentCleanerIO.js'
+import { buildBlobStore } from './browserMedia.js'
 import { getByteStore } from './byteStore.js'
 import { getByteUploadStore } from './uploadStore.js'
 

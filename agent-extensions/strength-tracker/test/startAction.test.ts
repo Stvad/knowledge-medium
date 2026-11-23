@@ -207,7 +207,7 @@ describe('which pane the session opens in', () => {
     await startSessionAction.handler({
       block: {
         id: focus.id,
-        repo: {...(repo as object), block: () => ({children: {load: async () => []}})},
+        repo: {...(repo as object), query: {children: () => ({load: async () => []})}},
         peek: () => focus,
       },
       uiStateBlock: {id: 'pane-7'},

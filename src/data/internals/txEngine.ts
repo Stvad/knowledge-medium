@@ -69,9 +69,11 @@ import {
   normalizeReferences,
   scopePoliciesEquivalent,
 } from '@/data/api'
-import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { isValidSeededDefinition, seededDefinitionKey } from '@/data/definitionSeeds'
+import { isPropertySeedKey } from '@/data/propertySeeds'
+import { propertyHideInOutlineProp } from '@/data/properties'
 import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
-import { chunk as chunksOf } from 'lodash-es'
+import { chunk as chunksOf, cloneDeep } from 'lodash-es'
 import { MAX_IDS_PER_IN_CLAUSE, buildInClause } from './sqlBinds'
 import {
   BLOCKS_TABLE_COLUMN_NAMES,
@@ -87,7 +89,7 @@ import {
   readHasLiveReferrer,
 } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
-import type { BlockCache } from '@/data/blockCache'
+import { deepFreeze, type BlockCache } from '@/data/blockCache'
 import {
   getResolvedProperty,
   isResolvableFieldDefinition,
@@ -115,7 +117,7 @@ import {
   upsertFieldRow,
   type RevivalHistory,
 } from './propertyChildrenProcessor'
-import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { deleteSubtreeAnnouncedInTx } from '@/data/subtreeDelete'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { replayConflicts, replayTarget } from './replayMerge'
 
@@ -158,13 +160,17 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
   return false
 }
 
-/** v1 invariant (schema-unification §5.1): a materialized seed definition is
- *  wholly code-owned — its bag and lifecycle belong to materialization and
- *  the §13 revision-upgrade step (both `Automation` scope); synced-in
- *  changes never pass through this engine at all. The schema editor and
- *  property panel already render seed rows read-only; this is the
- *  data-layer backstop for the agent bridge, the importer, and the outline
- *  delete key.
+/** A property's outline visibility is user-owned; all other seed metadata
+ *  and type-definition metadata stay code-owned. Removing the override
+ *  restores the declaration's default. */
+const isEditableSeedPreference = (row: BlockData, name: string): boolean =>
+  isPropertySeedKey(seededDefinitionKey(row))
+  && name === propertyHideInOutlineProp.name
+  && (row.properties[name] === undefined || typeof row.properties[name] === 'boolean')
+
+/** A materialized seed definition's schema and lifecycle are code-owned.
+ *  Only its outline preference is user-editable. This commit-time check
+ *  also covers writes from the agent bridge, importer, and outline.
  *
  *  ONE commit-time check over the tx's snapshots map — the single
  *  convergence point for everything a tx wrote — rather than per-primitive
@@ -178,7 +184,7 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
  *
  *  Rules, under `BlockDefault` scope only:
  *   - a row may not BECOME a valid seeded definition (forgery);
- *   - a valid seeded definition's bag may not change (which also covers
+ *   - a valid seeded definition's code-owned metadata may not change (which also covers
  *     stripping its provenance) and it may not be tombstoned or
  *     hard-deleted. Content/references edits and plain restores stay
  *     allowed — they don't touch the code-owned fields, and
@@ -204,7 +210,7 @@ export const assertNoSeedDefinitionWrites = (
     }
     if (beforeSeed && (
       after === null
-      || !jsonValuesEqual(before.properties, after.properties)
+      || changedPropertyNames(before.properties, after.properties).some(name => !isEditableSeedPreference(after, name))
       || (!before.deleted && after.deleted)
     )) {
       throw new SeededDefinitionWriteError(id)
@@ -443,6 +449,10 @@ export class TxImpl implements Tx {
    *  (never written through this engine), so within-tx staleness cannot
    *  occur. */
   private readonly childBackedWorkspaceCache = new Map<string, boolean>()
+  /** Per-tx cache of `workspaces.encryption_mode`, which is written only
+   *  outside any tx (sync, `markLocalWorkspaceConverted`) and so waits behind
+   *  this tx's write lock. */
+  private readonly encryptionModeCache = new Map<string, Promise<string | null>>()
 
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
@@ -491,27 +501,39 @@ export class TxImpl implements Tx {
     before: BlockData | null,
     after: BlockData,
   ): Promise<PropertyBagWrites> {
-    const names = changedPropertyNames(before?.properties ?? {}, after.properties)
-    if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
-    if (!(await this.isPropertyChildBackedWorkspace(after.workspaceId))) return null
+    const previous = before?.properties ?? {}
+    const names = changedPropertyNames(previous, after.properties)
+    if (names.length === 0) {
+      after.properties = previous
+      return null
+    }
+    // Capture changed inputs before the first await. The next write uses this bag as its preimage.
+    after.properties = cloneDeep(after.properties)
+    if (this.ctx.propertyWritesAreSettled()) return null
     const resolver = this.propertySchemaResolverFor(after.workspaceId)
-    const schemas = new Map<string, ResolvedPropertySchema<unknown>>()
+    const childSchemas = await this.isPropertyChildBackedWorkspace(after.workspaceId)
+      ? new Map<string, ResolvedPropertySchema<unknown>>()
+      : null
     for (const name of names) {
       const resolution = resolver.resolve(name)
       const encoded = storedPropertyValue(after.properties, name)
       if (resolution.status !== 'resolved') {
+        // A cell can carry an unregistered key. A known definition with no
+        // local codec may own backlinks this writer cannot maintain.
+        if (childSchemas === null && resolution.reason !== 'behavior-unavailable') continue
         // Orphan cleanup cannot leave children owned by an existing definition.
         if (resolution.reason === 'definition-unavailable' && encoded === undefined) continue
         throw new PropertySchemaIdentityError(name, resolution.reason)
       }
+      if (childSchemas === null) continue
       const schema = resolution.schema
       if (encoded !== undefined) {
         const rejection = propertyCellValueRejection(schema, encoded)
         if (rejection) throw undecodableCellValueError(name, after.id, schema, rejection)
       }
-      schemas.set(name, schema)
+      childSchemas.set(name, schema)
     }
-    return schemas
+    return childSchemas
   }
 
   /** A row this tx brought back from a tombstone. Its eager child writes take
@@ -570,7 +592,12 @@ export class TxImpl implements Tx {
   }
 
   workspaceEncryptionMode(workspaceId: string): Promise<string | null> {
-    return readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+    let mode = this.encryptionModeCache.get(workspaceId)
+    if (mode === undefined) {
+      mode = readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+      this.encryptionModeCache.set(workspaceId, mode)
+    }
+    return mode
   }
 
   /** REFUSED once this transaction has written, and that is the whole reason
@@ -602,6 +629,11 @@ export class TxImpl implements Tx {
   workspaceUnappliedCount(workspaceId: string): Promise<number> {
     return this.viewGapReadsBeforeAnyWrite('workspaceUnappliedCount')
       .workspaceUnappliedCount(workspaceId)
+  }
+
+  createdInThisTx(id: string): boolean {
+    const entry = this.ctx.snapshots.get(id)
+    return entry !== undefined && entry.before === null
   }
 
   async liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
@@ -700,9 +732,11 @@ export class TxImpl implements Tx {
   }
 
   peek(id: string): BlockData | null {
-    const own = peekSnapshot(this.ctx.snapshots, id)
-    if (own !== undefined) return own
-    return this.ctx.cache.getSnapshot(id) ?? null
+    const entry = this.ctx.snapshots.get(id)
+    if (!entry) return this.ctx.cache.getSnapshot(id) ?? null
+    // Publish one immutable snapshot per version without freezing caller-owned values.
+    if (entry.after && !Object.isFrozen(entry.after)) entry.after = deepFreeze(cloneDeep(entry.after))
+    return entry.after
   }
 
   // ──── Lifecycle ────
@@ -1142,7 +1176,7 @@ export class TxImpl implements Tx {
    *  tx's NET bag change: a key `setProperty`-created then removed in the SAME
    *  tx nets to "no change", so its eagerly-written children would never be
    *  reconciled and PROJECT would reproject the value back. The machinery-aware
-   *  `deleteSubtreeInTx` carries any user-authored sub-children down with it
+   *  `deleteSubtreeAnnouncedInTx` carries any user-authored sub-children down with it
    *  (recoverable via history), matching MATERIALIZE's own removal branch. */
   private async deletePropertyValueChildren(
     parent: BlockData,
@@ -1153,7 +1187,7 @@ export class TxImpl implements Tx {
       [parent.workspaceId, parent.id, schema.fieldId],
     )
     for (const row of fieldRows) {
-      await deleteSubtreeInTx(this.propertyChildTx, row.id)
+      await deleteSubtreeAnnouncedInTx(this.propertyChildTx, row.id)
     }
   }
 
@@ -1484,7 +1518,11 @@ export class TxImpl implements Tx {
     })
   }
 
-  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void {
+  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>, workspaceId?: string): void {
+    if (workspaceId !== undefined) {
+      this.assertWritableWorkspace(workspaceId)
+      this.pinWorkspace(workspaceId)
+    }
     if (!this.workspacePinned) throw new WorkspaceNotPinnedError()
     this.ctx.sameTxEvents.push({name, payload})
   }

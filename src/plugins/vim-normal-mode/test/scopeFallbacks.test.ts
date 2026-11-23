@@ -9,6 +9,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -108,7 +109,7 @@ describe('per-pane scope fallbacks (no ambient renderScopeId)', () => {
       anchorBlockId: 'c0',
     })
 
-    const extended = await extendSelection('c1', repo.block(PANEL_UI), repo, ROOT)
+    const extended = await extendSelection('c1', repo.block(PANEL_UI), repo, outlineSurfaceOf({scopeRootId: ROOT}))
 
     expect(extended).toBe(true)
     expect(peekFocusedBlockLocation(repo.block(PANEL_UI))).toEqual({

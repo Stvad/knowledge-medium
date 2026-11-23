@@ -25,7 +25,6 @@ vi.mock('@/sync/keys/keyStore.js', async orig => ({
   getWorkspaceKeyStore: () => ({get: async () => h.record}),
 }))
 vi.mock('@/services/supabase.js', () => ({supabase: {}}))
-vi.mock('./assetUpload.js', () => ({getBlobStore: () => ({})}))
 vi.mock('@/data/repoProvider.js', () => ({isRemoteSyncActive: () => h.remote}))
 vi.mock('./cleanerIO.js', () => ({cleanerIOFor: () => ({kind: 'ready', io: {readObject: h.readObject}})}))
 vi.mock('@/sync/conversion/attachmentCleaner.js', async orig => ({

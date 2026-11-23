@@ -332,7 +332,10 @@ export class FacetRuntime {
     }
   }
 
-  read<Input, Output>(facet: Facet<Input, Output>): Output {
+  read<Input, Output>(facet: Facet<Input, Output>, workspaceId = this.activeWorkspaceId): Output {
+    if (workspaceId !== this.activeWorkspaceId) {
+      return combineFacetContributions(facet, this.collectContributions(facet.id, workspaceId), this.context)
+    }
     if (this.cache.has(facet.id)) {
       return this.cache.get(facet.id) as Output
     }

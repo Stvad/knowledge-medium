@@ -1,4 +1,5 @@
 import { focusBlock, selectionStateProp } from '@/data/properties.js'
+import { outlineSurfaceOf } from '@/data/outlineSurface.js'
 import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
 import { ActionContextTypes, type ActionConfig, type BlockPointerDependencies } from '@/shortcuts/types.js'
 import { extendSelection, insertInDocumentOrder, validateSelectionHierarchy } from '@/utils/selection.js'
@@ -24,15 +25,16 @@ export const extendBlockSelectionAction: ActionConfig<typeof ActionContextTypes.
   description: 'Extend block selection to the clicked block',
   context: ActionContextTypes.BLOCK_POINTER,
   pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
-  handler: async ({block, uiStateBlock, scopeRootId, scopeRootForcesOpen, renderScopeId, rangeOrigin}) => {
-    await extendSelection(
+  handler: async (deps) => {
+    const {block, uiStateBlock, rangeOrigin} = deps
+    const extended = await extendSelection(
       block.id,
       uiStateBlock,
       uiStateBlock.repo,
-      scopeRootId,
-      {scopeRootForcesOpen, originBlockId: rangeOrigin?.blockId},
+      outlineSurfaceOf(deps),
+      {originBlockId: rangeOrigin?.blockId, originRenderScopeId: rangeOrigin?.renderScopeId},
     )
-    void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
+    if (!extended) await focusBlock(uiStateBlock, block.id, {renderScopeId: deps.renderScopeId})
   },
 }
 

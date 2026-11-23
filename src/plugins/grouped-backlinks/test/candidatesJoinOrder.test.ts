@@ -1,52 +1,69 @@
 // @vitest-environment node
 /**
- * Join-order guard for `SELECT_GROUPED_BACKLINK_CANDIDATES_SQL`.
+ * Join-order guards for the grouped-backlinks candidate statements, under a
+ * large graph's planner stats.
  *
- * `refs` is constrained only by `workspace_id` in that statement, so
- * `idx_block_references_ws_alias` looks usable on its leading column; and a
- * recursive CTE carries no cardinality estimate to weigh against it. Left to
- * choose, SQLite drives from every edge in the workspace and builds a throwaway
- * index on the chain — the `AUTOMATIC COVERING INDEX` this test forbids —
- * instead of probing the `(source_id, …)` primary key once per chain row.
+ * `SELECT_GROUPED_BACKLINK_CANDIDATES_SQL`: `refs` is constrained only by
+ * `workspace_id`, and a recursive CTE carries no cardinality estimate, so left
+ * free SQLite drives from every edge in the workspace and builds an automatic
+ * index on the chain instead of probing the `(source_id, …)` primary key once
+ * per chain row.
+ *
+ * The same statement's group rows: left free, SQLite drives from every live
+ * block in the workspace and builds an automatic index on the context rows
+ * instead of looking up each context block by primary key.
+ *
+ * `SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL`: left free, SQLite drives
+ * from the target's edges and rescans the source id list per edge.
  */
-import { afterAll, beforeAll, expect, it } from 'vitest'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { SELECT_GROUPED_BACKLINK_CANDIDATES_SQL } from '../query'
+import { afterAll, beforeAll, it } from 'vitest'
+import { createLargeGraphPlanner, type LargeGraphPlanner, type StatOverride } from '@/data/test/largeGraphPlanner'
+import { SELECT_GROUPED_BACKLINK_CANDIDATES_SQL, SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL } from '../query'
 
 const WS = 'ws-1'
+const SOURCE_IDS = JSON.stringify(['s-1', 's-2', 's-3'])
 
-// The inversion needs enough edges for the workspace column to look worth
-// driving from. Measured: it reproduces from ~2k, so this is the cheap end of
-// the range and not a number to trim without re-checking the mutation below.
-const EDGES = 2000
+// `blocks` stats whose per-workspace live-row estimate is far below the
+// table's, as `PRAGMA optimize` leaves them after growth under ~10x. Under them
+// the planner drives from `idx_blocks_workspace_active`.
+const STALE_BLOCKS_STATS: readonly StatOverride[] = [
+  ['blocks', 'idx_blocks_workspace_active', '342103 68421'],
+]
 
-let h: TestDb
-
+let planner: LargeGraphPlanner
+let stalePlanner: LargeGraphPlanner
 beforeAll(async () => {
-  h = await createTestDb()
-  await h.db.writeTransaction(async tx => {
-    for (let i = 0; i < EDGES; i++) {
-      await tx.execute(
-        `INSERT INTO block_references (source_id, target_id, workspace_id, alias, source_field)
-         VALUES (?, ?, ?, ?, '')`,
-        [`s-${i % 500}`, `t-${i}`, WS, `alias-${i % 97}`],
-      )
-    }
-  })
-  // The planner only consults index selectivity once stats exist; without this
-  // it guesses uniformly and the inversion does not appear.
-  await h.db.execute('ANALYZE')
-}, 60_000)
-
-afterAll(async () => { await h.cleanup() })
+  planner = await createLargeGraphPlanner()
+  stalePlanner = await createLargeGraphPlanner({overrides: STALE_BLOCKS_STATS})
+}, 30_000)
+afterAll(async () => { await planner.cleanup(); await stalePlanner.cleanup() })
 
 it('drives the candidates walk from the chain, not from every workspace edge', async () => {
-  const plan = await h.db.getAll<{detail: string}>(
-    `EXPLAIN QUERY PLAN ${SELECT_GROUPED_BACKLINK_CANDIDATES_SQL}`,
-    [JSON.stringify(['s-1', 's-2', 's-3']), WS, 't-0', WS],
-  )
-  const details = plan.map(row => row.detail)
-  // An automatic index over the chain is the signature of the inverted order:
-  // it only pays to build one when the chain is the INNER side.
-  expect(details.filter(d => /AUTOMATIC/.test(d) && /ancestor_chain/.test(d))).toEqual([])
-}, 30_000)
+  await planner.expectPinned({
+    sql: SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
+    params: [SOURCE_IDS, WS, 't-0', WS],
+    pin: 'CROSS JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id',
+    unpinned: 'JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id',
+    check: plan => !plan.some(detail => /AUTOMATIC/.test(detail) && /ancestor_chain/.test(detail)),
+  })
+})
+
+it('looks up each context block of the candidates by primary key', async () => {
+  await stalePlanner.expectPinned({
+    sql: SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
+    params: [SOURCE_IDS, WS, 't-0', WS],
+    pin: 'CROSS JOIN blocks group_block ON group_block.id = cr.context_id',
+    unpinned: 'JOIN blocks group_block ON group_block.id = cr.context_id',
+    check: plan => plan.some(detail => /^SEARCH group_block USING INDEX sqlite_autoindex_blocks_1 \(id=\?\)$/.test(detail)),
+  })
+})
+
+it('probes each source of the field candidates by the edge primary key', async () => {
+  await planner.expectPinned({
+    sql: SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL,
+    params: [SOURCE_IDS, WS, 't-0'],
+    pin: 'CROSS JOIN block_references refs ON refs.source_id = s.id',
+    unpinned: 'JOIN block_references refs ON refs.source_id = s.id',
+    check: plan => plan.some(detail => /SEARCH refs USING .*sqlite_autoindex_block_references_1 \(source_id=\?/.test(detail)),
+  })
+})

@@ -17,7 +17,8 @@ import {
   showPropertiesProp,
   type EditorSelectionState,
 } from '@/data/properties.js'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface.js'
+import { indentDrawnBlock, moveDrawnBlock, outdentDrawnBlock } from '@/data/structuralEditPolicy.js'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import {
   ActionConfig,
@@ -28,10 +29,14 @@ import {
   ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import {
-  blockAfterSubtreeRemoval,
+  locationAfterSubtreeRemoval,
   extendSelection,
-  nextVisibleBlock,
-  previousVisibleBlock,
+  selectionBoundaryOf,
+  stepInSelectionBoundary,
+  type DrawnLocation,
+  nextDrawnStep,
+  previousDrawnStep,
+  surfaceForFocus,
 } from '@/utils/selection'
 
 export interface BlockAction {
@@ -83,17 +88,6 @@ const writeToClipboard = (text: string): void => {
   void writeTextToClipboard(text)
 }
 
-/** Move `block` one step up (-1) or down (+1) in the visible outline,
- *  crossing parent boundaries Roam/org-style and bounded by the
- *  surface's scope root. Delegates the tree logic to the
- *  `core.moveVertical` mutator (one transaction, undoable as a unit). */
-const reorderBlock = async (
-  repo: Repo,
-  direction: -1 | 1,
-  {block, scopeRootId, propertyDisplay}: BlockShortcutDependencies,
-): Promise<boolean> =>
-  repo.mutate.moveVertical({id: block.id, direction, scopeRootId, propertyDisplay})
-
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.peekProperty(isEditingProp)) {
     requestEditorFocus(uiStateBlock)
@@ -107,70 +101,39 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   if (uiStateBlock.repo.isReadOnly) return
 
   void resetBlockSelection(uiStateBlock)
-  // Before the edit flag, for the reason in enterEditModeForBlock.
+  // Before the edit flag: the editor places the caret in the commit that
+  // mounts it (see focusBlock's `selection`).
   if (selection) void uiStateBlock.set(editorSelection, selection)
   setIsEditing(uiStateBlock, true)
   requestEditorFocus(uiStateBlock)
 }
 
-/** Extend the block selection to the next visible block. Returns whether a
- *  selection was actually extended — false at the last visible block in the
- *  surface (no next block) or if the range resolved empty. Edit-mode callers
- *  use this to avoid leaving edit mode for nothing, and pass `clearEditing` so
- *  the exit folds into the selection's transaction (see extendSelectionDownEdit). */
-export const extendSelectionDown = async (
-  uiStateBlock: Block,
-  repo: Repo,
-  scopeRootId: string | undefined,
-  scopeRootForcesOpen = true,
-  clearEditing = false,
-): Promise<boolean> => {
-  if (!scopeRootId) return false
-
-  const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  if (!focusedId) return false
-
-  // Roam-style: the first press selects just the focused block (so a single
-  // block can be selected/deleted); subsequent presses extend downward. Don't
-  // select the surface's own root — acting on the view root within its view is
-  // meaningless, so leave the keystroke native (matches the old no-op there).
+/** First press selects the focused block. Further presses extend through
+ *  the drawn order from the focused occurrence, including in panel-level
+ *  multi-select mode. A panel's own root cannot start a block range. */
+async function extendVerticalSelection(
+  step: typeof previousDrawnStep, uiStateBlock: Block, repo: Repo,
+  surface: OutlineSurface | null, clearEditing: boolean,
+): Promise<boolean> {
+  const focused = peekFocusedBlockLocation(uiStateBlock)
+  if (!surface || !focused) return false
+  const block = repo.block(focused.blockId)
+  const here = await surfaceForFocus(block, focused.renderScopeId, surface)
   if (!hasBlockSelection(uiStateBlock)) {
-    if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
+    if (block.id === here.scopeRootId && !(await previousDrawnStep(block, here)).block) return false
+    return extendSelection(block.id, uiStateBlock, repo, here, {clearEditing})
   }
-
-  const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
-  if (!nextBlock) return false
-
-  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
+  const boundary = await selectionBoundaryOf(block, here.renderScopeId)
+  const next = await stepInSelectionBoundary(step, {block, surface: here}, boundary)
+  if (!next) return false
+  return extendSelection(next.block.id, uiStateBlock, repo, next.surface, {clearEditing})
 }
 
-/** Mirror of {@link extendSelectionDown} for the previous visible block.
- *  Returns false at the first visible block in the surface (the focused block
- *  is the scope root) or if the range resolved empty. */
-export const extendSelectionUp = async (
-  uiStateBlock: Block,
-  repo: Repo,
-  scopeRootId: string | undefined,
-  scopeRootForcesOpen = true,
-  clearEditing = false,
-): Promise<boolean> => {
-  if (!scopeRootId) return false
+export const extendSelectionDown = (ui: Block, repo: Repo, surface: OutlineSurface | null, clearEditing = false) =>
+  extendVerticalSelection(nextDrawnStep, ui, repo, surface, clearEditing)
 
-  const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  if (!focusedId) return false
-
-  // Roam-style first press — see extendSelectionDown.
-  if (!hasBlockSelection(uiStateBlock)) {
-    if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
-  }
-
-  const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
-  if (!prevBlock) return false
-
-  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
-}
+export const extendSelectionUp = (ui: Block, repo: Repo, surface: OutlineSurface | null, clearEditing = false) =>
+  extendVerticalSelection(previousDrawnStep, ui, repo, surface, clearEditing)
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
   // In-place structural shifts deliberately run WITHOUT
@@ -189,12 +152,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Indent block',
     icon: IndentIncrease,
     handler: async (deps: BlockShortcutDependencies) => {
-      // No-op on a scope root: indenting it would reparent the visible
-      // root under a sibling that lives outside the surface. The
-      // mutator separately no-ops when there's no previous sibling.
-      const {canIndent} = await structuralEditPolicyForBlock(deps.block, deps.scopeRootId)
-      if (!canIndent) return
-      await repo.mutate.indent({id: deps.block.id, propertyDisplay: deps.propertyDisplay})
+      await indentDrawnBlock(deps.block, deps)
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -209,16 +167,10 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'outdent_block',
     description: 'Outdent block',
     icon: IndentDecrease,
-    handler: async ({block, uiStateBlock, scopeRootId, propertyDisplay}: BlockShortcutDependencies) => {
+    handler: async (deps: BlockShortcutDependencies) => {
+      const {block, uiStateBlock, scopeRootId} = deps
       if (!scopeRootId) return
-
-      // Don't outdent the scope root itself; the mutator additionally
-      // refuses when the block is a direct child of the scope root
-      // (outdenting would escape the visible subtree).
-      const {canOutdent} = await structuralEditPolicyForBlock(block, scopeRootId)
-      if (!canOutdent) return
-
-      await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})
+      await outdentDrawnBlock(block, deps)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -234,7 +186,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: ArrowUp,
     handler: async (deps: BlockShortcutDependencies) => {
       if (!deps.block) return
-      await withRowSlide(() => reorderBlock(repo, -1, deps))
+      await withRowSlide(() => moveDrawnBlock(deps.block, deps, -1))
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -251,7 +203,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: ArrowDown,
     handler: async (deps: BlockShortcutDependencies) => {
       if (!deps.block) return
-      await withRowSlide(() => reorderBlock(repo, 1, deps))
+      await withRowSlide(() => moveDrawnBlock(deps.block, deps, 1))
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -267,7 +219,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Delete block',
     icon: Trash2,
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock, scopeRootId} = deps
+      const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
       // No scope-root special case: deleting the root of a surface is an
@@ -292,26 +244,21 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // Don't gate the delete on it, so non-React runners that can't
       // inject a scope (the agent-runtime bridge) still delete — they
       // just skip focus recovery.
-      // Same-depth next sibling is the natural shift-up target. When
-      // `block` has descendants those vanish too, so we can't use
-      // `nextVisibleBlock` (which would descend into the doomed
-      // subtree). `blockAfterSubtreeRemoval` walks the data tree
-      // skipping `block`'s subtree entirely: next sibling → prev
-      // sibling → parent. This mirrors what the proactive
-      // `PanelFocusRecovery` does on the DOM side, so manual deletes
-      // and surprise disappearances both land on the same target.
+      // Removing a subtree shifts its next drawn sibling into its place.
+      // At the end of a list prefer the previous sibling, then the owner.
       // Read in `beforeWrite`, so the target is found after the user has
       // answered rather than before — the tree can move while a dialog is
       // open — and while the subtree it skips is still there to skip.
-      const focus: {next: Block | null} = {next: null}
+      const focus: {next: DrawnLocation | null} = {next: null}
       const deleted = await deleteBlockThroughUi(block, {
         animate: true,
         beforeWrite: async () => {
-          focus.next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
+          const surface = outlineSurfaceOf(deps)
+          focus.next = surface ? await locationAfterSubtreeRemoval(block, surface) : null
         },
       })
       // Don't move focus for a delete a guard refused, or the user cancelled.
-      if (deleted && focus.next) void focusBlock(uiStateBlock, focus.next.id, {renderScopeId: deps.renderScopeId})
+      if (deleted && focus.next) void focusBlock(uiStateBlock, focus.next.block.id, {renderScopeId: focus.next.surface.renderScopeId})
     },
     defaultBinding: {
       keys: 'Delete',
@@ -329,9 +276,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const showProperties = block.peekProperty(showPropertiesProp) ?? false
       await block.set(showPropertiesProp, !showProperties)
     },
-    defaultBinding: {
-      keys: 't',
-    },
+    defaultBinding: {keys: 't'},
   }
 
   const toggleBlockCollapse: BlockAction = {
@@ -455,7 +400,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_up',
     description: 'Extend selection up',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+      await extendSelectionUp(deps.uiStateBlock, repo, outlineSurfaceOf(deps))
     },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
@@ -469,7 +414,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_down',
     description: 'Extend selection down',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+      await extendSelectionDown(deps.uiStateBlock, repo, outlineSurfaceOf(deps))
     },
     defaultBinding: {
       keys: 'Shift+ArrowDown',

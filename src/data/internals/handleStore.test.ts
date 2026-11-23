@@ -21,6 +21,7 @@ import {
   HandleStore,
   LoaderHandle,
   handleKey,
+  mergeChangeNotifications,
   stableArgsKey,
   type Dependency,
 } from './handleStore'
@@ -1944,7 +1945,7 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
     expect(runs).toBe(2)
   })
 
-  it('queue is discarded on load failure (deps were rolled back too)', async () => {
+  it('queue is discarded on load failure', async () => {
     const store = makeStore()
     let releaseSql!: () => void
     let runs = 0
@@ -1975,9 +1976,7 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
     releaseSql()
     await waitFor(() => expect(h.status()).toBe('error'))
 
-    // The errored load discards `changesDuringLoad` along with the
-    // partial deps. A future rerun must not fire spuriously off the
-    // queue from the failed run.
+    // A queued change for a never-declared dependency cannot trigger a retry.
     shouldFail = false
     await Promise.resolve()
     await Promise.resolve()
@@ -2260,5 +2259,132 @@ describe('Dep dedup at registration', () => {
     block()
     await waitFor(() => expect(h.status()).toBe('ready'))
     expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'r1' }])
+  })
+})
+
+describe('markStale()', () => {
+  it('makes a subscribed handle load fresh without re-running it for its subscribers', async () => {
+    const store = makeStore()
+    let v = 1
+    let runs = 0
+    const h = store.getOrCreate('stale-q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'stale-q',
+        loader: async (ctx) => { ctx.depend({ kind: 'row', id: 'r1' }); runs++; return v },
+      }),
+    )
+    const fired: number[] = []
+    h.subscribe((x) => fired.push(x))
+    await waitFor(() => expect(fired).toEqual([1]))
+
+    v = 2
+    store.markStale({ rowIds: ['other'] })
+    expect(await h.load()).toBe(1)
+
+    store.markStale({ rowIds: ['r1'] })
+    // A subscriber alone triggers nothing: the loader has still run once.
+    await Promise.resolve()
+    expect(runs).toBe(1)
+    // An awaited read is what must not see the old value.
+    expect(await h.load()).toBe(2)
+  })
+})
+
+describe('markStale() on a handle that asked to rerun', () => {
+  it('re-runs it for its subscriber at once', async () => {
+    const store = makeStore()
+    let v = 1
+    const h = store.getOrCreate('stale-eager', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'stale-eager',
+        loader: async (ctx) => { ctx.depend({ kind: 'row', id: 'r1' }); return v },
+      }),
+    )
+    h.rerunOnStaleMark()
+    const fired: number[] = []
+    h.subscribe((x) => fired.push(x))
+    await waitFor(() => expect(fired).toEqual([1]))
+
+    v = 2
+    store.markStale({ rowIds: ['r1'] })
+    await waitFor(() => expect(fired).toEqual([1, 2]))
+  })
+})
+
+describe('markStale() during a load', () => {
+  it('lets a subscribed load in flight settle stale instead of running it again', async () => {
+    const store = makeStore()
+    let runs = 0
+    let release!: (value: number) => void
+    const h = store.getOrCreate('stale-inflight', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'stale-inflight',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'r1' })
+          runs++
+          if (runs > 1) return 2
+          return new Promise<number>((resolve) => { release = resolve })
+        },
+      }),
+    )
+    const fired: number[] = []
+    h.subscribe((x) => fired.push(x))
+    await waitFor(() => expect(runs).toBe(1))
+
+    store.markStale({ rowIds: ['r1'] })
+    release(1)
+    await waitFor(() => expect(fired).toEqual([1]))
+    // Its subscriber is what would have triggered a second run.
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(runs).toBe(1)
+
+    // The value it settled with predates the change, so an awaited read re-resolves.
+    expect(await h.load()).toBe(2)
+  })
+})
+
+describe('markStale() before the load declares the dep', () => {
+  it('judges the mark against the deps the load ends up with', async () => {
+    const store = makeStore()
+    let runs = 0
+    let release!: () => void
+    const h = store.getOrCreate('stale-late-dep', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'stale-late-dep',
+        loader: async (ctx) => {
+          runs++
+          if (runs === 1) await new Promise<void>((resolve) => { release = resolve })
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return runs
+        },
+      }),
+    )
+    const first = h.load()
+    await waitFor(() => expect(runs).toBe(1))
+    store.markStale({ rowIds: ['r1'] })
+    release()
+    expect(await first).toBe(1)
+    expect(await h.load()).toBe(2)
+  })
+})
+
+describe('mergeChangeNotifications()', () => {
+  const sorted = (x: ReadonlySet<string> | readonly string[] | undefined) => (x ? [...x].sort() : x)
+
+  it('is the union of every field, across sets, arrays and absent sides', () => {
+    const merged = mergeChangeNotifications(
+      { rowIds: new Set(['a']), parentIds: ['p1'], plugin: new Map<string, ReadonlySet<string> | readonly string[]>([['ch', new Set(['k1'])], ['only-a', ['x']]]) },
+      { rowIds: ['a', 'b'], workspaceIds: new Set(['w']), tables: ['t'], plugin: new Map([['ch', ['k2']]]) },
+    )
+    expect(sorted(merged.rowIds)).toEqual(['a', 'b'])
+    expect(sorted(merged.parentIds)).toEqual(['p1'])
+    expect(sorted(merged.workspaceIds)).toEqual(['w'])
+    expect(sorted(merged.tables)).toEqual(['t'])
+    expect(sorted(merged.plugin?.get('ch'))).toEqual(['k1', 'k2'])
+    expect(sorted(merged.plugin?.get('only-a'))).toEqual(['x'])
   })
 })

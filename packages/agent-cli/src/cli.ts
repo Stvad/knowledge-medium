@@ -1106,6 +1106,22 @@ cli
     process.stdout.write(`${toDisplayJson(value)}\n`)
   })
 
+cli
+  .command('rejected-uploads', wireDescription('rejected-uploads'))
+  .action(async () => {
+    await runAndPrint({type: 'rejected-uploads'})
+  })
+
+// A requeue resends writes already attributed in their rows, so it carries no contributor.
+cli
+  .command('retry-rejected-upload <txId>', wireDescription('retry-rejected-upload'))
+  .action(async (txId: string) => {
+    if (!/^\d+$/.test(txId) || !Number.isSafeInteger(Number(txId))) {
+      throw new Error('retry-rejected-upload takes the integer txId that rejected-uploads lists.')
+    }
+    await runAndPrint({type: 'retry-rejected-upload', txId: Number(txId), contributorId: null})
+  })
+
 // A `--scope all` pass re-judges every staged row of the workspace, which on a
 // large graph is the same order of work as `run-backfill` — so it takes the
 // same wait, and for the same reason: the default command timeout would give up

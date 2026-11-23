@@ -135,7 +135,7 @@
  *
  * ## Explicit scope exclusion
  *
- * `deps.encryptOps` is never supplied (defaults to identity — powersync.ts
+ * `deps.prepareOperations` is never supplied (defaults to compaction — powersync.ts
  * :632), so the e2ee preflight-failure branch (:634-642, "batch encryption
  * failed — isolating per tx") is never exercised here. That seam is
  * `encryptUploadOps`, already covered by `__encryptUploadOpsForTest`

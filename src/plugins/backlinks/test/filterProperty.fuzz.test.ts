@@ -24,6 +24,7 @@ const whereArb = fc.dictionary(fc.string({maxLength: 6}), fc.jsonValue({maxDepth
 const predicateArb: fc.Arbitrary<BlockPredicate> = fc.record({
   scope: fc.constantFrom('self' as const, 'ancestor' as const),
   id: fc.string({maxLength: 8}),
+  types: fc.array(fc.constantFrom('', ' ', 'todo', ' todo', 'page'), {maxLength: 3}),
   where: whereArb,
   referencedBy: fc.record({id: fc.string({maxLength: 8}), sourceField: fc.string({maxLength: 6})}, {requiredKeys: ['id']}),
 }, {requiredKeys: []})
@@ -36,7 +37,8 @@ const filterArb = fc.record({
 const filters = (value: {include: BlockPredicate[]; exclude: BlockPredicate[]}) => [...value.include, ...value.exclude]
 
 const filtersSomething = (p: BlockPredicate) =>
-  p.id !== undefined || p.referencedBy !== undefined || (p.where !== undefined && Object.keys(p.where).length > 0)
+  p.id !== undefined || p.referencedBy !== undefined || (p.where !== undefined && Object.keys(p.where).length > 0) ||
+  (p.types?.some(type => type.trim() !== '') ?? false)
 
 describe('backlinks filter codec fuzz', () => {
   it('decodes what it encodes, through JSON storage', () => {

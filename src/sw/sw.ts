@@ -25,6 +25,14 @@
  *     there still network-grafts. Fully closing the miss path (so the fallback
  *     refuses cross-generation bytes) needs a per-generation guard and is a
  *     follow-up, not done here.
+ *   - Install takes ONLY this build's bytes. A deploy can land while install
+ *     is fetching the graph, and the unhashed URLs then serve the next build's
+ *     bytes for the rest of it. So the build stamps each precached URL with a
+ *     digest of its bytes, and install fails, discarding everything it
+ *     cached, on any mismatch; the previous generation keeps serving and the
+ *     next update check installs whatever build is live. BUILD_ID is likewise
+ *     derived from this worker's source and those digests, so two different
+ *     builds never share a generation's caches.
  *   - We deliberately do NOT call clients.claim(). A freshly installed
  *     worker self-skipWaiting()s so it becomes the ACTIVE worker (and thus
  *     controls the NEXT load — so one reload, the user's own or our update
@@ -53,12 +61,13 @@
  * This file is just the BOOTSTRAP: it reads the build-injected config, builds a
  * worker from it (src/sw/worker.ts holds the actual ledger/install/activate/
  * fetch logic, parameterized by its globals so it's unit-testable outside a
- * worker), and wires it to the SW events. BUILD_ID / PRECACHE_ASSETS /
+ * worker), and wires it to the SW events. BUILD_ID / PRECACHE_SHELL / PRECACHE_ASSETS /
  * PRECACHE_REST_ASSETS are replaced by scripts/inject-sw-build-id.ts after the
  * SW build. In dev the placeholders are harmless (the SW isn't registered there).
  */
 import {createServiceWorker} from './worker'
 import {idbBootStore} from './bootStore'
+import type {PrecacheManifest} from './assets'
 
 // The worker's global scope. `sw.ts` is a module (it imports), so this ambient
 // declaration shadows lib.webworker's generic `self` with the service-worker
@@ -92,13 +101,14 @@ const sw = createServiceWorker(
     // A still-used preview refreshes its ledger at most once a day so it isn't
     // reaped for lack of a redeploy (well under the 14-day stale window).
     touchIntervalMs: 24 * 60 * 60 * 1000,
-    // Build-injected: first-paint assets (entry script + modulepreload +
-    // stylesheets — the offline-boot-critical set) and the rest of the emitted
-    // graph (lazy chunks, @babel/standalone, wasm, fonts). Precaching all of it
-    // is what makes each generation's cache self-contained (no network graft)
-    // and the app offline-capable.
-    precacheAssets: JSON.parse('__PRECACHE_ASSETS__') as string[],
-    precacheRestAssets: JSON.parse('__PRECACHE_REST_ASSETS__') as string[],
+    // Build-injected URL → digest manifests: the shell, the first-paint assets
+    // (entry script + modulepreload + stylesheets — the offline-boot-critical
+    // set) and the rest of the emitted graph (lazy chunks, @babel/standalone,
+    // wasm, fonts). Precaching all of it is what makes each generation's cache
+    // self-contained (no network graft) and the app offline-capable.
+    precacheShell: JSON.parse('__PRECACHE_SHELL__') as PrecacheManifest,
+    precacheAssets: JSON.parse('__PRECACHE_ASSETS__') as PrecacheManifest,
+    precacheRestAssets: JSON.parse('__PRECACHE_REST_ASSETS__') as PrecacheManifest,
   },
   {
     caches,

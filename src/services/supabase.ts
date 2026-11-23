@@ -1,5 +1,7 @@
 import { createClient, Session, User as SupabaseAuthUser } from '@supabase/supabase-js'
+import { authStorage } from './authStorage.js'
 import { User } from '@/types.js'
+import { withAuthRequestDeadline } from '@/services/authRequestDeadline.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim()
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()
@@ -9,10 +11,12 @@ export const hasSupabaseAuthConfig = Boolean(supabaseUrl && supabaseAnonKey)
 export const supabase = hasSupabaseAuthConfig
   ? createClient(supabaseUrl!, supabaseAnonKey!, {
       auth: {
+        ...(authStorage && {storage: authStorage}),
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: true,
       },
+      global: {fetch: withAuthRequestDeadline((input, init) => fetch(input, init))},
     })
   : null
 
@@ -41,11 +45,12 @@ const supabaseAuthStorageKey = supabaseUrl
 // JSON.stringify; we tolerate the legacy `{currentSession}` / `{session}`
 // envelopes defensively.
 export const readPersistedSession = (): Session | null => {
-  if (!supabaseAuthStorageKey || typeof window === 'undefined') return null
+  if (!supabaseAuthStorageKey) return null
 
   let raw: string | null
   try {
-    raw = window.localStorage.getItem(supabaseAuthStorageKey)
+    const storage = authStorage ?? (typeof window === 'undefined' ? undefined : window.localStorage)
+    raw = storage?.getItem(supabaseAuthStorageKey) ?? null
   } catch {
     return null
   }

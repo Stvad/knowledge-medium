@@ -13,8 +13,8 @@ import type {
 } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
+import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import {
-  editorSelection,
   focusBlock,
   requestEditorFocus,
 } from '@/data/properties.js'
@@ -567,11 +567,11 @@ export const blockContentRendererFacet = defineVariantFacet<BlockResolveContext,
 // note, opened before midnight, could never gain one. Decide on `ctx.types`,
 // `ctx.isTopLevel`, `ctx.blockContext` and the like; put anything time- or
 // data-dependent inside the decorating component, where a hook can re-run it.
-export const blockContentDecoratorsFacet = defineFacet<
+const contentDecoratorsFacet = (id: string) => defineFacet<
   BlockContentDecoratorContribution,
   BlockContentDecoratorResolver
 >({
-  id: 'core.block-content-decorators',
+  id,
   combine: contributions => (context, inner) => {
     let renderer = inner
     for (const contribution of contributions) {
@@ -583,6 +583,12 @@ export const blockContentDecoratorsFacet = defineFacet<
   empty: () => (_context, inner) => inner,
   validate: isFunction<BlockContentDecoratorContribution>,
 })
+
+/** Decorates the chosen read renderer before edit-mode dispatch. A decorator
+ *  may specialize plain content without replacing a type renderer or editor. */
+export const blockReadContentDecoratorsFacet = contentDecoratorsFacet('core.block-read-content-decorators')
+
+export const blockContentDecoratorsFacet = contentDecoratorsFacet('core.block-content-decorators')
 
 export const blockClickHandlersFacet = defineFacet<
   BlockClickContribution,
@@ -806,9 +812,7 @@ export const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE
  * affected — and why testing this needs one of them.
  */
 export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return true
-  const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
-  const boundary = start?.closest(BLOCK_BOUNDARY_SELECTOR)
+  const boundary = elementOf(target)?.closest(BLOCK_BOUNDARY_SELECTOR)
   return !boundary || boundary === element
 }
 
@@ -834,15 +838,7 @@ export const enterEditModeForBlock = async (
   }
 
   await resetBlockSelection(uiStateBlock)
-  // Before focusBlock: BlockEditor places the cursor in the commit that mounts
-  // it, so a selection written after edit mode moves misses that placement.
-  if (selection) {
-    await uiStateBlock.set(editorSelection, {
-      blockId: block.id,
-      ...selection,
-    })
-  }
-  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
+  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId, selection})
 
   requestEditorFocus(uiStateBlock)
 }
@@ -885,10 +881,18 @@ export const isSelectionClick = (event: MouseEvent) =>
  * among visible blocks. Shared by the block shell's click path, the content
  * surface's double-click/tap path and the gesture recognizers, so the
  * supplied-deps shape stays in one place.
+ *
+ * `propertyDisplay` is the surface's display scope, which the resolve context
+ * cannot hold (a mode switch would change it under every block's slots): a
+ * caller rendered inside the surface reads it from context and passes it, so
+ * a gesture that walks the outline (shift-click's range) walks the drawn
+ * list. The content-surface and recognizer callers have no render to read it
+ * in; the actions bound to their gestures do not walk the outline.
  */
 export const blockPointerDepsFrom = (
   context: BlockResolveContext,
   targetElement: HTMLElement,
+  propertyDisplay?: PropertyDisplayScopeLevels,
 ): BlockPointerDependencies => {
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
@@ -900,5 +904,6 @@ export const blockPointerDepsFrom = (
     scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
     targetElement,
     ...(renderScopeId ? {renderScopeId} : {}),
+    ...(propertyDisplay ? {propertyDisplay} : {}),
   }
 }

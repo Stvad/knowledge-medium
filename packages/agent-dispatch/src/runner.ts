@@ -16,6 +16,8 @@
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
 
+export const THINKING_ACTIVITY = 'Thinking'
+
 /** Progress observed while a run is in flight — fed to `onEvent` as the
  *  stream-json transcript arrives. `text` is CUMULATIVE: each event
  *  carries the full in-progress reply text so far, not a delta, which
@@ -23,7 +25,8 @@ import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSa
  *  they last saw. */
 export type RunEvent =
   | {kind: 'session', sessionId: string}
-  | {kind: 'activity', label: string}
+  | {kind: 'activity', label: string, stepId: string}
+  | {kind: 'activity-end', stepId: string}
   | {kind: 'text', text: string}
 
 /** What the engine sets for a run whichever executor it dispatches to.
@@ -190,8 +193,12 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   // --allowedTools only pre-approves: an offered tool that needs no approval
   // (read-only Bash, Read, Glob, Grep, subagents, auto-memory writes) runs
   // anyway, so the offered set is the boundary. Offer only the built-ins the
-  // allow list names, and no skills: every request carries each one offered.
-  args.push('--disable-slash-commands', '--tools', builtInToolsAllowed(options.allowedTools).join(','))
+  // allow list names: every request carries each one offered, skills included.
+  // Skill is unusable under --disable-slash-commands, so an allow list naming
+  // it drops the flag, which also lets a prompt starting with `/` run a command.
+  const offeredTools = builtInToolsAllowed(options.allowedTools)
+  if (!offeredTools.includes('Skill')) args.push('--disable-slash-commands')
+  args.push('--tools', offeredTools.join(','))
   if (options.allowedTools.length > 0) {
     args.push('--allowedTools', options.allowedTools.join(','))
   }
@@ -250,9 +257,9 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
   }
 
   const activityForToolUse = (toolUse: Record<string, unknown>) => {
-    const name = typeof toolUse.name === 'string' ? toolUse.name : null
-    if (!name) return
-    emit({kind: 'activity', label: humanizeToolName(name)})
+    const {id, name} = toolUse
+    if (typeof id !== 'string' || !id || typeof name !== 'string' || !name) return
+    emit({kind: 'activity', label: humanizeToolName(name), stepId: id})
   }
 
   const handleLine = (line: Record<string, unknown>) => {
@@ -267,9 +274,17 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
       return
     }
 
-    if (type === 'assistant') {
+    if (type === 'user' || type === 'assistant') {
       const message = line.message as {content?: unknown} | undefined
       const content = Array.isArray(message?.content) ? message?.content : []
+      if (type === 'user') {
+        for (const item of content) {
+          if (isRecord(item) && item.type === 'tool_result' && typeof item.tool_use_id === 'string' && item.tool_use_id.length > 0) {
+            emit({kind: 'activity-end', stepId: item.tool_use_id})
+          }
+        }
+        return
+      }
       // Concatenate ALL text blocks in this finalized message (a single
       // message can carry more than one — e.g. a web-search turn is
       // [text, server_tool_use, web_search_result, text]), matching how
@@ -304,11 +319,6 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
 
       if (eventType === 'message_start') {
         textAccumulator = ''
-        return
-      }
-      if (eventType === 'content_block_start') {
-        const contentBlock = streamEvent.content_block as Record<string, unknown> | undefined
-        if (contentBlock?.type === 'tool_use') activityForToolUse(contentBlock)
         return
       }
       if (eventType === 'content_block_delta') {

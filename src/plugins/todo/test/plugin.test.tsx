@@ -11,19 +11,18 @@ import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import type { BlockRenderer } from '@/types.js'
 import {
-  roamTodoStateProp,
   statusProp,
   TODO_TYPE,
   todoPlugin,
 } from '../index.tsx'
 
 describe('todoPlugin', () => {
-  it('contributes both seeded properties and the todo type', () => {
+  it('contributes the native status property and todo type', () => {
     const runtime = resolveFacetRuntimeSync(todoPlugin)
     const seeds = runtime.read(definitionSeedsFacet)
     const types = runtime.read(typeSeedsFacet)
 
-    expect(seeds).toEqual(expect.arrayContaining([statusProp, roamTodoStateProp]))
+    expect(seeds).toEqual([statusProp])
     expect(types.find(t => t.id === TODO_TYPE)?.properties).toEqual([statusProp])
   })
 

@@ -139,14 +139,8 @@ const parseReferenceSpan = (
  *  name resolves to is a fact about the workspace rather than about the
  *  text.
  *
- *  A named fragment because two sites branch on exactly this distinction
- *  and mean different things by it — `deriveReferenceColumns` takes the
- *  textual shortcut for these and falls through to the alias lookup
- *  otherwise; the ref-value decode ACCEPTS only these, because a ref
- *  property stores identity and must not follow a name (§9 value
- *  decoding). Neither is an exhaustive `switch`, so a fourth id-carrying
- *  variant added to {@link ExactReferenceBlockContent} would silently
- *  miss both call sites; here it's one line to update. */
+ *  ID forms resolve without an alias lookup, including before local reference
+ *  columns have been derived. */
 export const isIdCarryingReference = (
   parsed: ExactReferenceBlockContent | null,
 ): parsed is Extract<ExactReferenceBlockContent, {kind: 'blockRef' | 'aliasedBlockRef'}> =>
@@ -234,6 +228,15 @@ export const referenceBlockContentForId = (id: string): string => {
     )
   }
   return content
+}
+
+/** The spelling an ID-based picker can offer, if the reference round-trips. */
+export const tryReferenceBlockContentForId = (id: string): string | null => {
+  try {
+    return referenceBlockContentForId(id)
+  } catch {
+    return null
+  }
 }
 
 /** Every `]` in `s` closes an earlier `[`, and every `[` is closed — single

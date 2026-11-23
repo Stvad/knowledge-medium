@@ -26,6 +26,7 @@ import {
   getBlockTypes,
   propertyDefaultProp,
   propertyHiddenProp,
+  propertyHideInOutlineProp,
   propertyNameProp,
   seedKeyProp,
   seedRevisionProp,
@@ -988,6 +989,42 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
 })
 
 describe('seed definition write guard (tx layer)', () => {
+  it('allows outline preference edits, undo, and returning to the code default', async () => {
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    const canonical = canonicalPropertySeedProperties(seed)
+    await repo.tx(tx => tx.setProperty(id, propertyHideInOutlineProp, true), {scope: ChangeScope.BlockDefault})
+    expect((await repo.load(id))!.properties).toEqual({...canonical, [propertyHideInOutlineProp.name]: true})
+    await repo.undo()
+    expect((await repo.load(id))!.properties).toEqual(canonical)
+    await repo.redo()
+    expect((await repo.load(id))!.properties).toEqual({...canonical, [propertyHideInOutlineProp.name]: true})
+    await repo.tx(tx => tx.setProperty(id, propertyHideInOutlineProp, false), {scope: ChangeScope.BlockDefault})
+    await materializePropertySeeds(repo, WS, [seed])
+    expect((await repo.load(id))!.properties).toEqual({...canonical, [propertyHideInOutlineProp.name]: false})
+    await repo.tx(tx => tx.update(id, {properties: canonical}), {scope: ChangeScope.BlockDefault})
+    expect((await repo.load(id))!.properties).toEqual(canonical)
+  })
+
+  it.each([
+    {label: 'another property alongside the preference', extra: {[propertyNameProp.name]: 'hacked', [propertyHideInOutlineProp.name]: true}},
+    {label: 'an invalid outline preference', extra: {[propertyHideInOutlineProp.name]: 'invalid'}},
+  ])('rejects $label without changing the seed', async ({extra}) => {
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    const canonical = canonicalPropertySeedProperties(seed)
+    await expect(repo.tx(tx => tx.update(id, {properties: {...canonical, ...extra}}),
+      {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+    expect((await repo.load(id))!.properties).toEqual(canonical)
+  })
+
+  it('does not allow the property outline preference on a code-driven type', async () => {
+    await materializeTypeSeeds(repo, WS, [typeSeed])
+    const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    await expect(repo.tx(tx => tx.setProperty(id, propertyHideInOutlineProp, true),
+      {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+  })
+
   it('rejects user-scope bag edits and deletes of a materialized seed block', async () => {
     await materializePropertySeeds(repo, WS, [seed])
     const id = propertyDefinitionBlockId(WS, seed.seedKey)

@@ -59,6 +59,33 @@ export interface ChangeNotification {
   plugin?: PluginInvalidationMap
 }
 
+/** The union of two notifications: everything either would invalidate. For a
+ *  producer that delivers several commits' worth of changes in one call. */
+export const mergeChangeNotifications = (
+  a: ChangeNotification,
+  b: ChangeNotification,
+): ChangeNotification => {
+  const union = (
+    x: ReadonlySet<string> | readonly string[] | undefined,
+    y: ReadonlySet<string> | readonly string[] | undefined,
+  ): ReadonlySet<string> | undefined => (x || y ? new Set([...(x ?? []), ...(y ?? [])]) : undefined)
+  const plugin = new Map<string, Set<string>>()
+  for (const map of [a.plugin, b.plugin]) {
+    for (const [channel, keys] of map ?? []) {
+      const merged = plugin.get(channel) ?? new Set<string>()
+      for (const key of keys) merged.add(key)
+      plugin.set(channel, merged)
+    }
+  }
+  return {
+    rowIds: union(a.rowIds, b.rowIds),
+    parentIds: union(a.parentIds, b.parentIds),
+    workspaceIds: union(a.workspaceIds, b.workspaceIds),
+    tables: union(a.tables, b.tables),
+    ...(plugin.size > 0 ? {plugin} : {}),
+  }
+}
+
 /** Context handed to a handle's loader. The loader calls `depend(...)`
  *  during resolve so the store can route future invalidations. */
 export interface ResolveContext {
@@ -91,6 +118,12 @@ interface RegisteredHandle {
    *  flush when all batch members are done, or with `null` to release
    *  its slot without contributing a notify). */
   invalidate: (batch?: NotifyBatch) => void
+  /** Record that the handle's value is out of date WITHOUT re-running its
+   *  loader: the next `load()` / `loadFresh()` re-resolves, subscribers are
+   *  not notified. See `HandleStore.markStale`. */
+  markStale: () => void
+  /** `observeDuringLoad` for a stale mark. */
+  observeStaleMarkDuringLoad: (change: ChangeNotification) => void
   /** Called when GC fires — handle clears its state, the store removes
    *  the entry from the registry. */
   dispose: () => void
@@ -362,6 +395,20 @@ export class HandleStore {
     batch.close()
   }
 
+  /** Everything `invalidate(change)` would invalidate is marked out of date,
+   *  and nothing is re-run: a caller that then awaits `load()` or `loadFresh()`
+   *  gets a fresh result, while subscribers keep their current value until an
+   *  `invalidate` covering the same change follows — except a handle that
+   *  asked for `rerunOnStaleMark`, which is re-run now. For a producer that
+   *  commits faster than its subscribers' loaders are worth re-running — the
+   *  producer owes that later `invalidate`. */
+  markStale(change: ChangeNotification): void {
+    for (const h of Array.from(this.handles.values())) {
+      h.observeStaleMarkDuringLoad(change)
+      if (h.matches(change)) h.markStale()
+    }
+  }
+
   /** Test/debug: how many handles are currently registered. */
   size(): number { return this.handles.size }
 
@@ -488,6 +535,13 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  (only the upfront `parent-edge` dep is known at that point) and
    *  the handle would settle with stale `BlockData[]`. */
   private changesDuringLoad: ChangeNotification[] = []
+  /** The `markStale` counterparts of `pendingReinvalidate` and
+   *  `changesDuringLoad`. Kept apart because they end differently: a load a
+   *  stale mark overlapped settles STALE, with no rerun — the rerun is what
+   *  `markStale`'s caller is holding back. */
+  private staleMarkedDuringLoad = false
+  private rerunsOnStaleMark = false
+  private staleMarksDuringLoad: ChangeNotification[] = []
 
   /** Set when an invalidation lands on a handle with zero subscribers
    *  and no inflight load. Eagerly re-running the loader for nobody is
@@ -666,6 +720,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.store.metrics.loaderRuns++
     this.pendingReinvalidate = false
     this.changesDuringLoad = []
+    this.staleMarkedDuringLoad = false
+    this.staleMarksDuringLoad = []
     this.stale = false
     this.status_ = this.value === undefined ? 'loading' : this.status_
     this.error = undefined
@@ -737,6 +793,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           }
         }
         this.changesDuringLoad = []
+        const settlesStale = this.staleMarkedDuringLoad
+          || this.staleMarksDuringLoad.some(change => this.matchesAgainst(collected, change))
+        this.staleMarkedDuringLoad = false
+        this.staleMarksDuringLoad = []
         const needsPostSettleReload = this.pendingReinvalidate && !this.disposed
         // This settle supersedes every notify still queued behind an open
         // barrier from an EARLIER run of this handle: whatever those slots
@@ -779,6 +839,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           this.store.metrics.notifiesSkippedByDiff++
           batch?.finish(null)
         }
+        // After the settle above: a rerun scheduled below clears it again.
+        if (settlesStale) this.stale = true
         this.release() // drop the inflight ref
         // If invalidations arrived during this load, the data we just
         // returned may already be stale. Re-run via a microtask so the
@@ -815,10 +877,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // releases its own slot up there.)
         batch?.finish(null)
         if (!this.disposed) {
-          // Roll back to the priorDeps — collected was incomplete.
-          // The queued changes are discarded along with the partial
-          // deps; a successful retry will rebuild both from scratch.
-          this.deps = priorDeps
+          // Keep the last successful dependency set. On cold failure the dependencies
+          // declared so far are the only signals that can make a mounted query recover.
+          this.deps = this.settleSeq === 0 ? collected : priorDeps
           this.changesDuringLoad = []
           this.status_ = 'error'
           this.error = err
@@ -929,6 +990,32 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // Capacity isn't bounded by design — invalidations are infrequent
     // relative to load duration, and the queue clears on every settle.
     if (this.inflight) this.changesDuringLoad.push(change)
+  }
+
+  /** `markStale` for a change the handle does not match YET: recorded so a
+   *  load in flight is judged against the deps it ends up declaring. */
+  observeStaleMarkDuringLoad(change: ChangeNotification): void {
+    if (this.inflight) this.staleMarksDuringLoad.push(change)
+  }
+
+  /** From now on a stale mark re-runs this handle at once, as `invalidate`
+   *  would. For a subscriber whose notifications feed what local writes are
+   *  decided from: it cannot be left behind a mark the way a view can. Sticky
+   *  for the handle's life, since it is the subscriber's need, not a mode. */
+  rerunOnStaleMark(): void {
+    this.rerunsOnStaleMark = true
+  }
+
+  markStale(): void {
+    if (this.disposed) return
+    if (this.rerunsOnStaleMark) {
+      this.invalidate()
+      return
+    }
+    // A load in flight may have read before the change committed, so it must
+    // not settle as current — and must not rerun either.
+    if (this.inflight) this.staleMarkedDuringLoad = true
+    else this.stale = true
   }
 
   invalidate(batch?: NotifyBatch): void {
@@ -1262,8 +1349,8 @@ export const snapshotsToChangeNotification = (
     else if (beforeLive && !afterLive && beforeParent !== null) {
       parentIds.add(beforeParent)
     }
-    // Moved (live both sides, parent changed): both sides update.
-    else if (beforeLive && afterLive && beforeParent !== afterParent) {
+    // Parent queries can select a workspace even when the parent id stays the same.
+    else if (beforeLive && afterLive && (beforeParent !== afterParent || entry.before?.workspaceId !== entry.after?.workspaceId)) {
       if (beforeParent !== null) parentIds.add(beforeParent)
       if (afterParent !== null) parentIds.add(afterParent)
     }

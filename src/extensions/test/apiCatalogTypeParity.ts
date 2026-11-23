@@ -155,7 +155,9 @@ export type {
   TypeSeedDeclaration,
 } from '@/data/api/index.js'
 
-export type { SystemPage } from '@/data/facets.js'
+export type { QueryableField, SystemPage } from '@/data/facets.js'
+
+export type { ChildrenInsertDecision, ChildrenInsertRequest, ChildrenOrder, ChildrenView, ChildrenViewContext, DrawnChild, ListingSurface, NestedSurface, SurfaceOwner } from '@/data/childrenView.js'
 
 export type {
   DerivedChildOutcome,

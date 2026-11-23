@@ -45,6 +45,7 @@
  */
 
 import {
+  CORE_BLOCK_MERGED_EVENT,
   defineSameTxProcessor,
   memberCodecOf,
   type AnyPropertySchema,
@@ -57,11 +58,15 @@ import {
 } from '@/data/api'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
+  awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
   scalarValueRow,
+  scalarDuplicates,
+  valueChildContentToEncoded,
   getPropertyFieldTargetId,
   fieldValueChildren,
+  fieldRowsForSchema,
   isFieldValueChild,
   isPropertyFieldInstance,
   memberKeysFor,
@@ -70,9 +75,10 @@ import {
   propertyFieldContent,
   unionValuesAcrossFieldRows,
 } from '@/data/propertyChildren'
-import { jsonValuesEqual } from './jsonCanonical'
+import { jsonValuesEqual, persistedJsonKey } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
-import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { deleteSubtreeAnnouncedInTx, deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { mintPropertyChildRow } from './propertyChildMint'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.projectPropertyChildren'
@@ -87,6 +93,8 @@ type ResolveNameSchema = (name: string) => (AnyPropertySchema & {fieldId: string
 interface PropertyChildrenLookups {
   resolveFieldSchema: ResolveFieldSchema
   resolveNameSchema: ResolveNameSchema
+  /** Row edits are authoritative for these cells in the deferred pass. */
+  editedCells?: AffectedOwners
 }
 
 /** The projection direction's lookup half, on its own: raw repair paths
@@ -98,7 +106,7 @@ export type ProjectionLookups = Pick<PropertyChildrenLookups, 'resolveFieldSchem
  *  direction never resolves a fieldId — which lets a caller that already
  *  knows which schemas it is materializing supply just those, instead of a
  *  whole workspace resolver (`mergeBlocksInTx`'s pre-backfill catch-up). */
-export type MaterializeLookups = Pick<PropertyChildrenLookups, 'resolveNameSchema'>
+export type MaterializeLookups = Pick<PropertyChildrenLookups, 'resolveNameSchema' | 'editedCells'>
 
 /** The fields the projection direction reads off a changed row. Narrower
  *  than `BlockData` so a repair path can retain a few columns per stamped
@@ -109,9 +117,8 @@ export type ProjectableRow =
 /**
  * `full` — the projection is authoritative: children are truth, so a field
  * set with no parseable value UNSETS the owner's key (§9's default-value
- * rule). Only correct inside `core.projectPropertyChildren`, whose
- * `settledWrites` stops the follow-on materialize reading that unset as a
- * user deleting the key.
+ * rule). Only correct inside a `settledWrites` processor, which stops the
+ * follow-on materialize reading that unset as a user deleting the key.
  *
  * `additive` — the caller did not observe user intent and its write is NOT
  * settled, so it may only GIVE an owner a key it lacks. Never unset, never
@@ -120,8 +127,14 @@ export type ProjectableRow =
  * with no field rows at all, and a `full` re-projection there would read
  * "nothing parses" as "unset" and drive materialize into tombstoning the
  * very rows it just recognized.
+ *
+ * `resolved` — `full`, except that while a field has a value row still awaiting
+ * its reference target ({@link awaitsReferenceTarget}) the write may only ADD
+ * to what the cell holds ({@link keepsStoredValue}). That member is unknown on
+ * this device, not absent, so a projection without it is no evidence that it
+ * was removed. Used where a stamp, not a user, dispatched the projection.
  */
-export type ProjectionMode = 'full' | 'additive'
+export type ProjectionMode = 'full' | 'additive' | 'resolved'
 
 const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => ({
   resolveFieldSchema: (fieldId) => {
@@ -144,13 +157,26 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
  *  costs one `get` + one `childrenOf` + one `update`, not *k* of each. The
  *  `setProperties` fan-out and the one-time cell→children pass both hit this
  *  with several fields on one row. */
-type AffectedOwners = Map<string, Map<string, AnyPropertySchema>>
+type AffectedOwners = Map<string, AffectedOwner>
+
+interface AffectedOwner {
+  readonly fields: Map<string, AnyPropertySchema>
+  /** A field or value row the user wrote in this tx (`SameTxCtx.hasUserWrite`)
+   *  reaches this owner, so a changed cell is the user's edit of the owner and
+   *  is stamped as `setProperty` stamps one. Otherwise the cell write is
+   *  bookkeeping and keeps the owner's edit time. An importer that wrote field
+   *  rows itself with `sourceTimestamps` would see its owner stamped `now`;
+   *  none does (Roam import writes the cell, and materialize's children are
+   *  not user writes). */
+  userEdited: boolean
+}
 
 const addAffectedProjection = (
   out: AffectedOwners,
   parentId: string | null,
   fieldId: string | undefined,
   lookups: ProjectionLookups,
+  userEdited: boolean,
 ): void => {
   if (parentId === null) return
   if (fieldId === undefined) return
@@ -159,12 +185,13 @@ const addAffectedProjection = (
   // nothing can reach.
   const schema = lookups.resolveFieldSchema(fieldId)
   if (!schema) return
-  let fields = out.get(parentId)
-  if (fields === undefined) {
-    fields = new Map()
-    out.set(parentId, fields)
+  let owner = out.get(parentId)
+  if (owner === undefined) {
+    owner = {fields: new Map(), userEdited: false}
+    out.set(parentId, owner)
   }
-  fields.set(fieldId, schema)
+  owner.fields.set(fieldId, schema)
+  owner.userEdited ||= userEdited
 }
 
 /** Reads a parent row at most once per collection pass. The processor path
@@ -184,6 +211,7 @@ const collectAffectedProjection = async (
   row: ProjectableRow | null,
   lookups: ProjectionLookups,
   readParent: ParentReader,
+  userEdited: boolean,
 ): Promise<void> => {
   if (row === null) return
   // The row as a FIELD ROW (parent = owning block): §9 selection keys on
@@ -191,7 +219,7 @@ const collectAffectedProjection = async (
   // a bit change carries its own snapshot's bit, so a row that just left
   // the marked form still re-projects (drops) its old key.
   if (row.isFieldForm === true) {
-    addAffectedProjection(out, row.parentId, getPropertyFieldTargetId(row), lookups)
+    addAffectedProjection(out, row.parentId, getPropertyFieldTargetId(row), lookups, userEdited)
   }
 
   if (row.parentId === null) return
@@ -200,7 +228,7 @@ const collectAffectedProjection = async (
   // The row as a VALUE child (parent = field row → owning block): only a
   // marked parent is a field row, and only a non-marked row is its value.
   if (parent.isFieldForm === true && isFieldValueChild(row)) {
-    addAffectedProjection(out, parent.parentId, getPropertyFieldTargetId(parent), lookups)
+    addAffectedProjection(out, parent.parentId, getPropertyFieldTargetId(parent), lookups, userEdited)
   }
 }
 
@@ -216,37 +244,47 @@ const collectAffectedProjection = async (
  *  making one row's values PEERS of the other's, so reading only one would
  *  drop members that are about to become siblings anyway.
  *
- *  Denoted-value rule (§5): only DIRECT value children are read — a
- *  comment deep under a value child never re-projects the parent. */
-const projectedFieldValue = async (
-  tx: Tx,
+ *  Over values already read: each of one schema's live field rows' value
+ *  children, field rows and values both in `(order_key, id)` order. The
+ *  read-only consistency audit recomputes cells through this, so it cannot
+ *  disagree with the processor about what a cell should hold. */
+export const projectFieldRowValues = (
   schema: AnyPropertySchema,
-  fieldRows: readonly BlockData[],
-): Promise<unknown | undefined> => {
+  perFieldRow: readonly (readonly (Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null})[])[],
+): unknown | undefined => {
   // NO field row at all: the key is unset. That is the only thing that unsets a
   // multi-valued property, and it is the precondition
   // `childContentsToEncodedPropertyValue` is documented to be called under —
   // it answers `[]` for a live field row with nothing parseable under it.
-  if (fieldRows.length === 0) return undefined
-  // §9 value set: `is_field_form IS NOT 1` children only — a nested marked row
-  // materialized under the field row is its own machinery, never a value
-  // candidate. `unionValuesAcrossFieldRows` owns what happens across the rows.
-  const perFieldRow: BlockData[][] = []
-  for (const fieldRow of fieldRows) {
-    perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
-  }
+  if (perFieldRow.length === 0) return undefined
+  // `unionValuesAcrossFieldRows` owns what happens across the rows.
   return childContentsToEncodedPropertyValue(
-    schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content))
+    schema, unionValuesAcrossFieldRows(schema, perFieldRow))
 }
 
-// §9 selection: the bit + target pair (the JS twin of
-// SELECT_PROPERTY_FIELD_CHILD_SQL) — without the bit an unmarked
-// `((fieldId))` link row would be selected as the field row.
-const fieldRowsForSchema = (
-  children: readonly BlockData[],
-  fieldId: string,
-): BlockData[] => children.filter(child =>
-  child.isFieldForm === true && getPropertyFieldTargetId(child) === fieldId)
+/** Does writing `projected` over `stored` keep everything `stored` holds? A
+ *  list keeps it when every stored member is still there, counted with
+ *  multiplicity; any other value only when it is unchanged. An absent key holds
+ *  nothing, so anything keeps it. */
+export const keepsStoredValue = (
+  schema: AnyPropertySchema, stored: unknown, projected: unknown | undefined,
+): boolean => {
+  if (stored === undefined) return true
+  if (memberCodecOf(schema.codec) === undefined || !Array.isArray(stored) || !Array.isArray(projected)) {
+    return jsonValuesEqual(stored, projected)
+  }
+  const remaining = new Map<string, number>()
+  for (const member of projected) {
+    const key = persistedJsonKey(member)
+    remaining.set(key, (remaining.get(key) ?? 0) + 1)
+  }
+  return stored.every(member => {
+    const key = persistedJsonKey(member)
+    const left = remaining.get(key) ?? 0
+    remaining.set(key, left - 1)
+    return left > 0
+  })
+}
 
 /** Re-project ONE owner's cell for every field of it this pass touched.
  *
@@ -256,7 +294,7 @@ const fieldRowsForSchema = (
 const reprojectOwner = async (
   tx: Tx,
   parentId: string,
-  fields: ReadonlyMap<string, AnyPropertySchema>,
+  {fields, userEdited}: AffectedOwner,
   mode: ProjectionMode,
 ): Promise<void> => {
   const parent = await tx.get(parentId)
@@ -290,7 +328,14 @@ const reprojectOwner = async (
     // Editing the OWNER does not help — `collectAffectedProjection` maps a
     // CHANGED row through its own bit or its parent's.
     if (mode === 'additive' && fieldRows.length > 1) continue
-    const projected = await projectedFieldValue(tx, schema, fieldRows)
+    // Denoted-value rule (§5): only DIRECT value children are read — a comment
+    // deep under a value child never re-projects the owner.
+    const perFieldRow: BlockData[][] = []
+    for (const fieldRow of fieldRows) perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
+    const projected = projectFieldRowValues(schema, perFieldRow)
+    if (mode === 'resolved'
+      && perFieldRow.flat().some(row => awaitsReferenceTarget(schema, row))
+      && !keepsStoredValue(schema, storedPropertyValue(nextProperties, schema.name), projected)) continue
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via
@@ -302,7 +347,7 @@ const reprojectOwner = async (
   }
   // Idempotence short-circuit (§5 invariant 1).
   if (propertiesEqual(parent.properties, nextProperties)) return
-  await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
+  await tx.update(parent.id, {properties: nextProperties}, userEdited ? undefined : {skipMetadata: true})
 }
 
 /**
@@ -320,12 +365,17 @@ const reprojectOwner = async (
  * so without this call the owner's cell would never gain the key.
  *
  * Caller owns the flip gate: pre-flip there are no cells to project.
+ *
+ * `isUserWrite` is the tx's `SameTxCtx.hasUserWrite` (see
+ * `AffectedOwner.userEdited`); repair paths omit it, since nothing they
+ * project is a user's edit.
  */
 export const reprojectOwnersForRowStates = async (
   tx: Tx,
   rowStates: Iterable<ProjectableRow | null>,
   lookups: ProjectionLookups,
   mode: ProjectionMode,
+  isUserWrite?: SameTxCtx['hasUserWrite'],
 ): Promise<void> => {
   const affected: AffectedOwners = new Map()
   // Collection reads; re-projection writes. Keeping them as two loops is what
@@ -340,10 +390,11 @@ export const reprojectOwnersForRowStates = async (
     return parent
   }
   for (const row of rowStates) {
-    await collectAffectedProjection(affected, row, lookups, readParent)
+    const userEdited = row !== null && (isUserWrite?.(row.id) ?? false)
+    await collectAffectedProjection(affected, row, lookups, readParent, userEdited)
   }
-  for (const [parentId, fields] of affected) {
-    await reprojectOwner(tx, parentId, fields, mode)
+  for (const [parentId, owner] of affected) {
+    await reprojectOwner(tx, parentId, owner, mode)
   }
 }
 
@@ -584,6 +635,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // never a silent skip-and-delete here.
       continue
     }
+    if (lookups.editedCells?.get(row.id)?.fields.has(schema.fieldId)) continue
     const matchingChildren = fieldRowsForSchema(children, schema.fieldId)
     const encoded = storedPropertyValue(row.properties, name)
 
@@ -593,7 +645,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // history). Distinct from the §5 pending-materialization rule, which
       // is about ABSENT CHILDREN never licensing cell-key deletion.
       for (const child of matchingChildren) {
-        await deleteSubtreeInTx(tx, child.id)
+        await deleteSubtreeAnnouncedInTx(tx, child.id)
       }
       continue
     }
@@ -767,7 +819,7 @@ export const plannedFieldRow = (
   tx: Tx,
   owner: Pick<BlockData, 'id' | 'workspaceId'>,
   fieldId: string,
-): NewBlockData => {
+): NewBlockData & {parentId: string} => {
   const content = propertyFieldContent(fieldId)
   return {
     workspaceId: owner.workspaceId,
@@ -781,35 +833,14 @@ export const plannedFieldRow = (
 }
 
 /** The value children a cell value implies under a field row that has NONE —
- *  the create-only case, as DATA.
+ *  the create-only case, as DATA, so the one-time pass can hand a whole batch
+ *  to `tx.createMany`. Its owners all predate it, so its rows take random ids,
+ *  as `mintPropertyChildRow` would give them.
  *
- *  Emitted rather than written so the one-time pass can hand a whole batch to
- *  `tx.createMany`. The live writer does NOT come through here — it reconciles
- *  an existing value set row by row (`reconcileFieldValueChildren`) — but both
- *  routes decide a value's MEMBERS through the same
- *  `encodedPropertyValueToChildContents`, which is the part they must not be
- *  able to disagree about.
- *
- *  Only valid when the field row is empty. A field row that already has
- *  children is a reconcile, which is `reconcileFieldValueChildren`'s job and a
- *  different question (which existing row is this member?). */
-export const plannedValueChildRows = (
-  tx: Tx,
-  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  schema: AnyPropertySchema,
-  encoded: unknown,
-): NewBlockData[] =>
-  valueChildRowsFor(tx, fieldRow, encodedPropertyValueToChildContents(schema, encoded))
-
-/** The same rows, from contents a caller has ALREADY encoded.
- *
- *  Split out for the one-time pass, which must encode inside its per-key
- *  guard: `encodedPropertyValueToChildContents` throws on a value no codec
- *  will take, and a key that cannot be planned has to cost its own key rather
- *  than the batch. Encoding here instead would put that throw outside the
- *  guard, where it aborts the whole run — safe today only because the pass's
- *  rejection check happens to call this same encoder first, which is a
- *  coupling neither site states. */
+ *  Takes CONTENTS, not the encoded value: the pass encodes (with
+ *  `encodedPropertyValueToChildContents`, as the live reconcile does) inside
+ *  its per-key guard, where the encoder's throw on a value no codec takes
+ *  costs that key, not the batch. */
 export const valueChildRowsFor = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
@@ -863,7 +894,7 @@ export const upsertFieldRow = async (
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
-  const id = await tx.create(plannedFieldRow(tx, owner, fieldId))
+  const id = await mintPropertyChildRow(tx, plannedFieldRow(tx, owner, fieldId), {kind: 'field', fieldId})
   return {id, workspaceId: owner.workspaceId}
 }
 
@@ -915,18 +946,21 @@ export const reconcileFieldValueChildren = async (
   await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
 }
 
-const createValueChild = (
+/** Mint one value child. `valueKey` is `content`'s `MemberKeys.content`, and
+ *  `occurrence` counts the equal values before it — what its id derives from. */
+export const createValueChild = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   content: string,
   orderKey: string,
-): Promise<string> => tx.create({
+  {valueKey, occurrence}: {valueKey: string; occurrence: number},
+): Promise<string> => mintPropertyChildRow(tx, {
   workspaceId: fieldRow.workspaceId,
   parentId: fieldRow.id,
   orderKey,
   content,
   references: tx.derivedReferencesFor(content),
-})
+}, {kind: 'value', occurrence, valueKey})
 
 const reconcileSingleValueChild = async (
   tx: Tx,
@@ -937,34 +971,36 @@ const reconcileSingleValueChild = async (
   /** See {@link MaterializeOptions.additive}. */
   additive: boolean,
 ): Promise<void> => {
-  if (values.length === 0) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(null))
-    return
-  }
-  // An additive call may not touch the one slot a scalar has. Giving the value
-  // set a row it lacks is the whole of what it is allowed to do, and the set is
-  // not empty — so nothing below applies, the fold included: every comparison
-  // there is against `content`, the cell value the primary was just permitted
-  // to disagree with, which would fold a row that is no duplicate of it (#1021).
-  if (additive) return
+  // An additive call may only give an EMPTY value set its row. Nothing below
+  // applies to a non-empty one, the fold included: every comparison there is
+  // against `content`, the cell value the primary was just permitted to
+  // disagree with, which would fold a row that is no duplicate of it (#1021).
+  if (additive && values.length > 0) return
+  const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
   const primary = scalarValueRow(schema, values, content)
   if (!primary) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]!.orderKey))
+    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
     return
   }
-  if (primary.content !== content) await tx.update(primary.id, {content})
+  let sameValue = primary.content === content
+  if (!sameValue) {
+    try {
+      sameValue = jsonValuesEqual(valueChildContentToEncoded(schema, primary), valueChildContentToEncoded(schema, content))
+    } catch {
+      // An unreadable primary is repaired by the requested spelling.
+    }
+  }
+  if (!sameValue) await tx.update(primary.id, {content})
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as
   // peer values, not silently collapsed onto the winner.
-  for (const duplicate of values) {
-    if (duplicate !== primary && duplicate.content === content) {
-      await collapseDuplicateValueChild(tx, primary.id, duplicate)
-    }
+  for (const duplicate of scalarDuplicates(values, primary, content)) {
+    await collapseDuplicateValueChild(tx, primary.id, duplicate)
   }
 }
 
-const freshSlots = (
+export const freshSlots = (
   values: readonly BlockData[],
   count: number,
 ): string[] => {
@@ -978,14 +1014,9 @@ const freshSlots = (
   }
 }
 
-const reconcileMemberValueChildren = async (
-  tx: Tx,
-  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  schema: AnyPropertySchema,
-  values: readonly BlockData[],
-  contents: readonly string[],
-  additive: boolean,
-): Promise<void> => {
+export const matchMemberValueChildren = (
+  schema: AnyPropertySchema, values: readonly BlockData[], contents: readonly string[],
+) => {
   // By VALUE, not raw text: a member a person spelled ` 1 ` projects to exactly
   // what the canonical text projects to, and matching on text alone reaps that
   // row — with its comments, its own properties and its history — to mint a
@@ -1002,13 +1033,26 @@ const reconcileMemberValueChildren = async (
     if (bucket) bucket.push(value)
     else unused.set(key, [value])
   }
-  const kept = contents.map(content => unused.get(keys.content(content))?.shift())
+  const contentKeys = contents.map(keys.content)
+  const kept = contentKeys.map(key => unused.get(key)?.shift())
 
   // Everything unmatched, in the order the value set was read, so replicas
   // agree on which of several equal rows survives.
   const keptRows = new Set(kept)
   const surplus = values.filter(value => !keptRows.has(value))
 
+  return {kept, surplus, contentKeys, keyByRow}
+}
+
+const reconcileMemberValueChildren = async (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
+  values: readonly BlockData[],
+  contents: readonly string[],
+  additive: boolean,
+): Promise<void> => {
+  const {kept, surplus, contentKeys, keyByRow} = matchMemberValueChildren(schema, values, contents)
   // `additive` governs EVERY removal, folding included: a fold takes a row
   // away, and multiplicity is part of a list's value, so a repeated member that
   // arrived unobserved has to survive one too.
@@ -1028,7 +1072,7 @@ const reconcileMemberValueChildren = async (
       // its sub-children with it, on an unrelated write to the same property.
       // Kept, exactly as the scalar branch keeps a divergent peer; removing it
       // is a delete in the tree, which is how any value row goes.
-      else if (keyByRow.get(row.id)!.denotesValue) await deleteSubtreeInTx(tx, row.id)
+      else if (keyByRow.get(row.id)!.denotesValue) await deleteSubtreeAnnouncedInTx(tx, row.id)
     }
   }
 
@@ -1057,11 +1101,18 @@ const reconcileMemberValueChildren = async (
   const fresh = created > 0 ? freshSlots(values, created) : []
   const slots = [...freed, ...fresh].sort()
 
+  // A member's derived-id slot is its member key — the comparison above, so
+  // two devices adding an equal member mint one row — and its occurrence
+  // among equal members, so `[2, 2]` is two slots.
+  const occurrences = new Map<string, number>()
   for (let i = 0; i < contents.length; i++) {
     const orderKey = slots[i]!
     const existing = kept[i]
+    const memberKey = contentKeys[i]!
+    const occurrence = occurrences.get(memberKey) ?? 0
+    occurrences.set(memberKey, occurrence + 1)
     if (!existing) {
-      await createValueChild(tx, fieldRow, contents[i]!, orderKey)
+      await createValueChild(tx, fieldRow, contents[i]!, orderKey, {valueKey: memberKey, occurrence})
       continue
     }
     // Content is deliberately NOT rewritten to the canonical spelling: the row
@@ -1130,7 +1181,13 @@ const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<v
  *  `(order_key, id)` — arbitrary relative to content — so the loser may carry
  *  user-authored sub-children. Relocate those under the survivor BEFORE
  *  deleting; a bare subtree-delete would silently tombstone them, and a shallow
- *  delete would orphan them live under a tombstone.
+ *  delete would orphan them live under a tombstone. The loser may also be a
+ *  block others link to (any block can be moved into a value list): it is
+ *  announced as merged into the survivor, so its links follow as a merge's do.
+ *  ACCEPTED: a fold made BY the merge-retarget processor (rewriting a ref-list
+ *  that names both rows) is announced after it took its events, so links to
+ *  that ref-list's folded row stay on the tombstone; closing it needs event
+ *  re-dispatch in the commit pipeline.
  *
  *  WHETHER to fold is the caller's call, and it differs by grain: an
  *  equal-valued sibling is a redundant copy of ONE value to a scalar, and an
@@ -1142,6 +1199,9 @@ export const collapseDuplicateValueChild = async (
 ): Promise<void> => {
   await relocateChildren(tx, duplicate.id, survivorValueId)
   await deleteSubtreeInTx(tx, duplicate.id)
+  tx.emitEvent(CORE_BLOCK_MERGED_EVENT, {
+    workspaceId: duplicate.workspaceId, fromId: duplicate.id, intoId: survivorValueId, aliasRewrites: [],
+  })
 }
 
 /** §9 dedup, FIELD-row form: before deleting a duplicate field row, its
@@ -1243,7 +1303,9 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     // Revival reads the tx's write log through `ctx`, never this event: on the
     // re-run pass the event holds only rows dirtied since the first, with a
     // merged `before`.
-    await materializeChangedRows(ctx.tx, event.changedRows, lookupsFor(ctx, event.workspaceId), ctx)
+    await materializeChangedRows(ctx.tx, event.changedRows, {
+      ...lookupsFor(ctx, event.workspaceId), editedCells: cellEdits.get(ctx.tx.meta),
+    }, ctx)
   },
 })
 
@@ -1286,6 +1348,15 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
       for (const child of await ctx.tx.childrenOf(row.after.id, undefined)) {
         if (child.isFieldForm === true) rowStates.push(child)
       }
+      // A field row this tx deleted under the live owner is the children's
+      // word, which MATERIALIZE's revival leaves to this pass (`revivalCandidates`'
+      // `deletedOnItsOwn`). One the tx first revived (an eager write on the
+      // revived owner) is dead → dead net, so no field diff carries it here.
+      for (const child of await ctx.tx.deletedChildrenOf(row.after.id)) {
+        if (child.isFieldForm === true && await ctx.parentLivenessWhenTombstoned(child.id) === 'live') {
+          rowStates.push(child)
+        }
+      }
     }
     await reprojectOwnersForRowStates(
       ctx.tx,
@@ -1294,6 +1365,76 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
       // Authoritative: this processor's writes ARE settled, which is what
       // makes the lossy unset safe here and nowhere else.
       'full',
+      ctx.hasUserWrite,
     )
+  },
+})
+
+export const PROPERTY_VALUES_RESOLVED_EVENT = 'core.propertyValuesResolved' as const
+
+interface ResolvedPropertyValuesEvent {workspaceId: string; valueIds: readonly string[]}
+
+declare module '../api/sameTxProcessor' {
+  interface SameTxEventRegistry {
+    'core.propertyValuesResolved': ResolvedPropertyValuesEvent
+  }
+}
+
+/** A reference target can become available after its value row was written;
+ * project that value without rewriting its source content. */
+export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor({
+  name: 'core.projectResolvedPropertyValues',
+  watches: {kind: 'event', events: [PROPERTY_VALUES_RESOLVED_EVENT]},
+  settledWrites: true,
+  apply: async (event, ctx) => {
+    if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
+    const rows: ProjectableRow[] = []
+    for (const resolved of event.emittedEvents) {
+      for (const id of (resolved.payload as ResolvedPropertyValuesEvent).valueIds) {
+        const row = await ctx.tx.get(id)
+        if (row) rows.push(row)
+      }
+    }
+    await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'resolved')
+  },
+})
+
+// Per writing transaction. A paste may address the same cell twice through
+// two columns. Once a row edit supersedes the eager bag write, the deferred
+// materializer must leave that pair to projection. Eager typed writes still
+// reconcile normally, including a later paste into the same cell.
+const cellEdits = new WeakMap<Tx['meta'], AffectedOwners>()
+const REPROJECT_CELL_EVENT = 'core.reprojectPropertyCell'
+
+export const hasPendingCellProjection = (tx: Tx, ownerId: string, fieldId: string): boolean =>
+  cellEdits.get(tx.meta)?.get(ownerId)?.fields.has(fieldId) === true
+
+export const requestCellProjection = (
+  tx: Tx, owner: BlockData, fieldId: string, schema: AnyPropertySchema,
+): void => {
+  let owners = cellEdits.get(tx.meta)
+  if (!owners) {
+    tx.emitEvent(REPROJECT_CELL_EVENT, undefined, owner.workspaceId)
+    owners = new Map()
+    cellEdits.set(tx.meta, owners)
+  }
+  // Only user edit gestures register a cell, so a cell this pass changes is
+  // stamped. Defence in depth: the edited value row is itself a user write, so
+  // the ordinary projection has already stamped the owner.
+  let edited = owners.get(owner.id)
+  if (!edited) owners.set(owner.id, edited = {fields: new Map(), userEdited: true})
+  edited.fields.set(fieldId, schema)
+}
+
+/** A pending bag key can be cleared without a source-row change. Only
+ * cells registered by a checked row edit participate in settled projection. */
+export const REPROJECT_CELL_PROCESSOR = defineSameTxProcessor({
+  name: REPROJECT_CELL_EVENT,
+  watches: {kind: 'event', events: [REPROJECT_CELL_EVENT]},
+  settledWrites: true,
+  apply: async (_event, ctx) => {
+    for (const [ownerId, edited] of cellEdits.get(ctx.tx.meta) ?? []) {
+      await reprojectOwner(ctx.tx, ownerId, edited, 'full')
+    }
   },
 })

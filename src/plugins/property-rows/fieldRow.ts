@@ -1,7 +1,7 @@
 import type { AnyPropertySchema, BlockData } from '@/data/api'
 import { memberCodecOf } from '@/data/api'
 import { isPropertyFieldInstance } from '@/data/propertyChildren'
-import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
+import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
 import type { Repo } from '@/data/repo'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 import { useCallback, useSyncExternalStore } from 'react'
@@ -32,24 +32,28 @@ export const fieldRowDefinition = (
   data: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm' | 'workspaceId'> | null | undefined,
 ): FieldRowDefinition | undefined => {
   if (!data) return undefined
-  const resolver = repo.propertySchemaResolverFor(data.workspaceId)
-  const isDefinition = (fieldId: string) => isResolvableFieldDefinition(resolver.resolveField(fieldId))
-  if (!isPropertyFieldInstance(data, isDefinition)) return undefined
+  if (!isPropertyFieldInstance(data, repoFieldDefinitionTest(repo, data.workspaceId))) return undefined
   const fieldId = data.referenceTargetId!
-  const resolution = resolver.resolveField(fieldId)
-  if (resolution.status === 'resolved') {
-    return {fieldId, name: resolution.schema.name, schema: resolution.schema}
-  }
-  const name = definitions?.definitionsByFieldId.get(fieldId)?.name ?? fieldId
-  return {fieldId, name, schema: undefined}
+  const {name, schema} = resolveFieldDefinition(repo, definitions, data.workspaceId, fieldId)
+  return {fieldId, name: name ?? fieldId, schema}
 }
 
-/** Does one value child hold the whole value? True for a scalar property;
- *  false for a list, whose value children are one MEMBER each — those render
- *  as the ordinary blocks they are, since no editor edits one member.
- *  Defence in depth for `ValueRowRenderer`: a member's content never stores
- *  the whole list, so its owner-value check refuses one too; this keeps list
- *  members off that path before any hook runs. */
+/** A definition's schema when this device can build one, and its name when the
+ *  registry knows it. `definitions` is passed in for the same reason as in
+ *  {@link fieldRowDefinition}: a render that calls this must depend on it. */
+export const resolveFieldDefinition = (
+  repo: Repo,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
+  workspaceId: string,
+  fieldId: string,
+): {name: string | undefined; schema: AnyPropertySchema | undefined} => {
+  const resolution = repo.propertySchemaResolverFor(workspaceId).resolveField(fieldId)
+  if (resolution.status === 'resolved') return {name: resolution.schema.name, schema: resolution.schema}
+  return {name: definitions?.definitionsByFieldId.get(fieldId)?.name, schema: undefined}
+}
+
+/** A scalar control edits one row; list controls edit the whole list and
+ *  belong in the property panel. */
 export const isSingleValueProperty = (schema: AnyPropertySchema): boolean =>
   memberCodecOf(schema.codec) === undefined
 
@@ -70,4 +74,14 @@ export const usePropertyDefinitions = (repo: Repo): PropertyDefinitionRegistrySn
   const subscribe = useCallback((cb: () => void) => repo.onPropertySchemasChange(cb), [repo])
   const snapshot = useCallback(() => repo.propertyDefinitions, [repo])
   return useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+
+/** Observe only the fields that determine a row's property role. */
+export const useFieldRowDefinition = (block: Block): FieldRowDefinition | undefined => {
+  const definitions = usePropertyDefinitions(block.repo)
+  const data = useHandle(block, {selector: row => row ? {
+    referenceTargetId: row.referenceTargetId, parentId: row.parentId,
+    isFieldForm: row.isFieldForm, workspaceId: row.workspaceId,
+  } : undefined})
+  return fieldRowDefinition(block.repo, definitions, data)
 }

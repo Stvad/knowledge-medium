@@ -2,10 +2,10 @@
  * The properties-as-blocks cell → children pass (§11 slice C).
  *
  * Every block whose `properties_json` holds a registered key gets the field and
- * value CHILD rows that key implies, from the same builders the live dual-write
- * uses — {@link plannedFieldRow} and {@link valueChildRowsFor} — so the two
- * writers cannot decide differently what a value's children are. Cells are left
- * exactly as they are: this pass ADDS the child representation.
+ * value CHILD rows that key implies, built from what the live dual-write uses —
+ * {@link plannedFieldRow} and `encodedPropertyValueToChildContents` — so the
+ * two writers cannot decide differently what a value's children are. Cells
+ * are left exactly as they are: this pass ADDS the child representation.
  *
  * IT RUNS ONLY PAST THE FLIP, and is CREATE-ONLY: the live maintainers are on
  * and the children are the property truth, so the only work left is GAPS — a
@@ -417,22 +417,22 @@ const ownerField = (ownerId: string, fieldId: string): string => `${ownerId}\0${
 export const surveyPropertyCellCoverage = async (
   repo: Repo,
   workspaceId: string,
+  beforePage?: () => Promise<void>,
 ): Promise<PropertyCellCoverage> => {
-  // Guarded rather than trusted: past the retained previous workspace the
-  // resolver fails CLOSED, every key reads as unresolved, and every bucket
-  // reports zero — the all-clear this survey exists to withhold.
-  requirePropertyRegistryFor(repo, workspaceId)
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
-  const resolveNameSchema = (name: string): ResolvedPropertySchema<unknown> | undefined => {
-    const resolution = resolver.resolve(name)
-    return resolution.status === 'resolved' ? resolution.schema : undefined
-  }
   const missing = coverageTally()
   const refused = coverageTally()
   const deleted = coverageTally()
   let blocksScanned = 0
   let cursor = ''
   for (;;) {
+    if (beforePage) await beforePage()
+    // Resolve against the current definitions after a pause that may span a rename.
+    requirePropertyRegistryFor(repo, workspaceId)
+    const resolver = repo.propertySchemaResolverFor(workspaceId)
+    const resolveNameSchema = (name: string): ResolvedPropertySchema<unknown> | undefined => {
+      const resolution = resolver.resolve(name)
+      return resolution.status === 'resolved' ? resolution.schema : undefined
+    }
     const page = await repo.db.getAll<{id: string; propertiesJson: string}>(
       SURVEY_SQL, [workspaceId, cursor, SCAN_PAGE])
     if (page.length === 0) break
@@ -470,6 +470,7 @@ export const surveyPropertyCellCoverage = async (
         }
       }
     }
+    if (page.length < SCAN_PAGE) break
   }
   return {
     blocksScanned,

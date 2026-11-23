@@ -3,7 +3,8 @@ import { materializeStagingRows, type MaterializeDeps } from '@/data/internals/s
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { referenceTargetLookupsVia } from '@/data/internals/referenceTargetLookups.js'
 import { encodeForWire, type GetCek } from '@/sync/transform.js'
-import type { MaterializeFixture } from './materialize-fixture.js'
+import { MATERIALIZE_WORKSPACE_ID, type MaterializeFixture } from './materialize-fixture.js'
+import { buildDeferredSearchIndex } from '@/data/internals/clientSchema.js'
 
 export const DEFAULT_MATERIALIZE_WINDOW_SIZE = 1000
 export interface QueryMetric { count: number; elapsedMs: number }
@@ -13,6 +14,8 @@ export interface MaterializeMetrics {
   txCount: number
   txElapsedMs: number
   phase1ElapsedMs: number
+  /** `--bulk-load` only: the deferred search-index build after the last window. */
+  deferredIndexMs: number
   keyCalls: number
   keyElapsedMs: number
 }
@@ -34,7 +37,7 @@ export type MaterializeWireRows = Awaited<ReturnType<typeof makeMaterializeWireR
 
 export const createMaterializeMetrics = (): MaterializeMetrics => ({
   calls: {}, sql: new Map(), txCount: 0, txElapsedMs: 0, phase1ElapsedMs: 0,
-  keyCalls: 0, keyElapsedMs: 0,
+  deferredIndexMs: 0, keyCalls: 0, keyElapsedMs: 0,
 })
 
 const sqlKey = (sql: string) => sql.replace(/\s+/g, ' ').trim().replace(
@@ -140,7 +143,9 @@ export const runMaterializePass = async (
   fixture: MaterializeFixture,
   mode: MaterializeMode,
   key: CryptoKey,
-  options: {windowSize?: number; getCek?: GetCek; metrics?: MaterializeMetrics} = {},
+  /** `bulkLoad`: the production bulk hold — windows carry the bulk scope, and
+   *  the deferred search-index build runs after the last one, inside `wallMs`. */
+  options: {windowSize?: number; getCek?: GetCek; metrics?: MaterializeMetrics; bulkLoad?: boolean} = {},
 ): Promise<MaterializePassResult> => {
   const windowSize = options.windowSize ?? DEFAULT_MATERIALIZE_WINDOW_SIZE
   const metrics = options.metrics ?? createMaterializeMetrics()
@@ -166,7 +171,8 @@ export const runMaterializePass = async (
     const instrumented = instrumentMaterializeDb(db, metrics, () => { firstTxAt = performance.now() })
     const beforeTx = metrics.txElapsedMs
     const started = performance.now()
-    const outcome = await materializeStagingRows(instrumented, {upserted, removed: []}, deps)
+    const outcome = await materializeStagingRows(instrumented, {upserted, removed: []}, deps,
+      options.bulkLoad ? {bulkLoadWorkspaceIds: [MATERIALIZE_WORKSPACE_ID]} : {})
     const txDelta = metrics.txElapsedMs - beforeTx
     totalPhase1Ms += firstTxAt === null ? performance.now() - started : firstTxAt - started
     totalTransactionMs += txDelta
@@ -176,6 +182,11 @@ export const runMaterializePass = async (
       throw new Error(`Unexpected ${mode} materialization outcome: ${JSON.stringify({applied: outcome.applied.length, skipped: outcome.skippedStale.length, deferred: outcome.deferred.length, quarantined: outcome.quarantined.length})}`)
     }
   }
+  if (options.bulkLoad) {
+    const started = performance.now()
+    await buildDeferredSearchIndex(db)
+    metrics.deferredIndexMs = performance.now() - started
+  }
   metrics.phase1ElapsedMs = totalPhase1Ms
   metrics.txElapsedMs = totalTransactionMs
   return {metrics, wallMs: performance.now() - overallStart, applied, skippedStale}
@@ -183,6 +194,7 @@ export const runMaterializePass = async (
 
 export const validateMaterializeDb = async (
   db: PowerSyncDb, fixture: MaterializeFixture,
+  options: {skipDerivedReferenceChecks?: boolean} = {},
 ): Promise<MaterializeValidation> => {
   const rows = await db.getAll<BlockRow>(`SELECT id, workspace_id, parent_id, order_key, content, properties_json, references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted, reference_target_id, is_field_form FROM blocks`)
   const staged = await db.getAll<{needs_apply: number}>(`SELECT needs_apply FROM blocks_synced`)
@@ -196,6 +208,7 @@ export const validateMaterializeDb = async (
       || row.references_json !== JSON.stringify(expected.references)) {
       throw new Error(`materialized values mismatch for ${row.id}`)
     }
+    if (options.skipDerivedReferenceChecks) continue
     const expectedTarget = expected.references[0]?.id ?? null
     if (row.reference_target_id !== expectedTarget || (row.is_field_form === 1) !== fixture.fieldIds.has(row.id)) {
       throw new Error(`derived reference columns mismatch for ${row.id}`)
@@ -203,10 +216,10 @@ export const validateMaterializeDb = async (
   }
   const derivedReferenceTargets = rows.filter(row => row.reference_target_id !== null).length
   const derivedFieldForms = rows.filter(row => row.is_field_form === 1).length
-  if (derivedReferenceTargets !== fixture.referenceCount) {
+  if (!options.skipDerivedReferenceChecks && derivedReferenceTargets !== fixture.referenceCount) {
     throw new Error(`expected ${fixture.referenceCount} derived references, got ${derivedReferenceTargets}`)
   }
-  if (derivedFieldForms !== fixture.fieldCount) {
+  if (!options.skipDerivedReferenceChecks && derivedFieldForms !== fixture.fieldCount) {
     throw new Error(`expected ${fixture.fieldCount} field forms, got ${derivedFieldForms}`)
   }
   return {

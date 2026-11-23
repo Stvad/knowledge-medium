@@ -46,7 +46,8 @@ const THREAD_PATHS_SQL = `
   SELECT thread_id, id, parent_id FROM up ORDER BY thread_id, depth
 `
 
-const SELECT_ROOTS_SQL = `
+/** The live blocks of a JSON array of ids. */
+export const SELECT_LIVE_BLOCKS_SQL = `
   SELECT ${buildQualifiedBlockColumnsSql('b')}
     FROM json_each(?) j
     JOIN blocks b ON b.id = j.value
@@ -99,7 +100,7 @@ export const threadsInScopeQuery = defineQuery<{workspaceId: string; scopeId: st
     }
     if (paths.size === 0) return []
     const roots = ctx.hydrateBlocks(
-      await ctx.db.getAll<Record<string, unknown>>(SELECT_ROOTS_SQL, [JSON.stringify([...paths.keys()])]),
+      await ctx.db.getAll<Record<string, unknown>>(SELECT_LIVE_BLOCKS_SQL, [JSON.stringify([...paths.keys()])]),
     )
     return roots
       .filter(root => hasBlockType(root, THREAD_TYPE))

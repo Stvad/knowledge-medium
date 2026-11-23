@@ -38,6 +38,7 @@ import {asAltChoice, asWorkout} from './records'
 import {discardTally, nestedWorkouts, type DiscardTally} from './subtree'
 
 import {buildAltChoices} from './history'
+import {contentChildren} from './children'
 
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
 
@@ -436,7 +437,7 @@ export const readAltChoices = async (
   repo: Repo,
   settingsBlockId: string,
 ): Promise<Record<string, string>> => {
-  const children = await repo.block(settingsBlockId).children.load()
+  const children = await contentChildren(repo, settingsBlockId)
   // Through `asAltChoice`, so removing `strength-alt-choice` from a block
   // actually removes its preference. The group and option properties survive
   // an untag, and folding them regardless meant a choice you had visibly taken

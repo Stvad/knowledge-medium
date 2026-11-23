@@ -11,9 +11,12 @@ export type SyncIndicatorState =
   | 'synced'
   | 'starting'
 
-export type SyncIndicatorTone = 'error' | 'local' | 'active' | 'warning' | 'success' | 'neutral'
+// Routine sync work (queued edits, uploads, downloads) stays `neutral` so
+// typing never restyles the chip; only states that need the user, and
+// local-only mode, get a tone of their own.
+export type SyncIndicatorTone = 'error' | 'warning' | 'local' | 'neutral'
 
-export type SyncIndicatorIcon = 'alert' | 'hard-drive' | 'upload' | 'sync' | 'offline' | 'check'
+export type SyncIndicatorIcon = 'alert' | 'hard-drive' | 'upload' | 'sync' | 'offline' | 'cloud'
 
 export interface SyncIndicatorInput {
   localOnly: boolean
@@ -24,6 +27,9 @@ export interface SyncIndicatorInput {
   downloading: boolean
   pendingChanges: number
   pendingChangesApproximate?: boolean
+  /** Changes have been queued without an upload starting for long enough that
+   *  the user should know they haven't left the device. */
+  pendingStuck?: boolean
   /** Count of rows in `ps_crud_rejected` — writes the server permanently
    *  refused (FK, RLS, 4xx). Sync may still be working for new writes;
    *  these are unfinished business that needs manual retry or dismissal.
@@ -127,6 +133,7 @@ const baseSyncIndicatorView = ({
   downloading,
   pendingChanges,
   pendingChangesApproximate = false,
+  pendingStuck = false,
   rejectedChanges = 0,
   materializingChanges = 0,
   materializingChangesApproximate = false,
@@ -172,7 +179,7 @@ const baseSyncIndicatorView = ({
   if (downloading) {
     return {
       state: 'downloading',
-      tone: 'active',
+      tone: 'neutral',
       icon: 'sync',
       label: progressPercent === null ? 'Syncing' : `Sync ${progressPercent}%`,
       title: appendPendingTitle(
@@ -197,7 +204,7 @@ const baseSyncIndicatorView = ({
   if (materializingChanges > 0) {
     return {
       state: 'materializing',
-      tone: 'active',
+      tone: 'neutral',
       icon: 'sync',
       label: 'Processing',
       title: appendPendingTitle(
@@ -215,7 +222,7 @@ const baseSyncIndicatorView = ({
   if (uploading) {
     return {
       state: 'uploading',
-      tone: 'active',
+      tone: 'neutral',
       icon: 'sync',
       label: 'Uploading',
       title: appendPendingTitle('Uploading local changes.', pendingChanges, false, pendingChangesApproximate),
@@ -226,16 +233,23 @@ const baseSyncIndicatorView = ({
   }
 
   if (pendingChanges > 0) {
+    const reachable = connected || syncingInOtherTab
+    const appearance: Pick<SyncIndicatorView, 'tone' | 'icon'> =
+      rejectedChanges > 0 ? {tone: 'warning', icon: 'alert'}
+        : pendingStuck ? {tone: 'warning', icon: reachable ? 'upload' : 'offline'}
+          : {tone: 'neutral', icon: reachable ? 'cloud' : 'offline'}
     return {
       state: 'pending',
-      tone: connected ? 'warning' : 'neutral',
-      icon: 'upload',
+      ...appearance,
       label: 'Pending',
-      title: appendPendingTitle(
-        connected ? 'Waiting to upload.' : 'Waiting for a sync connection.',
-        pendingChanges,
-        false,
-        pendingChangesApproximate,
+      title: appendRejectedTitle(
+        appendPendingTitle(
+          connected ? 'Waiting to upload.' : 'Waiting for a sync connection.',
+          pendingChanges,
+          false,
+          pendingChangesApproximate,
+        ),
+        rejectedChanges,
       ),
       pendingLabel,
       progressPercent: null,
@@ -246,7 +260,7 @@ const baseSyncIndicatorView = ({
   if (connecting) {
     return {
       state: 'connecting',
-      tone: 'active',
+      tone: 'neutral',
       icon: 'sync',
       label: 'Connecting',
       title: 'Connecting to sync.',
@@ -261,7 +275,7 @@ const baseSyncIndicatorView = ({
       return {
         state: 'other-tab',
         tone: 'neutral',
-        icon: 'check',
+        icon: 'cloud',
         label: 'Syncing in another tab',
         title: appendRejectedTitle(
           'Another open tab is syncing for this device. Close or reload your other tabs to sync from this one.',
@@ -306,8 +320,8 @@ const baseSyncIndicatorView = ({
     }
     return {
       state: 'synced',
-      tone: 'success',
-      icon: 'check',
+      tone: 'neutral',
+      icon: 'cloud',
       label: 'Synced',
       title: formatLastSyncedAt(lastSyncedAt) ?? 'All local changes are synced.',
       pendingLabel,
@@ -318,7 +332,7 @@ const baseSyncIndicatorView = ({
 
   return {
     state: 'starting',
-    tone: 'active',
+    tone: 'neutral',
     icon: 'sync',
     label: 'Starting',
     title: 'Preparing initial sync.',
@@ -351,4 +365,35 @@ export const getSyncIndicatorView = (input: SyncIndicatorInput): SyncIndicatorVi
     }
   }
   return view
+}
+
+export interface ChipAppearance {
+  tone: SyncIndicatorTone
+  icon: SyncIndicatorIcon
+  spinning: boolean
+}
+
+const withoutActivity = (input: SyncIndicatorInput): SyncIndicatorInput => ({
+  ...input,
+  uploading: false,
+  downloading: false,
+  connecting: false,
+  materializingChanges: 0,
+})
+
+/** What the header chip draws, given whether activity has lasted long enough
+ *  to show (`activityShown`, debounced by the caller). Activity too brief to
+ *  show is drawn as the state it settles to, so an edit's upload leaves the
+ *  chip as it was; a shown spinner never covers a state that needs attention.
+ *  The dropdown and tooltip read the live view instead. */
+export const getChipAppearance = (
+  input: SyncIndicatorInput,
+  activityShown: boolean,
+): ChipAppearance => {
+  const live = getSyncIndicatorView(input)
+  const needsAttention = live.tone === 'error' || live.tone === 'warning'
+  if (activityShown && !needsAttention) return {tone: live.tone, icon: 'sync', spinning: true}
+  const settled = live.spinning ? getSyncIndicatorView(withoutActivity(input)) : live
+  // Still spinning with activity cleared: the first sync hasn't finished.
+  return {tone: settled.tone, icon: settled.spinning ? 'cloud' : settled.icon, spinning: false}
 }

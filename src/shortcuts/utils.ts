@@ -1,4 +1,7 @@
 import type { Block } from '@/data/block'
+import { listingSurfaceOf } from '@/data/childrenView'
+import { outlineSurfaceOf, type SurfaceCarrier } from '@/data/outlineSurface'
+import { peekFocusedBlockLocation } from '@/data/properties'
 import {
   ActionConfig,
   ActionContextType,
@@ -10,6 +13,7 @@ import {
   ShortcutDependenciesMap, ActionTrigger,
 } from './types'
 import { withMoveTransition } from '@/utils/viewTransition'
+import { surfaceForFocus } from '@/utils/drawnWalk'
 import { invokeAction } from './actionDispatch.ts'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
@@ -136,6 +140,23 @@ export interface ApplyToAllOptions {
   applyInReverseOrder?: boolean
 }
 
+export function focusedOccurrenceInSelection(
+  {uiStateBlock, selectedBlocks}: Pick<MultiSelectModeDependencies, 'uiStateBlock' | 'selectedBlocks'>,
+) {
+  const focused = peekFocusedBlockLocation(uiStateBlock)
+  if (!selectedBlocks.some(block => block.id === focused?.blockId)) return
+  return focused
+}
+
+/** The panel supplies the default surface. A selected focused block can identify a nested occurrence. */
+export async function surfaceForSelection(deps: MultiSelectModeDependencies): Promise<SurfaceCarrier> {
+  const surface = outlineSurfaceOf(deps)
+  const {uiStateBlock} = deps
+  const focused = focusedOccurrenceInSelection(deps)
+  if (surface && focused) return surfaceForFocus(uiStateBlock.repo.block(focused.blockId), focused.renderScopeId, surface)
+  return surface ?? listingSurfaceOf(deps)
+}
+
 export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
   {applyInReverseOrder}: ApplyToAllOptions = { applyInReverseOrder: false},
@@ -147,7 +168,8 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   // dropping all but the last block's animation). The per-action
   // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
-    const {selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay} = multiSelectDeps
+    const {selectedBlocks, uiStateBlock} = multiSelectDeps
+    const surface = await surfaceForSelection(multiSelectDeps)
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
@@ -168,8 +190,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
         const originalDeps = {
           block,
           uiStateBlock,
-          scopeRootId,
-          propertyDisplay,
+          ...surface,
         } as ShortcutDependenciesMap[T]
 
         await (runtime
@@ -251,6 +272,7 @@ export interface BlocksActionContext {
    *  leaves later shortcuts acting on a row the pane no longer shows. */
   uiStateBlock: Block
   scopeRootId?: string
+  propertyDisplay?: BlockShortcutDependencies['propertyDisplay']
 }
 
 export interface BlocksActionPair {
@@ -303,8 +325,8 @@ export const defineBlocksAction = ({
     ...(appliesTo
       ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
-    handler: ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) =>
-      flow([block], {uiStateBlock, scopeRootId}),
+    handler: ({block, uiStateBlock, scopeRootId, propertyDisplay}: BlockShortcutDependencies) =>
+      flow([block], {uiStateBlock, scopeRootId, propertyDisplay}),
   },
   blocks: {
     id: multiSelectActionId(id),
@@ -316,7 +338,7 @@ export const defineBlocksAction = ({
       if (!appliesTo) return true
       return selectedBlocks.some(block => appliesTo(block))
     },
-    handler: ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) =>
-      flow(selectedBlocks, {uiStateBlock, scopeRootId}),
+    handler: ({selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay}: MultiSelectModeDependencies) =>
+      flow(selectedBlocks, {uiStateBlock, scopeRootId, propertyDisplay}),
   },
 })

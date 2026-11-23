@@ -481,14 +481,7 @@ describe('findReplaceDataExtension', () => {
     })
   })
 
-  // #443 group 3. Both of these replacements produce content whose derived
-  // `reference_target_id` is NON-NULL, which is why the guard used to pass
-  // them: it resolved `deriveReferenceColumns` for the proposed text and asked
-  // a decode that trusted the column. So a replace could re-point a ref
-  // property at a block the user never named, or turn its value row into a
-  // field row and drop the key — with "replace succeeded" reported either way.
-  // Now the decode is a pure form check on the content and both are skips.
-  describe('#404 item 5 — ref-typed value guard is a form check on the proposed text', () => {
+  describe('ref-typed value guard resolves the proposed text', () => {
     const REF_DEF = '66666666-6666-4666-8666-666666666666'
     const TARGET = '77777777-7777-4777-8777-777777777777'
     const relatedSchema = defineProperty<string>('related', {
@@ -497,10 +490,6 @@ describe('findReplaceDataExtension', () => {
       changeScope: ChangeScope.BlockDefault,
     })
 
-    /** Flipped workspace, one ref-typed property on `owner` holding `TARGET`,
-     *  plus a page claiming the alias `Mary` so a `[[Mary]]` replacement
-     *  genuinely RESOLVES — without a claimant the old guard would have
-     *  refused for the wrong reason and proved nothing. */
     const seedRefProperty = (): Promise<{valueId: string}> =>
       seedFlippedWorkspaceWithProperty({
         fieldId: REF_DEF,
@@ -509,7 +498,7 @@ describe('findReplaceDataExtension', () => {
         alsoCreate: [{id: 'mary-page', content: 'Mary', properties: {alias: ['Mary']}}],
       })
 
-    it('skips a replacement that turns the ref into a resolvable wikilink', async () => {
+    it('accepts a replacement that turns the ref into a resolvable wikilink', async () => {
       const {valueId} = await seedRefProperty()
       const original = `((${TARGET}))`
 
@@ -524,11 +513,10 @@ describe('findReplaceDataExtension', () => {
         },
       )
 
-      expect(result.skippedUnparseableProperty).toBe(1)
-      expect(result.unparseableProperties).toEqual([relatedSchema.name])
-      // The ref the user actually set is untouched in both row and cell.
-      expect((await load(valueId))?.content).toBe(original)
-      expect((await load('owner'))?.properties[relatedSchema.name]).toBe(TARGET)
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.unparseableProperties).toEqual([])
+      expect((await load(valueId))?.content).toBe('[[Mary]]')
+      expect((await load('owner'))?.properties[relatedSchema.name]).toBe('mary-page')
     })
 
     // km-h1hy: a multi-valued property's value children are its MEMBERS, and

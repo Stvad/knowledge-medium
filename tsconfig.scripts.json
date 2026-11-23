@@ -8,7 +8,7 @@
     // import.meta.env; retain Vite's ambient ImportMeta typing alongside Node.
     "types": ["node", "vite/client"]
   },
-  "include": ["scripts"],
+  "include": ["scripts", "src/**/*.d.ts"],
   // scripts/bench/* is quarantined dead code: it predates the Layout B sync
   // redesign (raw-maps `blocks` instead of `blocks_synced`, drives the removed
   // row-events tail, imports the relocated `@/data/internals/repo`) so it

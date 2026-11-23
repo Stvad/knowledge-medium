@@ -4,7 +4,7 @@ import {
   editorSelection,
   editorFocusRequestProp,
   exitEditModeForBlock,
-  isFocusedBlock,
+  storeEditorSelectionIfFocused,
   type EditorSelectionState,
 } from '@/data/properties.js'
 import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, type Ref } from 'react'
@@ -13,7 +13,7 @@ import { debounce } from 'lodash-es'
 import { clampSelectionToLength, placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'
-import { EditorView } from '@codemirror/view'
+import { EditorView, tooltips } from '@codemirror/view'
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
@@ -41,6 +41,7 @@ export const BlockEditor = ({
   const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
+  const {editorTooltipParent} = blockContext
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
     ? blockContext.renderScopeId
     : undefined
@@ -83,19 +84,13 @@ export const BlockEditor = ({
     }, 300),
   ).current
 
+  // A cross-block navigation writes its target's selection with the focus
+  // move, and this write can fire at any point of it — on the debounce, or
+  // from `flushDebouncers` as this editor unmounts — so it skips once focus
+  // has moved (see storeEditorSelectionIfFocused).
   const pushSelection = useRef(
     debounce((selection: EditorSelectionState) => {
-      // Skip if focus has already moved to another block. Cross-block
-      // navigation actions (Up/Down/Backspace-merge) write the target
-      // block's `editorSelection` and then change `focusedBlockLocation`; this
-      // BlockEditor unmounts and `flushDebouncers` fires a pending
-      // pushSelection synchronously. Without this guard that fire would
-      // overwrite the navigation's selection with a stale entry pointing
-      // back at this (now unfocused) block, so the new editor's focus
-      // effect bails on `selection.blockId !== block.id` and the cursor
-      // lands at position 0 instead of the column the user came from.
-      if (!isFocusedBlock(uiStateBlock, selection.blockId, renderScopeId)) return
-      void uiStateBlock.set(editorSelection, selection)
+      void storeEditorSelectionIfFocused(uiStateBlock, selection, renderScopeId)
     }, 150),
   ).current
 
@@ -114,9 +109,9 @@ export const BlockEditor = ({
   // restore-vs-flush race can drop the user's text.
   useLayoutEffect(() => flushDebouncers, [flushDebouncers])
 
-  // Content only: flushed before the focus write, a pending selection would
-  // pass pushSelection's guard and overwrite the selection the navigation just
-  // wrote for its target block.
+  // Content only: whoever reads "not being edited" needs the text stored, not
+  // the selection, and flushing the selection too would queue one more
+  // transaction ahead of the focus write.
   const flushContent = useCallback(() => { pushChange.flush() }, [pushChange])
   useLayoutEffect(() => registerPendingContentFlush(flushContent), [flushContent])
 
@@ -258,8 +253,9 @@ export const BlockEditor = ({
       // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
       editorContentFlushFacet.of(flushDebouncers),
       ...(providedExtensions ?? []),
+      editorTooltipParent ? tooltips({parent: editorTooltipParent}) : [],
     ],
-    [providedExtensions, flushDebouncers],
+    [providedExtensions, flushDebouncers, editorTooltipParent],
   )
 
   if (!blockEditData) return null

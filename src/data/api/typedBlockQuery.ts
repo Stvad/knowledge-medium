@@ -28,6 +28,9 @@ export interface TypedBlockQueryReferenceFilter {
  *  matches none, so no `exclude` removes it either. Dates compare within
  *  years 0000–9999; an operand outside them is refused.
  *
+ *  `contains` compares an array member on codecs with a `contains` capability.
+ *  `codecs.list` inherits this capability from its member's scalar `where`.
+ *
  *  `target` is the ref-traversal operator. Valid only on `ref`-typed
  *  (and `refList`-typed) properties; the operand is an inner where-map
  *  compiled against the referenced block's `properties_json`. Lets
@@ -53,6 +56,7 @@ export type WhereOperator =
   | { readonly gte: unknown }
   | { readonly between: readonly [unknown, unknown] }
   | { readonly exists: boolean }
+  | { readonly contains: unknown }
   | { readonly target: Readonly<Record<string, unknown>> }
 
 /** A single block predicate. Compiled against either the block itself
@@ -68,13 +72,30 @@ export type WhereOperator =
  *
  *  `where[name]` values: scalar (equality), `null` (unset), or a
  *  `WhereOperator` object (`{ lt: v }`, `{ exists: true }`, etc.). See
- *  the `WhereOperator` doc for the operand contract. */
+ *  the `WhereOperator` doc for the operand contract.
+ *
+ *  `types`: contains any of these type ids. Blank ids are ignored, and an
+ *  empty list is no type term, as at the top level. In `match` and `exclude`
+ *  it is probed per candidate, so a positive type set that should bound the
+ *  scan belongs in the top-level `types` or in `anyOf` alternatives, which
+ *  the planner drives from the type index. */
 export interface BlockPredicate {
   readonly scope?: 'self' | 'ancestor'
   readonly id?: string
+  readonly types?: readonly string[]
   readonly where?: Readonly<Record<string, unknown>>
   readonly referencedBy?: TypedBlockQueryReferenceFilter
 }
+
+/** Trimmed, deduplicated and sorted, so equal type sets compile to the same SQL. */
+export const normalizeTypeIds = (types: readonly string[]): string[] =>
+  Array.from(new Set(types.map(type => type.trim()).filter(Boolean))).sort()
+
+/** Does this predicate constrain anything? An unconstrained one is dropped from
+ *  `match` and `exclude`, and makes an `anyOf` group match every candidate. */
+export const predicateHasConstraints = (p: BlockPredicate): boolean =>
+  p.id !== undefined || p.referencedBy !== undefined ||
+  Object.keys(p.where ?? {}).length > 0 || normalizeTypeIds(p.types ?? []).length > 0
 
 export interface TypedBlockQuery {
   /** Required. Callers that want the user's currently-active workspace
@@ -85,6 +106,10 @@ export interface TypedBlockQuery {
    *  currently-active one from silently mis-scoping when the user
    *  switches workspaces mid-flight. */
   readonly workspaceId: string
+  /** Restrict candidates to live direct children of this block. */
+  readonly parentId?: string
+  /** Omit recognized property fields and their direct value rows. */
+  readonly propertyChildren?: 'none'
   /** Contains any of these type ids. Empty/omitted means no type filter. */
   readonly types?: readonly string[]
   /** Self-scope shorthand: equivalent to a `match` entry with
@@ -102,13 +127,18 @@ export interface TypedBlockQuery {
    *  scope, so the same query can mix block-itself and block-or-any-
    *  ancestor filters. */
   readonly match?: readonly BlockPredicate[]
+  /** At least one alternative must match. An empty group matches nothing. One unconstrained alternative matches every candidate. */
+  readonly anyOf?: readonly BlockPredicate[]
   /** NORed predicates: a block matches iff none of these match. Same
-   *  predicate shape as `match`. A predicate with no `id`, `referencedBy` or
-   *  `where` entry is dropped here as in `match`, so it excludes nothing. */
+   *  predicate shape as `match`. A predicate with no `id`, `referencedBy`,
+   *  `types` or `where` entry is dropped here as in `match`, so it excludes nothing. */
   readonly exclude?: readonly BlockPredicate[]
-  /** Result ordering. Default `created-asc`. Backlinks panels use
-   *  `created-desc` to put newest sources first. */
-  readonly order?: 'created-asc' | 'created-desc'
+  /** Defaults to creation time ascending. Outline order requires a direct
+   *  parent. A named order reads a comparable property or a virtual field.
+   *  Scalar property order places missing and wrong-shaped values
+   *  last in either direction, with block id ascending as the tiebreaker. */
+  readonly order?: 'created-asc' | 'created-desc' | 'outline'
+    | {readonly property: string; readonly direction: 'asc' | 'desc'}
 }
 
 /** Historically the "post-default-resolution" shape used internally;
@@ -130,6 +160,7 @@ export const referenceFilterSchema = z.object({
 export const blockPredicateSchema = z.object({
   scope: z.enum(['self', 'ancestor']).optional(),
   id: z.string().optional(),
+  types: z.array(z.string()).optional(),
   where: z.record(z.string(), z.unknown()).optional(),
   referencedBy: referenceFilterSchema.optional(),
 })

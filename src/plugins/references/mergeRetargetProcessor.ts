@@ -310,27 +310,18 @@ const retargetSource = async (
   )
 
   const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references' | 'referenceTargetId' | 'isFieldForm'>> = {}
-  if (nextContent !== current.content) {
-    patch.content = nextContent
-    // `core.deriveReferenceTarget` already ran earlier in this same tx pass
-    // (kernel processors precede plugin ones) and stamped the column from
-    // the PRE-retarget content. A whole-block `((old))` row would otherwise
-    // keep `referenceTargetId: old` even though content now reads
-    // `((new))` — recompute from the rewritten content so the column and
-    // content never disagree.
-    const lookups = sameTxReferenceTargetLookups(tx)
-    const derived = await deriveReferenceColumns(nextContent, current.workspaceId, lookups)
-    // This is always an update of an existing row (never a create), so an
-    // unresolvable alias (`undefined`) clears the column rather than
-    // preserving a caller-provided id the way the derive processor's
-    // create path does.
-    const nextTargetId = derived.targetId ?? null
-    if ((current.referenceTargetId ?? null) !== nextTargetId) {
-      patch.referenceTargetId = nextTargetId
-    }
-    if ((current.isFieldForm ?? false) !== derived.isFieldForm) {
-      patch.isFieldForm = derived.isFieldForm
-    }
+  if (nextContent !== current.content) patch.content = nextContent
+  // An inherited alias can keep its spelling while its target changes.
+  // Resolve every source before owner bags reconcile their member rows.
+  const derived = await deriveReferenceColumns(
+    nextContent, current.workspaceId, sameTxReferenceTargetLookups(tx),
+  )
+  const nextTargetId = derived.targetId ?? null
+  if ((current.referenceTargetId ?? null) !== nextTargetId) {
+    patch.referenceTargetId = nextTargetId
+  }
+  if ((current.isFieldForm ?? false) !== derived.isFieldForm) {
+    patch.isFieldForm = derived.isFieldForm
   }
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {
     patch.references = nextReferences
@@ -354,14 +345,14 @@ const retargetMergedBlockReferences = async (
     SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
     [event.workspaceId, event.fromId],
   )
-  // The merge TARGET is always a source candidate, backlink row or not:
-  // mergeProperties can have copied a ref/refList property from `from`
-  // onto `into` (target lacked the key) whose value names `fromId` —
-  // `into` has no stored reference entry yet, so the block_references
-  // lookup above can't see it, and without a rewrite the follow-up
-  // parse would project a backlink to the tombstoned merge source.
-  // retargetSource no-ops when nothing matches.
-  const sourceIds = new Set(sourceRows.map(row => row.id))
+  // Exact targets are stamped in the editing transaction; backlink parsing
+  // follows later. Both indexes must contribute before bags are reconciled.
+  const exactSources = await ctx.db.getAll<{id: string}>(`
+    SELECT id FROM blocks
+    WHERE workspace_id = ? AND reference_target_id = ? AND deleted = 0
+  `, [event.workspaceId, event.fromId])
+  const sourceIds = new Set([...sourceRows, ...exactSources].map(row => row.id))
+  // The merge target can inherit ref properties before backlink parsing indexes them.
   sourceIds.add(event.intoId)
 
   const aliasReplacements = resolveAliasReplacements(event.aliasRewrites, event.intoId)
@@ -370,9 +361,9 @@ const retargetMergedBlockReferences = async (
     const bag = await retargetSource(ctx, id, event, aliasReplacements, ctx.propertySchemas)
     if (bag !== null) bags.push(bag)
   }
-  // Bags after ALL content, whatever order the sources came in. A child-backed
-  // owner's list members are matched by value when its bag is written, so a
-  // member row still reading `((from))` would be reaped as removed, nested
+  // Bags follow all content and target updates, regardless of source order.
+  // List members are matched by value, so a member still denoting the source
+  // would be reaped as removed, nested
   // content and all. These writes run under the merge tx's BlockDefault scope:
   // if a canonical seed bag ever gains a ref/refList-typed field, merging a
   // block referenced BY a seed definition would abort at the commit-time seed

@@ -132,6 +132,15 @@ describe('isRetainableAbsentRef', () => {
     )).toBe(true)
   })
 
+  it('retains an opaque value’s backlink when a bag replacement only reorders object keys', () => {
+    expect(isRetainableAbsentRef(
+      absentRef('related'),
+      {properties: {related: {id: 't', version: 1}}},
+      {properties: {related: {version: 1, id: 't'}}},
+      schemas(),
+    )).toBe(true)
+  })
+
   it('drops when this write changed the field value (value-driven removal stays allowed)', () => {
     expect(isRetainableAbsentRef(
       absentRef('related'),

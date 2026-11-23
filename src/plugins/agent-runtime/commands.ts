@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { Block } from '@/data/block'
+import { listRejectedUploads, retryRejectedUpload } from '@/data/rejectedUploads'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
 import { BLOCK_TYPE_TYPE, EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
@@ -30,6 +31,7 @@ import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
+import { captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
 import { CHOOSE_CONTRIBUTOR_MESSAGE } from '@/plugins/contributors/processor.js'
 import { addMedia } from './addMedia.ts'
 import { readMedia } from './readMedia.ts'
@@ -93,7 +95,7 @@ import {
 } from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
-import { getPluginPrefsBlock, readPluginPref } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, readPluginPref, userPageBlockId } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
@@ -115,6 +117,7 @@ import {
 } from '@/data/internals/propertyCellBackfill'
 import {readIsChildBackedWorkspace} from '@/data/workspaceSchema'
 import type {
+  AgentMedia,
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
   BlockPosition,
@@ -566,8 +569,10 @@ const readExtensionOverrides = async (
   workspaceId: string,
 ): Promise<Overrides | null> => {
   try {
+    // This device's own intent, not `preferencesRootId`: the loader and
+    // `setExtensionEnabled` both use the acting user's page.
     // A copy: with nothing stored this is the schema's shared default.
-    return new Map(await readPluginPref(repo, workspaceId, repo.user, extensionsPrefsType, extensionsOverridesProp))
+    return new Map(await readPluginPref(repo, userPageBlockId(workspaceId, repo.user.id), extensionsPrefsType, extensionsOverridesProp))
   } catch {
     return null
   }
@@ -1204,15 +1209,8 @@ const updateRuntimeBlock = async (
       : input.replaceProperties
         ? structuredClone(input.properties) as Record<string, unknown>
         : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
-    // Deliberately the RAW bag write, not the typed setProperty/setProperties:
-    // `input.properties` is arbitrary external JSON (raw-encoded values, often
-    // schema-less keys from agent extensions). The typed primitives would throw
-    // on an unresolvable schema or an undecodable value; the raw write + the
-    // same-tx MATERIALIZE processor instead reconciles the schema-backed,
-    // decodable subset into children (create/update, and delete-by-omission on
-    // a `replaceProperties` replace) and gracefully leaves the rest cell-only
-    // (MATERIALIZE skips keys it can't resolve/decode). Read-inside-tx above
-    // already closed the TOCTOU clobber this verb was once flagged for.
+    // Agent properties arrive encoded. Pass the bag to tx.update so the
+    // workspace's storage mode governs validation and child materialization.
     await tx.update(input.id, {
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
@@ -2244,12 +2242,26 @@ ${code}
   return fn(context, data)
 }
 
+/** The app's media lanes, behind the Attachments plugin's toggle. Its renderer
+ *  stands in for "the plugin is on". */
+const appMedia: AgentMedia = {
+  captureRefusal: runtime => runtime.read(blockRenderersFacet).media === undefined
+    ? 'Enable the Attachments plugin to add media.'
+    : null,
+  resolve: request => getAssetResolver().resolve(request),
+  capture: captureMediaFromFiles,
+}
+
 export const createAgentRuntimeContext = ({
   repo,
   runtime,
   safeMode,
+  hostHealth,
+  media = appMedia,
 }: AgentRuntimeBridgeOptions): AgentRuntimeContext => {
   const context: AgentRuntimeContext = {
+    media,
+    hostHealth,
     repo,
     db: repo.db,
     runtime,
@@ -2306,6 +2318,8 @@ export const executeCommand = async (
       repo: context.repo.withTxContext({contributorId: command.contributorId, contributorSource: 'agent'}),
       runtime: context.runtime,
       safeMode: context.safeMode,
+      hostHealth: context.hostHealth,
+      media: context.media,
     })
   }
   return executeAttributedCommand(command, context)
@@ -2329,7 +2343,7 @@ const executeAttributedCommand = async (
       return describeRuntimeSummary(context)
 
     case 'health':
-      return runHealthCommand(context.repo)
+      return runHealthCommand(context.repo, context.hostHealth)
 
     case 'describe-runtime':
       return describeRuntime(context, {
@@ -2390,18 +2404,17 @@ const executeAttributedCommand = async (
         context.repo,
         viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId)),
         requireString(command.ref, 'ref'),
-        getAssetResolver(),
+        context.media,
       )
 
     case 'add-media': {
       const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
-      if (context.runtime.read(blockRenderersFacet).media === undefined) {
-        throw new Error('Enable the Attachments plugin to add media.')
-      }
+      const refusal = context.media.captureRefusal(context.runtime)
+      if (refusal !== null) throw new Error(refusal)
       // Refused here, not left to the attribution check inside the capture's tx: by
       // then the bytes are stored, and nothing reclaims them.
       refuseUnchosenContributor(context, command)
-      return addMedia(context.repo, workspaceId, {
+      return addMedia(context.repo, workspaceId, context.media.capture, {
         base64: requireString(command.base64, 'base64'),
         filename: command.filename,
         mime: command.mime,
@@ -2627,6 +2640,12 @@ const executeAttributedCommand = async (
           ? undefined
           : requireString(command.scope, 'scope'),
       })
+
+    case 'rejected-uploads':
+      return listRejectedUploads(context.repo.db)
+
+    case 'retry-rejected-upload':
+      return retryRejectedUpload(context.repo.db, command.txId)
 
     case 'run-action':
     case 'action':

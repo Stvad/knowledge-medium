@@ -18,7 +18,7 @@ import {
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
@@ -76,7 +76,7 @@ const layoutSessionBlock = async () => {
   return getLayoutSessionBlock(uiState, env.repo.activeLayoutSessionId)
 }
 
-const currentPanelRows = async () => (await layoutSessionBlock()).children.load()
+const currentPanelRows = async () => childrenOf(env.repo, (await layoutSessionBlock()).id)
 
 const currentPanelBlockIds = async () => panelBlockIds(await currentPanelRows())
 const currentActivePanelId = async () => {
@@ -196,6 +196,26 @@ describe('navigate', () => {
     ])
     const rightPanel = await env.repo.block(rightPanelId).load()
     expect(rightPanel?.parentId).not.toBe(layoutSession.id)
+  })
+
+  // The active pane is neither the last row nor the source here, so landing
+  // on either of those instead fails.
+  it("'new-panel' and 'sidebar-stack' land in the active pane when the viewport cannot render a split", async () => {
+    stubViewport(true)
+    const layoutSession = await layoutSessionBlock()
+    const sourcePanel = await insertPanelRow(env.repo, layoutSession, 'b-main')
+    const activePanel = await insertPanelRow(env.repo, layoutSession, 'b-side')
+    await insertPanelRow(env.repo, layoutSession, 'b-last')
+    await layoutSession.set(activePanelIdProp, activePanel)
+
+    const stacked = await navigate(env.repo, {blockId: 'b-stacked', target: 'sidebar-stack', sourcePanelId: sourcePanel})
+    const split = await navigate(env.repo, {blockId: 'b-split', target: 'new-panel', sourcePanelId: sourcePanel})
+
+    expect(stacked?.panelId).toBe(activePanel)
+    expect(split?.panelId).toBe(activePanel)
+    expect(await currentLayoutBlockIds()).toEqual(['b-main', 'b-split', 'b-last'])
+    expect(await currentActivePanelId()).toBe(activePanel)
+    expect(panelHistory.getSnapshot(activePanel).back.map(entry => entry.blockId)).toEqual(['b-side', 'b-stacked'])
   })
 
   it('a navigation commits its active-panel write before resolving (no deferred write clobbers a later nav)', async () => {

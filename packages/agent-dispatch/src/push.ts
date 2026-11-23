@@ -15,8 +15,7 @@ import { errorMessage, type BridgeClient } from '@knowledge-medium/agent-cli/cli
 import type { WatchEventsWatcher } from '@knowledge-medium/agent-cli/protocol'
 import type { DaemonConfig, Watcher } from './config.js'
 import type { Graph } from './graph.js'
-
-export const PUSH_CONSUMER = 'agent-dispatch'
+import { instanceName } from './instance.js'
 
 /** Tab-side registrations expire without a refresh (a dead daemon must
  *  not leave watchers running forever); refresh at half the TTL so one
@@ -83,14 +82,17 @@ export const buildRegistrationWatchers = async (
       },
   ))
 
+/** A tab keeps one registration per consumer, so each daemon instance
+ *  registers as its own: two under one name would replace each other's. */
 const sendWatchEventsRegistration = (
   client: Pick<BridgeClient, 'runCommand'>,
+  consumer: string,
   watchers: readonly WatchEventsWatcher[],
   options: {timeoutMs?: number} = {},
 ): Promise<unknown> =>
   client.runCommand({
     type: 'watch-events',
-    consumer: PUSH_CONSUMER,
+    consumer,
     watchers: [...watchers],
     ttlMs: REGISTRATION_TTL_MS,
   }, options)
@@ -98,6 +100,7 @@ const sendWatchEventsRegistration = (
 export const startPushLoop = async (deps: PushDeps): Promise<void> => {
   const {client, config, graph, requestTick, log, isStopping, nap, stopSignal} = deps
   const now = deps.now ?? Date.now
+  const consumer = instanceName(config.instance)
 
   let cursor: number | null = null
   // null = not registered (never, or invalidated by an error/reset) —
@@ -110,7 +113,7 @@ export const startPushLoop = async (deps: PushDeps): Promise<void> => {
     try {
       if (registeredAt === null || now() - registeredAt >= REGISTRATION_REFRESH_MS) {
         const watchers = await buildRegistrationWatchers(config.watchers, graph)
-        await sendWatchEventsRegistration(client, watchers)
+        await sendWatchEventsRegistration(client, consumer, watchers)
         registeredAt = now()
         if (!announced) {
           announced = true
@@ -133,7 +136,7 @@ export const startPushLoop = async (deps: PushDeps): Promise<void> => {
         continue
       }
       const relevant = response.events.filter(entry =>
-        entry.event['type'] === 'watcher-settled' && entry.event['consumer'] === PUSH_CONSUMER)
+        entry.event['type'] === 'watcher-settled' && entry.event['consumer'] === consumer)
       if (relevant.length > 0) requestTick()
     } catch (error) {
       if (isStopping()) return
@@ -149,6 +152,8 @@ export const startPushLoop = async (deps: PushDeps): Promise<void> => {
   }
 }
 
-export const clearPushRegistration = async (client: Pick<BridgeClient, 'runCommand'>): Promise<void> => {
-  await sendWatchEventsRegistration(client, [], {timeoutMs: CLEAR_REGISTRATION_TIMEOUT_MS})
+export const clearPushRegistration = async (
+  client: Pick<BridgeClient, 'runCommand'>, instance: string | undefined,
+): Promise<void> => {
+  await sendWatchEventsRegistration(client, instanceName(instance), [], {timeoutMs: CLEAR_REGISTRATION_TIMEOUT_MS})
 }

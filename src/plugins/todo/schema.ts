@@ -7,7 +7,6 @@ import {
 export const TODO_TYPE = 'todo'
 
 export type TodoStatus = 'open' | 'done'
-export type RoamTodoState = 'TODO' | 'DONE'
 
 export const statusProp = seedProperty<TodoStatus>({
   seedKey: 'system:todo/property/status',
@@ -19,20 +18,6 @@ export const statusProp = seedProperty<TodoStatus>({
     {value: 'done', label: 'done'},
   ]},
   defaultValue: 'open',
-  changeScope: ChangeScope.BlockDefault,
-  hideInOutline: true,
-})
-
-export const roamTodoStateProp = seedProperty<RoamTodoState>({
-  seedKey: 'system:todo/property/roam-todo-state',
-  revision: 1,
-  name: 'roam:todo-state',
-  preset: 'strict-enum',
-  config: {options: [
-    {value: 'TODO', label: 'TODO'},
-    {value: 'DONE', label: 'DONE'},
-  ]},
-  defaultValue: 'TODO',
   changeScope: ChangeScope.BlockDefault,
   hideInOutline: true,
 })

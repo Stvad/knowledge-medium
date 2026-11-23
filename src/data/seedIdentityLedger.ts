@@ -95,6 +95,7 @@ export type FrozenTypeSeed = readonly [seedKey: string, id: string]
 
 export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/activity', 'agent:activity', 'string', 'string'],
+  ['system:agent-dispatch-companion/property/activity-at', 'agent:activity-at', 'number', 'number'],
   ['system:agent-dispatch-companion/property/asked-at', 'agent:asked-at', 'number', 'number'],
   ['system:agent-dispatch-companion/property/attempts', 'agent:attempts', 'number', 'number'],
   ['system:agent-dispatch-companion/property/cancel', 'agent:cancel', 'raw-json', 'object'],
@@ -113,6 +114,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:annotations/property/quote-start', 'annotation:quoteStart', 'optional-number', 'number'],
   ['system:annotations/property/quote-suffix', 'annotation:quoteSuffix', 'optional-string', 'string'],
   ['system:annotations/property/replacement', 'annotation:replacement', 'optional-string', 'string'],
+  ['system:annotations/property/source-content', 'annotation:sourceContent', 'optional-json', 'object'],
   ['system:annotations/property/status', 'annotation:status', 'strict-enum', 'enum'],
   ['system:annotations/property/target', 'annotation:target', 'ref', 'ref'],
   ['system:attachments/property/media-filename', 'media:filename', 'optional-string', 'string'],
@@ -203,7 +205,13 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:srs-review/property/deck-tag', 'srs-review:deck-tag', 'string', 'string'],
   ['system:srs-review/property/progress', 'srs-review:progress', 'json', 'object'],
   ['system:startup-metrics/property/startup-record', 'startupRecord', 'optional-json', 'object'],
-  ['system:todo/property/roam-todo-state', 'roam:todo-state', 'strict-enum', 'enum'],
+  ['system:sync-metrics/property/sync-metrics-record', 'sync-metrics:record', 'optional-json', 'object'],
+  ['system:tables/property/column-field', 'tables:columnField', 'optional-ref', 'ref'],
+  ['system:tables/property/column-hidden', 'tables:columnHidden', 'boolean', 'boolean'],
+  ['system:tables/property/column-width', 'tables:columnWidth', 'optional-number', 'number'],
+  ['system:tables/property/query', 'tables:query', 'string', 'string'],
+  ['system:tables/property/view-sort-column', 'tables:viewSortColumn', 'optional-ref', 'ref'],
+  ['system:tables/property/view-sort-direction', 'tables:viewSortDirection', 'strict-enum', 'enum'],
   ['system:todo/property/status', 'status', 'strict-enum', 'enum'],
   ['system:update-indicator/property/current-load-time', 'currentLoadTime', 'optional-number', 'number'],
   ['system:update-indicator/property/previous-load-time', 'previousLoadTime', 'optional-number', 'number'],
@@ -248,6 +256,11 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
   ['system:srs-review/type/srs-review-progress', 'srs-review-progress'],
   ['system:startup-metrics/type/startup-metrics', 'startup-metrics'],
   ['system:startup-metrics/type/startup-record', 'startup-metrics-record'],
+  ['system:sync-metrics/type/sync-metrics', 'sync-metrics'],
+  ['system:sync-metrics/type/sync-metrics-record', 'sync-metrics-record'],
+  ['system:tables/type/column', 'tables:column'],
+  ['system:tables/type/table', 'tables:table'],
+  ['system:tables/type/view', 'tables:view'],
   ['system:todo/type/todo', 'todo'],
   ['system:update-indicator/type/update-indicator-prefs', 'update-indicator-prefs'],
 ]
@@ -279,6 +292,9 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
 
 /** Property names no shipped seed may claim. Each was a declaration once. */
 export const RETIRED_PROPERTY_NAMES: readonly string[] = [
+  // Existing strict-enum definition rows and values remain readable; new
+  // imports register this source metadata through ordinary schema inference.
+  'roam:todo-state',
   // The comments margin's dragged width in px, replaced by its share of the
   // pane (`annotation:marginShare`) so it scales with the pane. Not converted:
   // a panel with a dragged width goes back to the automatic one; the px cells

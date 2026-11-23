@@ -5,10 +5,9 @@
  */
 
 import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api'
-import {createChild} from '@/data/mutators'
-import {isPropertyFieldRow, isPropertyValueRow} from '@/data/propertyChildren'
+import {createChild, move} from '@/data/mutators'
 import {hasBlockType} from '@/data/properties'
-import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
+import {verbatimValueTextProblem} from '@/data/propertyChildren'
 import type {Repo} from '@/data/repo'
 import {createTypedChild} from '@/data/typedRecords'
 import {safeDecodeRowProperty} from '@/data/rowProperty'
@@ -18,6 +17,7 @@ import {commentsPageBlockId, getOrCreateCommentsPage} from './container.ts'
 import {
   anchorFieldValues,
   annotationReplacementProp,
+  annotationSourceContentProp,
   annotationStatusProp,
   annotationTargetProp,
   THREAD_TYPE,
@@ -41,8 +41,8 @@ export class AnchorChangedError extends ThreadRefusal {
 }
 
 /** The target cannot carry a thread: it is missing or deleted, or it is a
- *  property field or value row, which scope reads never descend into and whose
- *  content is an encoded property value. */
+ *  comment thread root / its container. Property rows are ordinary blocks and
+ *  can be annotated like any other target. */
 export class UnannotatableTargetError extends ThreadRefusal {
   constructor(reason: string) {
     super(reason)
@@ -79,9 +79,6 @@ export const missingTarget = (targetId: string) => new UnannotatableTargetError(
 export const annotatableTarget = async (tx: Tx, targetId: string): Promise<BlockData> => {
   const target = await tx.get(targetId)
   if (!target || target.deleted) throw missingTarget(targetId)
-  if (await isPropertyFieldRow(tx, target) || await isPropertyValueRow(tx, target)) {
-    throw new UnannotatableTargetError('A property row can’t be commented on.')
-  }
   if (hasBlockType(target, THREAD_TYPE) || target.id === commentsPageBlockId(target.workspaceId)) {
     throw new UnannotatableTargetError('A comment thread, or the page that holds them, can’t be commented on.')
   }
@@ -105,8 +102,9 @@ export const assertQuotable = (anchor: RangeAnchor): void => {
   if (anchor.quoteStart !== undefined && !(Number.isInteger(anchor.quoteStart) && anchor.quoteStart >= 0)) {
     throw new InvalidQuoteError(`quoteStart ${anchor.quoteStart} is not a position in the text.`)
   }
-  if (hasLoneSurrogate(anchor.quote)) throw new InvalidQuoteError('The quote cuts a character in half.')
-  if (parseExactReferenceBlockContent(anchor.quote)?.fieldForm) {
+  const problem = verbatimValueTextProblem(anchor.quote)
+  if (problem === 'lone-surrogate') throw new InvalidQuoteError('The quote cuts a character in half.')
+  if (problem === 'field-form') {
     throw new InvalidQuoteError('A property field marker can\u2019t be quoted on its own.')
   }
 }
@@ -154,6 +152,26 @@ export interface CreateThreadOptions {
   description?: string
 }
 
+/** An open thread root on `targetId`, filed under the comments page. */
+const writeThreadRoot = (
+  repo: Repo,
+  tx: Tx,
+  containerId: string,
+  {targetId, anchor, replacement}: Pick<CreateThreadArgs, 'targetId' | 'anchor' | 'replacement'>,
+): Promise<string> =>
+  createTypedChild(repo, tx, {
+    parentId: containerId,
+    content: anchor?.quote ?? '',
+    types: [THREAD_TYPE],
+    properties: [
+      propertyValue(annotationTargetProp, targetId),
+      propertyValue(annotationStatusProp, 'open'),
+      ...(anchor ? anchorFieldValues(anchor) : []),
+      ...(replacement !== undefined ? [propertyValue(annotationReplacementProp, replacement)] : []),
+    ],
+    references: [threadTargetEdge(targetId)],
+  })
+
 /** One undo step: the thread root and its first comment. A workspace's first
  *  comment also creates the container, outside the undo step.
  *
@@ -181,18 +199,10 @@ export const createThread = async (
         : 'The text changed since it was selected. Select it again and choose Suggest edit to selection.')
     }
 
-    const threadId = await createTypedChild(repo, tx, {
-      parentId: container.id,
-      content: anchor?.quote ?? '',
-      types: [THREAD_TYPE],
-      properties: [
-        propertyValue(annotationTargetProp, targetId),
-        propertyValue(annotationStatusProp, 'open'),
-        ...(anchor ? anchorFieldValues(anchor) : []),
-        ...(replacement !== undefined ? [propertyValue(annotationReplacementProp, replacement)] : []),
-      ],
-      references: [threadTargetEdge(targetId)],
-    })
+    const threadId = await writeThreadRoot(repo, tx, container.id, {targetId, anchor, replacement})
+    if (replacement !== undefined && anchor) {
+      await tx.setProperty(threadId, annotationSourceContentProp, current.content)
+    }
     const commentId = comment || emptyComment
       ? await tx.run(createChild, {parentId: threadId, content: comment ?? ''})
       : null
@@ -202,6 +212,105 @@ export const createThread = async (
     description: options.description ??
       (replacement !== undefined ? 'suggest edit' : anchor ? 'comment on selection' : 'comment on block'),
   })
+}
+
+/** The thread `block` is a comment in, given its ancestors nearest first:
+ *  the nearest thread root above it. Null for a thread root itself, a block
+ *  in no thread, and a property row (or a block inside one), which belongs to
+ *  its owner rather than being a comment. */
+export const commentThreadOf = (block: BlockData, ancestors: readonly BlockData[]): BlockData | null => {
+  if (hasBlockType(block, THREAD_TYPE)) return null
+  for (const at of [block, ...ancestors]) {
+    if (at.isFieldForm === true) return null
+    if (hasBlockType(at, THREAD_TYPE)) return at
+  }
+  return null
+}
+
+/** `commentThreadOf` as of `tx`. */
+const commentThreadInTx = async (tx: Tx, id: string): Promise<BlockData | null> => {
+  const block = await tx.get(id)
+  if (!block || block.deleted) return null
+  const ancestors: BlockData[] = []
+  for (let at = block.parentId; at !== null && ancestors.length < 100;) {
+    const parent = await tx.get(at)
+    if (!parent) break
+    ancestors.push(parent)
+    if (hasBlockType(parent, THREAD_TYPE)) break
+    at = parent.parentId
+  }
+  return commentThreadOf(block, ancestors)
+}
+
+/** The blocks a comment links by its content. Property edges (credit, typed
+ *  pointers) are not links. */
+export const linkedBlockIds = (comment: Pick<BlockData, 'references'>): string[] =>
+  [...new Set(comment.references.filter(ref => !ref.sourceField).map(ref => ref.id))]
+
+/** Would a thread on `targetId` render inside `commentId`'s own subtree? A
+ *  thread's card renders inside the card of every thread its target is in,
+ *  out to the page, so any hop of that chain inside the comment would put the
+ *  comment inside itself. */
+const rendersInside = async (tx: Tx, targetId: string, commentId: string): Promise<boolean> => {
+  const seen = new Set<string>()
+  for (let at: string | undefined = targetId; at !== undefined && !seen.has(at);) {
+    if (await tx.isDescendantOf(at, commentId)) return true
+    seen.add(at)
+    const thread = await commentThreadInTx(tx, at)
+    at = thread ? threadTargetIdOf(thread) : undefined
+  }
+  return false
+}
+
+export interface MoveToOwnThreadArgs {
+  commentId: string
+  /** The block the new thread is on, as a whole. */
+  targetId: string
+}
+
+/** Move a comment, with its replies, out of its thread to be the first
+ *  comment of a new thread on the whole of `targetId`. One undo step; returns
+ *  the new thread's root. */
+export const moveToOwnThread = async (repo: Repo, {commentId, targetId}: MoveToOwnThreadArgs): Promise<string> => {
+  const target = await repo.load(targetId)
+  if (!target) throw missingTarget(targetId)
+  const container = await getOrCreateCommentsPage(repo, target.workspaceId)
+  return repo.tx(async tx => {
+    const thread = await commentThreadInTx(tx, commentId)
+    if (!thread) throw new ThreadRefusal('Only a comment in a thread can move to a thread of its own.')
+    // Its thread would be left with nothing in it. The root's own property
+    // rows are not comments.
+    const comment = (await tx.get(commentId))!
+    if (comment.parentId === thread.id && (await tx.childrenOf(thread.id, undefined, {propertyChildren: 'none'})).length === 1) {
+      throw new ThreadRefusal('This is its thread’s only comment, so it is a thread of its own already.')
+    }
+    await annotatableTarget(tx, targetId)
+    if (await rendersInside(tx, targetId, commentId)) {
+      throw new UnannotatableTargetError('A comment can’t move to a thread shown inside itself or its replies.')
+    }
+    const threadId = await writeThreadRoot(repo, tx, container.id, {targetId, anchor: null})
+    await tx.run(move, {id: commentId, parentId: threadId, position: {kind: 'first'}})
+    return threadId
+  }, {scope: ChangeScope.BlockDefault, description: 'move comment to its own thread'})
+}
+
+/** The blocks a comment links on the page its thread is on: the likely
+ *  targets for `moveToOwnThread`, in link order. */
+export const ownThreadTargets = async (repo: Repo, commentId: string): Promise<string[]> => {
+  const comment = await repo.load(commentId)
+  if (!comment) return []
+  const pathOf = async (id: string) => (await repo.query.ancestors({id}).load()).ancestors
+  const thread = commentThreadOf(comment, await pathOf(commentId))
+  const threadTarget = thread && threadTargetIdOf(thread)
+  if (!threadTarget) return []
+  const pageOf = async (id: string) => (await pathOf(id)).at(-1)?.id ?? id
+  const page = await pageOf(threadTarget)
+  const linked = linkedBlockIds(comment)
+  const onPage = await Promise.all(linked.map(async id => {
+    const block = await repo.load(id)
+    return !!block && !block.deleted && !hasBlockType(block, THREAD_TYPE) && await pageOf(id) === page
+  }))
+  return linked.filter((_, i) => onPage[i])
 }
 
 /** An empty reply under the comment being answered (or under the root, for a

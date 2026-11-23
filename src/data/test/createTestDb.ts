@@ -34,10 +34,14 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PowerSyncDatabase, Schema } from '@powersync/node'
+import { PowerSyncDatabase } from '@powersync/node'
 import Database from 'better-sqlite3'
 import {
-  BLOCKS_SYNCED_RAW_TABLE,
+  createClientPowerSyncSchema,
+  initializeClientDatabase,
+  initializeClientSchema,
+} from '@/data/internals/initializeClientDatabase.js'
+import {
   CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,
@@ -52,29 +56,22 @@ import {
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL,
-  ensureBlockLocalColumns,
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
+  RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX,
   RECONCILE_RESCAN_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
-  backfillBlockAliasesIfEmpty,
-  ensureClientSchemaStateValueColumn,
-  ensureStagingNeedsApplyColumn,
-  backfillBlocksFtsIfEmpty,
-  backfillBlockTypesIfEmpty,
+  WORKSPACE_FIRST_SYNC_MARKER_PREFIX,
 } from '@/data/internals/clientSchema'
 import {
-  applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
 import {
   CREATE_WORKSPACES_TABLE_SQL,
   CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
-  WORKSPACES_RAW_TABLE,
-  WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 
@@ -92,24 +89,9 @@ export interface TestDb {
 
 const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
 
-const createTestSchema = (): Schema => {
-  const schema = new Schema({})
-  // Layout B (design doc §9.2): production maps only `blocks_synced` as a raw
-  // table — `blocks` is a plain local table the observer materializes into —
-  // so the harness mirrors that. Tests drive sync by writing `blocks_synced`
-  // and running the observer / `materializeStagingRows`.
-  schema.withRawTables({
-    blocks_synced: BLOCKS_SYNCED_RAW_TABLE,
-    workspaces: WORKSPACES_RAW_TABLE,
-    workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
-  })
-  return schema
-}
-
 const openTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
-  const schema = createTestSchema()
   const db = new PowerSyncDatabase({
-    schema,
+    schema: createClientPowerSyncSchema(),
     // One reader preserves WAL isolation; Vitest parallelizes test files.
     database: {dbFilename: 'test.db', dbLocation: dbDir, readWorkerCount: 1},
   })
@@ -119,62 +101,7 @@ const openTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
 
 const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   const db = await openTestDb(dbDir)
-  // PowerSync's RawTable mapping does not auto-create the local SQLite
-  // table — production runs the DDL itself in `repoProvider.ts`. We
-  // mirror that ordering: blocks table + indexes first, then the
-  // client-schema add-ons (auxiliary tables + triggers).
-  await db.execute(CREATE_BLOCKS_TABLE_SQL)
-  await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
-  await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
-  // No-op on a fresh table (CREATE carries the local columns) — mirrors the
-  // production upgrade ordering so the harness exercises the same path.
-  await ensureBlockLocalColumns(db)
-  await db.execute(CREATE_BLOCKS_BEING_EDITED_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
-  await dropStaleAnyFieldFormIndex(db)
-  await db.execute(CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL)
-  await db.execute(CREATE_WORKSPACES_TABLE_SQL)
-  await db.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
-  await db.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
-  for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
-    await db.execute(stmt)
-  }
-  // No-op against a fresh test DB (no blocks yet), but mirrors the
-  // production startup ordering so any test that pre-seeds rows
-  // before the harness opens still gets backfilled.
-  const backfillDb = {
-    execute: (sql: string, params?: unknown[]) => db.execute(sql, params as never[] | undefined),
-    // Forwards params, matching repoProvider's adapter. A shim that drops them
-    // silently binds NULL for any `?`, so a bootstrap probe never sees its own
-    // completion marker and re-runs its scan forever — and TypeScript can't
-    // catch it, since a narrower arity is always assignable.
-    getOptional: async <T,>(sql: string, params?: unknown[]) => {
-      const row = await db.getOptional<T>(sql, params as never[] | undefined)
-      return row ?? null
-    },
-  }
-  // Same position as production, and for the same reason — it reads a
-  // `client_schema_state` marker, which the loop above creates.
-  await ensureStagingNeedsApplyColumn({
-    ...backfillDb,
-    getAll: <T,>(sql: string) => db.getAll<T>(sql),
-  })
-  await ensureClientSchemaStateValueColumn(db)
-  await db.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
-  await backfillBlockAliasesIfEmpty(backfillDb)
-  await backfillBlockTypesIfEmpty(backfillDb)
-  await backfillBlocksFtsIfEmpty(backfillDb)
-  await applyLocalSchemaContributions(
-    backfillDb,
-    localSchemaContributions,
-  )
-
+  await initializeClientDatabase(db, 'node', {scheduleAnalyzeCheck: () => {}})
   return db
 }
 
@@ -187,6 +114,8 @@ const sleep = (ms: number): Promise<void> =>
 const getTemplateFingerprint = (): string => {
   const hash = createHash('sha256')
   hash.update(process.cwd())
+  hash.update(String(initializeClientSchema))
+  hash.update(String(initializeClientDatabase))
   hash.update('\0')
   hash.update(CREATE_BLOCKS_TABLE_SQL)
   hash.update('\0')
@@ -339,6 +268,7 @@ const RESET_CONTENT_TABLES = [
   'block_types',
   'blocks_fts', // virtual FTS table — DELETE clears its shadow tables safely
   'blocks_fts_rowids',
+  'blocks_fts_owed',
 ] as const
 const RESET_AUDIT_TABLES = ['row_events', 'command_events', 'ps_crud', 'ps_crud_rejected'] as const
 
@@ -376,15 +306,15 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
     // harness has none of these; we keep only the alias/type/FTS/ANALYZE
     // markers from template init.
     if (present.has('client_schema_state')) {
-      await tx.execute(
-        `DELETE FROM client_schema_state WHERE key LIKE '${REPROJECT_REF_MARKER_PREFIX}%'`,
-      )
-      await tx.execute(
-        `DELETE FROM client_schema_state WHERE key LIKE '${WORKSPACE_BACKFILL_MARKER_PREFIX}%'`,
-      )
-      await tx.execute(
-        `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
-      )
+      for (const prefix of [
+        REPROJECT_REF_MARKER_PREFIX,
+        WORKSPACE_BACKFILL_MARKER_PREFIX,
+        RECONCILE_RESCAN_MARKER_PREFIX,
+        RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX,
+        WORKSPACE_FIRST_SYNC_MARKER_PREFIX,
+      ]) {
+        await tx.execute(`DELETE FROM client_schema_state WHERE key LIKE '${prefix}%'`)
+      }
     }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id
     // expectations stay stable.

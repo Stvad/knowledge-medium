@@ -31,6 +31,8 @@ if (contributorId === undefined) {
 }
 
 const server = createGraphMcpServer({
+  // Never true: engine.ts pre-approves add_media for every run, which a local path would turn into a file read.
+  localMediaFiles: false,
   profile,
   contributorId,
   writeGuard: ({graph}) => createBlockedWikilinkWriteGuard(graph, blockedWikilinks),

@@ -33,6 +33,7 @@ import { waitFor } from '@/test/waitFor'
 import { valuePresetCoresFacet } from '@/data/facets'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
+  aliasesProp,
   presetConfigProp,
   blockTypeLabelProp,
   presetIdProp,
@@ -2664,5 +2665,25 @@ describe('reporting fan-out progress', () => {
     await rename(repo, FIELD_ID, 'state')
 
     expect(propertyDefinitionFanout()).toBeNull()
+  })
+})
+
+
+describe('named reference values across definition changes', () => {
+  it('retains names on rename and carries resolved identity into text', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition('ref')
+    await createHost(repo, 'named-target')
+    await repo.tx(tx => tx.setProperty('named-target', aliasesProp, ['Named target']), {scope: ChangeScope.BlockDefault})
+    const {valueRowId} = await seedProperty(repo, 'named-owner', 'status', 'named-target')
+    await repo.tx(tx => tx.update(valueRowId, {content: '[[Named target]]'}), {scope: ChangeScope.BlockDefault})
+    expect((await cell('named-owner')).status).toBe('named-target')
+    await repo.tx(tx => tx.setProperty(FIELD_ID, propertyNameProp, 'renamed'), {scope: ChangeScope.BlockDefault})
+    expect((await cell('named-owner')).renamed).toBe('named-target')
+    expect(await rowContent(valueRowId)).toBe('[[Named target]]')
+    await awaitDefinition(repo, 'renamed', 'ref')
+    await retype(repo, FIELD_ID, 'string')
+    expect((await cell('named-owner')).renamed).toBe('named-target')
+    expect(await rowContent(valueRowId)).toBe('named-target')
   })
 })

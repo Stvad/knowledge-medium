@@ -1,4 +1,4 @@
-import type { BlockData, Tx } from '@/data/api'
+import { CORE_BLOCK_DELETED_EVENT, type BlockData, type Tx } from '@/data/api'
 
 /** Soft-delete `rootId` and every descendant, INCLUDING property field/value
  *  rows (machinery traversal — docs/properties-as-blocks-migration.html §9: a bare delete strands live rows
@@ -43,3 +43,17 @@ export const deleteSubtreeInTx = async (
     if (onDelete && data !== null) onDelete(data)
   }
 }
+
+/** `deleteSubtreeInTx` as a deletion of the user's blocks: each block it
+ *  tombstones emits `CORE_BLOCK_DELETED_EVENT`, so same-tx consumers react with
+ *  the delete — the references plugin inlines a deleted block into the blocks
+ *  that link to it instead of leaving them dangling. Any delete that removes
+ *  what a user may link to goes through here; only a tidy-up whose links are
+ *  carried elsewhere (a fold, announced as a merge) uses the bare walk. A
+ *  tombstoned root is skipped: its `tx.delete` pins nothing to emit under. */
+export const deleteSubtreeAnnouncedInTx = (tx: Tx, rootId: string): Promise<void> =>
+  deleteSubtreeInTx(tx, rootId, block => {
+    if (!block.deleted) {
+      tx.emitEvent(CORE_BLOCK_DELETED_EVENT, {workspaceId: block.workspaceId, blockId: block.id})
+    }
+  })

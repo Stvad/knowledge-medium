@@ -2,7 +2,6 @@ import type { BlockData, BlockReference } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { srsNextReviewDateProp } from '@/plugins/srs-rescheduling/schema'
-import type { RoamTodoState } from '@/plugins/todo/schema'
 import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
 import { roamBlockId } from './blockIds'
 import { resolveDailyPage } from './ids'
@@ -43,7 +42,7 @@ import {
 } from './srsMarkers'
 import { parseRoamImportReferences } from './references'
 import { parseBlockRefs } from '@/plugins/references/referenceParser.js'
-import { extractRoamTodoMarker } from './todo'
+import { extractRoamTodoMarker, ROAM_TODO_STATE_PROP, type RoamTodoState } from './todo'
 
 export {
   ROAM_AUTHOR_PROP,
@@ -322,6 +321,8 @@ const buildBlock = (
       sourceField: srsNextReviewDateProp.name,
     })
   }
+
+  if (todo.todoState) data.properties[ROAM_TODO_STATE_PROP] = todo.todoState
 
   pushDescendant({data, roamUid: block.uid, todoState: todo.todoState, srsSchedule, roamMemo})
   return id

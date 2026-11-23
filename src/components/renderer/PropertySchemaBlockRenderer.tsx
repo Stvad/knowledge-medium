@@ -1,12 +1,9 @@
-/** Renderer for `'property-schema'` blocks. Wraps the default block
- *  layout (so the block keeps normal indentation, children, focus,
- *  drag, hover, etc.) and only replaces the content area with a
- *  schema editor — name input, preset picker, dispatched
- *  `preset.ConfigEditor`, and a delete button. See
- *  user-defined-properties.md §4a. */
+/** The default block layout with a schema editor as its content.
+ *  Inline references display the stored property name. */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { useBlockContext } from '@/context/block.js'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {readValuePresetRegistry, readValuePresets} from '@/data/valuePresetRegistry'
@@ -32,8 +29,9 @@ import {
   type BlockData,
   type Tx,
 } from '@/data/api'
-import { decodeRowProperty } from '@/data/rowProperty.js'
+import { decodeRowProperty, safeDecodeRowProperty } from '@/data/rowProperty.js'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata.js'
+import { effectiveHideInOutline } from '@/data/propertyDefinitionRegistry.js'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
@@ -248,6 +246,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       id: d.id,
       workspaceId: d.workspaceId,
       properties: d.properties,
+      deleted: d.deleted,
+      createdAt: d.createdAt,
     } : undefined,
   })
   const runtime = useAppRuntime()
@@ -259,16 +259,23 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   // delete-and-recreate, and the gate would be an async count the tx re-checks.
   const typeUnavailable = useCurrentTypeUnavailable(block)
 
-  // A materialized seed row is a kernel/plugin property *defined in code*.
-  // In v1 these are code-owned and unshadowable: their name, type, config,
-  // and lifecycle are fixed by the declaration. Editing the seed's own row
-  // has no legitimate meaning and silently corrupts the definition — e.g.
-  // switching its preset leaves a stored default the new codec can't decode,
-  // which drops the whole schema to metadata-only. Render read-only so the
-  // user sees what the property is without being able to mutate it. A viewer
-  // (repo read-only) is the same case for a different reason.
+  // Seed-backed schema identity, type, config, and lifecycle are code-owned;
+  // the outline preference is user-owned. A read-only repository locks both.
   const isSeedBacked = data ? isValidSeededDefinition(data) : false
   const readOnly = block.repo.isReadOnly || isSeedBacked
+  // `hideInOutline` can default from a code seed without being stored on the
+  // row. Subscribe through the existing schema registry event so the control
+  // follows both row edits and declaration/runtime changes.
+  const propertyDefinitions = useSyncExternalStore(
+    useCallback(cb => block.repo.onPropertySchemasChange(cb), [block.repo]),
+    () => block.repo.propertyDefinitions,
+    () => block.repo.propertyDefinitions,
+  )
+  const definitionMetadata = data ? parsePropertyDefinitionMetadata(data) : null
+  const storedHide = data?.properties[propertyHideInOutlineProp.name]
+  const effectiveHide = definitionMetadata && propertyDefinitions
+    ? effectiveHideInOutline(definitionMetadata, propertyDefinitions.seedsByKey)
+    : storedHide === true
 
 
   const facts = useMemo(() => definitionFacts(data?.properties), [data])
@@ -692,8 +699,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         <label className="flex items-center gap-2 text-sm" data-property-schema-hide-in-outline="true">
           <Checkbox
             id={`${block.id}-hide-in-outline`}
-            checked={data.properties[propertyHideInOutlineProp.name] === true}
-            disabled={readOnly}
+            checked={effectiveHide}
+            disabled={block.repo.isReadOnly}
             onCheckedChange={(checked) => {
               void block.set(propertyHideInOutlineProp, checked === true)
                 .catch(() => { showError('Could not change the outline setting') })
@@ -757,17 +764,24 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
 }
 PropertySchemaContentRenderer.displayName = 'PropertySchemaContentRenderer'
 
-/** Outer wrapper: keeps the default block layout (children,
- *  indentation, drag handle, focus chrome) and swaps in the
- *  schema-editing content renderer. */
+const PropertySchemaReferenceContent = ({block}: BlockRendererProps) => {
+  const name = useHandle(block, {
+    selector: row => row ? safeDecodeRowProperty(row, propertyNameProp) : '',
+  })
+  return <span>{name || 'Unnamed property'}</span>
+}
+
 export const PropertySchemaBlockRenderer: BlockRenderer = Object.assign(
-  (props: BlockRendererProps) => (
-    <DefaultBlockRenderer
-      {...props}
-      ContentRenderer={PropertySchemaContentRenderer}
-      EditContentRenderer={PropertySchemaContentRenderer}
-    />
-  ),
+  (props: BlockRendererProps) => {
+    const {isReference} = useBlockContext()
+    return (
+      <DefaultBlockRenderer
+        {...props}
+        ContentRenderer={isReference ? PropertySchemaReferenceContent : PropertySchemaContentRenderer}
+        EditContentRenderer={PropertySchemaContentRenderer}
+      />
+    )
+  },
   {
     canRender: ({block}: BlockRendererProps): boolean => {
       // useRenderer's chooser also calls useData(block) before

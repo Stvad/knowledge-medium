@@ -9,8 +9,8 @@ import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import { PROPS } from './config.js'
-import type { Graph, ReplyWriter } from './graph.js'
-import { formatRunUsage, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
+import type { Graph, MemoryScope, ReplyWriter } from './graph.js'
+import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
@@ -18,7 +18,8 @@ import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt 
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
 import { MEMORY_DIFF_LIMIT } from './graph.js'
-import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
+// Dispatch's km server (`./mcp.ts`) must never set `localMediaFiles`: this list pre-approves its add_media.
+import { KM_MCP_ALLOWED_TOOLS_WITHOUT_LOCAL_FILES as DISPATCH_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
 export interface ChannelEvent {
   content: string
@@ -78,6 +79,7 @@ const logPreview = (content: string | null | undefined): string => {
  *  it to `status:error`. Bounded and short so a genuinely-down bridge fails
  *  fast; retrying is safe because the reconcile is keyed (reconcileReply). */
 const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
+const THINKING_DEBOUNCE_MS = 3_000
 
 /** agent:session values are executor-scoped: codex thread ids are stored
  *  as `codex:<id>`, claude session ids bare (anything stored before
@@ -218,7 +220,7 @@ export const createEngine = (deps: EngineDeps) => {
       cwd: runner.cwd ?? os.homedir(),
       allowedTools: runner.executor === 'claude'
         ? [...new Set([
-          ...(mcpConfigPath ? KM_MCP_ALLOWED_TOOLS : []),
+          ...(mcpConfigPath ? DISPATCH_MCP_ALLOWED_TOOLS : []),
           ...config.defaultAllowedTools,
           ...runner.allowedTools,
         ])]
@@ -259,21 +261,25 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   /** The watcher's memory as the run starts: what its prompt shows, and the
-   *  entries the reply's account of memory changes is diffed against. */
-  const loadMemory = async (watcher: BacklinksWatcher) => {
+   *  entries the reply's account of memory changes is diffed against. The
+   *  shared notes are fixed here, so an embed the run adds or removes is
+   *  reported as that one note rather than as the notes it shows appearing
+   *  or going; an edit through an embed the run added goes unlisted. */
+  const loadMemory = async (watcher: BacklinksWatcher, mentionId: string) => {
     const blockId = await graph.ensureMemoryBlock(await targetPageId(watcher.target))
-    const [outline, entries] = await Promise.all([graph.memoryOutline(blockId), graph.memoryEntries(blockId)])
-    return {blockId, outline, entries}
+    const outline = await graph.memoryOutline(blockId)
+    const scope: MemoryScope = {memoryId: blockId, sharedRoots: outline.sharedRoots, mentionId}
+    return {blockId, outline: outline.text, scope, entries: await graph.memoryEntries(scope)}
   }
 
   /** What the run changed in its memory, for the reply; null when nothing. */
   const memoryChanges = async (
-    watcher: BacklinksWatcher, memory: {blockId: string, entries: MemoryEntry[] | null},
+    watcher: BacklinksWatcher, memory: {blockId: string, scope: MemoryScope, entries: MemoryEntry[] | null},
   ): Promise<string | null> => {
     try {
-      const after = await graph.memoryEntries(memory.blockId)
+      const after = await graph.memoryEntries(memory.scope)
       if (!memory.entries || !after) {
-        return `Memory has more than ${MEMORY_DIFF_LIMIT} blocks, so changes to it are not listed here.`
+        return `Memory and the shared notes it embeds have more than ${MEMORY_DIFF_LIMIT} blocks, so changes to them are not listed here.`
       }
       return renderMemoryChanges(diffMemory(memory.entries, after))
     } catch (error) {
@@ -427,7 +433,7 @@ export const createEngine = (deps: EngineDeps) => {
         return null
       })
       const memory = watcher.memory
-        ? await loadMemory(watcher).catch(error => {
+        ? await loadMemory(watcher, sourceId).catch(error => {
           log(`[${watcher.name}] no memory for ${sourceId}: ${errorMessage(error)}`)
           return null
         })
@@ -446,7 +452,7 @@ export const createEngine = (deps: EngineDeps) => {
         watcherName: watcher.name,
         target: watcher.target,
         thread: thread ?? undefined,
-        memory: memory ? {blockId: memory.blockId, outline: memory.outline} : undefined,
+        memory: memory ? {blockId: memory.blockId, outline: memory.outline, shared: memory.scope.sharedRoots.length > 0} : undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,
@@ -494,7 +500,13 @@ export const createEngine = (deps: EngineDeps) => {
         })
       }
 
-      let lastActivity: string | null = null
+      type Step = {label: string, startedAt: number}
+      const seenSteps = new Set<string>()
+      const pendingSteps = new Map<string, Step>()
+      const oldestPendingStep = () => pendingSteps.values().next().value
+      const writeActivity = (step: Step) => queueWrite(() => graph.setActivity(sourceId, step.label, step.startedAt))
+      let thinkingTimer: ReturnType<typeof setTimeout> | undefined
+      const cancelThinking = () => clearTimeout(thinkingTimer)
       let lastTextWriteMs = 0
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
@@ -503,9 +515,23 @@ export const createEngine = (deps: EngineDeps) => {
           : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
-          if (event.label === lastActivity) return
-          lastActivity = event.label
-          queueWrite(() => graph.setActivity(sourceId, event.label))
+          if (seenSteps.has(event.stepId)) return
+          seenSteps.add(event.stepId)
+          cancelThinking()
+          const step = {label: event.label, startedAt: now()}
+          pendingSteps.set(event.stepId, step)
+          if (oldestPendingStep() === step) writeActivity(step)
+        } else if (event.kind === 'activity-end') {
+          const previous = oldestPendingStep()
+          pendingSteps.delete(event.stepId)
+          const next = oldestPendingStep()
+          if (next === previous) return
+          if (next) {
+            writeActivity(next)
+          } else {
+            const endedAt = now()
+            thinkingTimer = setTimeout(() => writeActivity({label: THINKING_ACTIVITY, startedAt: endedAt}), THINKING_DEBOUNCE_MS)
+          }
         } else if (event.kind === 'text') {
           if (!watcher.streamReply) return
           lastStreamedText = event.text
@@ -543,7 +569,12 @@ export const createEngine = (deps: EngineDeps) => {
       }
 
       const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
-      const result = await runTask(runOptions)
+      let result: AgentRunResult
+      try {
+        result = await runTask(runOptions)
+      } finally {
+        cancelThinking()
+      }
       await writes // ordering guarantee: no progress write races the final one below
       // On every terminal reply, a failed or cancelled run's too: it may have
       // written its memory before it ended.
@@ -641,7 +672,16 @@ export const createEngine = (deps: EngineDeps) => {
     const tickStartMs = now()
     const targetId = await targetPageId(watcher.target)
 
-    const sources = (await graph.backlinkSources(targetId)).filter(source => isMention(source.sourceFields))
+    // A property value block is never a task's source: the property belongs
+    // to its owner, and while child-backed workspaces still dual-write the
+    // cell the owner carries the same reference under the property's name,
+    // where `isMention` decides it. Its own edge is plain content, so
+    // `isMention` would count an attribution value as a mention and every
+    // reply would summon the agent again. Once the cell goes, this must map
+    // a value block to its owner instead of dropping it.
+    const backlinks = await graph.backlinkSources(targetId)
+    const values = backlinks.length === 0 ? new Set<string>() : await graph.propertyValueBlocks(backlinks.map(source => source.id))
+    const sources = backlinks.filter(source => !values.has(source.id) && isMention(source.sourceFields))
 
     // First sight of this watcher: record the baseline and fire nothing.
     // Pointing a watcher at an established page must not claim (and

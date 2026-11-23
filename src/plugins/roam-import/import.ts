@@ -28,12 +28,11 @@ import {
 } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
+import type { RoamTodoState } from './todo'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes'
 import {
-  roamTodoStateProp,
   statusProp,
   TODO_TYPE,
-  type RoamTodoState,
   type TodoStatus,
 } from '@/plugins/todo/schema'
 import {
@@ -103,19 +102,16 @@ const DESCENDANT_CHUNK_SIZE = 5000
 interface RoamTypeMapping {
   readonly typeId: string
   readonly appOwnedInit: Readonly<Record<string, unknown>>
-  readonly sourceMirror: Readonly<Record<string, unknown>>
 }
 
 const TAG_TO_TYPE: Readonly<Record<RoamTodoState, RoamTypeMapping>> = {
   TODO: {
     typeId: TODO_TYPE,
     appOwnedInit: {[statusProp.name]: 'open' satisfies TodoStatus},
-    sourceMirror: {[roamTodoStateProp.name]: 'TODO' satisfies RoamTodoState},
   },
   DONE: {
     typeId: TODO_TYPE,
     appOwnedInit: {[statusProp.name]: 'done' satisfies TodoStatus},
-    sourceMirror: {[roamTodoStateProp.name]: 'DONE' satisfies RoamTodoState},
   },
 }
 
@@ -1338,10 +1334,6 @@ const applyMappedTypesInTx = async (
   const mapping = todoMappingFor(desc)
   if (mapping) {
     await repo.addTypeInTx(tx, desc.data.id, mapping.typeId, mapping.appOwnedInit, typeSnapshot)
-    const roamTodoState = mapping.sourceMirror[roamTodoStateProp.name] as RoamTodoState | undefined
-    if (roamTodoState) {
-      await tx.setProperty(desc.data.id, roamTodoStateProp, roamTodoState)
-    }
   }
 
   if (desc.srsSchedule || desc.roamMemo?.snapshots.length || desc.roamMemo?.archived) {

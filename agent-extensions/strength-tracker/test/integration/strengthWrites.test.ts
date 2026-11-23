@@ -102,7 +102,7 @@ const plan = (over: Partial<SessionPlan> = {}): SessionPlan =>
   ({day: '2026-07-24', session: 'A', lifts: [lift('Bench press')], ...over})
 
 const liveChildren = async (parentId: string, typeId: string): Promise<BlockData[]> =>
-  ((await repo.block(parentId).children.load()) ?? [])
+  ((await repo.query.children({id: parentId, propertyChildren: 'none'}).load()) ?? [])
     .filter(row => !row.deleted && hasBlockType(row, typeId))
 
 /** Start a session and tick its only set, so it is finishable. */
@@ -1309,12 +1309,12 @@ describe('an assessment', () => {
   it('stamps one dated block with a result per test, first on the page', async () => {
     const id = await startAssessment(repo, PAGE_ID, '2026-09-29', DEFAULT_CONFIG.assessments)
 
-    const page = await repo.block(PAGE_ID).children.load()
+    const page = await repo.query.children({id: PAGE_ID, propertyChildren: 'none'}).load()
     expect(page[0].id).toBe(id)
     expect(hasBlockType(page[0], ASSESSMENT_TYPE)).toBe(true)
     expect(repo.block(id).peekProperty(dateProp)).toEqual(dayToDate('2026-09-29'))
 
-    const results = await repo.block(id).children.load()
+    const results = await repo.query.children({id, propertyChildren: 'none'}).load()
     expect(results.map(r => r.content)).toEqual(DEFAULT_CONFIG.assessments.map(t => t.name))
     expect(results.every(r => hasBlockType(r, ASSESSMENT_RESULT_TYPE))).toBe(true)
     expect(results.map(r => r.properties[FIELD.measure])).toEqual(DEFAULT_CONFIG.assessments.map(t => t.measure))
@@ -1325,7 +1325,7 @@ describe('an assessment', () => {
       {name: 'Side plank hold', measure: 'seconds'},
       {name: 'Back-to-wall overhead reach', measure: 'pass-fail'},
     ])
-    const [plank, reach] = await repo.block(id).children.load()
+    const [plank, reach] = await repo.query.children({id, propertyChildren: 'none'}).load()
 
     await recordResult(repo, plank.id, {side: 'L', value: 40})
     await recordResult(repo, plank.id, {side: 'R', value: 52})
@@ -1346,7 +1346,7 @@ describe('an assessment', () => {
       {name: 'Side plank hold', measure: 'seconds'},
       {name: 'Back-to-wall overhead reach', measure: 'pass-fail'},
     ])
-    const [plank, reach] = await repo.block(id).children.load()
+    const [plank, reach] = await repo.query.children({id, propertyChildren: 'none'}).load()
     // Rendered as a pass/fail row; a peer turns it into a numeric one before the tap lands.
     await repo.tx(tx => tx.update(reach.id, {properties: {...reach.properties, [FIELD.measure]: 'cm'}}),
       {scope: ChangeScope.BlockDefault, description: 're-measure'})

@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope, propertyValue, seedProperty, seedType } from '@/data/api'
 import type { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { getBlockTypes } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -275,7 +275,7 @@ describe('getOrCreateTypedChild', () => {
     // existing sibling to have an opinion about.
     const existing = await record('already-there')
     const newest = await record('positioned', {position: {kind: 'first'}})
-    const children = await repo.block('parent').children.load()
+    const children = await childrenOf(repo, 'parent')
     expect(children?.map(child => child.id)).toEqual([newest.id, existing.id])
   })
 

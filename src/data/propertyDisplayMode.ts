@@ -7,9 +7,9 @@
  *   - `non-hidden` property rows whose definition is not hidden;
  *   - `none`       no property rows — the outline before properties-as-blocks.
  *
- * The mode is set at three levels, most specific wins: workspace (a per-user
- * preference) > panel > block. {@link resolvePropertyDisplayMode} is the ONE
- * place they combine; every reader asks it rather than layering levels itself.
+ * The mode is set at three levels, most specific wins: block > panel >
+ * workspace (a per-user preference). {@link resolvePropertyDisplayMode} is the
+ * ONE place they combine; every reader asks it rather than layering levels itself.
  * A cell-backed workspace is always `none`: its property children (minted by
  * the backfill) are not the source of truth and must not be edited in place.
  */
@@ -116,6 +116,15 @@ export const NO_PROPERTY_DISPLAY_SCOPE: PropertyDisplayScopeLevels = Object.free
   panel: 'inherit',
 })
 
+/** The scope a gesture, paste or mutator call carries, or
+ *  {@link NO_PROPERTY_DISPLAY_SCOPE} when it carries none (the bridge, a
+ *  global command, a plugin). Where those callers' absent scope becomes mode
+ *  `none`: the children readers (`visibleChildren.ts`) take a scope, never a
+ *  default. */
+export const displayScopeOf = (
+  carrier: {readonly propertyDisplay?: PropertyDisplayScopeLevels},
+): PropertyDisplayScopeLevels => carrier.propertyDisplay ?? NO_PROPERTY_DISPLAY_SCOPE
+
 /** The mode for one block in one panel. */
 export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): PropertyDisplayMode => {
   if (!levels.childBacked) return 'none'
@@ -123,6 +132,17 @@ export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): Prope
     if (setting !== 'inherit') return setting
   }
   return DEFAULT_PROPERTY_DISPLAY_MODE
+}
+
+const NEXT_PROPERTY_DISPLAY_MODE: Record<PropertyDisplayMode, PropertyDisplayMode> = {
+  none: 'non-hidden', 'non-hidden': 'all', all: 'none',
+}
+
+/** Cycle the effective mode, storing `inherit` when the scope already supplies
+ *  the target so later workspace or panel changes still reach this block. */
+export const nextBlockPropertyDisplaySetting = (levels: PropertyDisplayLevels): PropertyDisplaySetting => {
+  const mode = NEXT_PROPERTY_DISPLAY_MODE[resolvePropertyDisplayMode(levels)]
+  return mode === resolvePropertyDisplayMode({...levels, block: 'inherit'}) ? 'inherit' : mode
 }
 
 /** The child listing of `parent` that a surface with `scope` draws: the

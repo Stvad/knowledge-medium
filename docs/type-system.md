@@ -2,6 +2,8 @@
 
 > **Status:** unverified — a dated snapshot of design intent (last edited 2026-05-20). Last verified against code: not since this banner (2026-10-23). CODE + tests are authoritative.
 
+> **Roam todo update (2026-11-13):** The source-mirror write instructions below are superseded. `roam:todo-state` is now planned and reconciled as ordinary imported metadata (`src/plugins/roam-import/plan.ts`), not a todo-plugin seed or a separate typed write. Existing enum definitions and values remain readable.
+
 ## Goal
 
 Unify the ad-hoc `type` strings already in use (`extension`, `page`, `panel`, `journal`, `daily-note`) with the future need for user-modelable types (todo, task, project, person, note-with-fields...) under one principled abstraction. Types are facet contributions; a block can carry multiple types; named relationships ride on the existing references pipeline.

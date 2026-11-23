@@ -229,7 +229,10 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
     cr.context_kind AS context_kind,
     ${buildQualifiedBlockColumnsSql('group_block')}
   FROM group_context_refs cr
-  JOIN blocks group_block ON group_block.id = cr.context_id
+  -- CROSS JOIN for the same reason as refs above: left free, SQLite drives
+  -- from every live block in the workspace and builds an automatic index on
+  -- the context rows instead of looking up each group block by id.
+  CROSS JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
     -- A sync-applied edge (a parent or a reference) can reach another
     -- workspace's block; it is not a group of this one. The requested
@@ -245,7 +248,10 @@ export const SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL = `
     refs.source_id AS source_id,
     refs.source_field AS source_field
   FROM source_ids s
-  JOIN block_references refs ON refs.source_id = s.id
+  -- CROSS JOIN keeps the id list outer, probing the (source_id, ...) primary
+  -- key per source. Left free, the planner drives from the target's edges and
+  -- rescans the whole list per edge: quadratic in a hub's backlink count.
+  CROSS JOIN block_references refs ON refs.source_id = s.id
   WHERE refs.workspace_id = ?
     AND refs.target_id = ?
     AND refs.source_field != ''

@@ -25,7 +25,7 @@ import {
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
   CREATE_WORKSPACES_TABLE_SQL,
 } from '@/data/workspaceSchema'
-import { BATCH_SENTINEL_SQL, initializeClientSchema, type SchemaDb } from '@/data/repoProvider'
+import { BATCH_SENTINEL_SQL, initializeClientSchema, type SchemaDb } from '@/data/internals/initializeClientDatabase'
 
 // A recording fake standing in for PowerSync: the point is the ORDER of the
 // statement batches relative to the reads that gate them, and the completion
@@ -83,7 +83,7 @@ const norm = (sql: string) => sql.trim().replace(/;+$/, '')
 describe('initializeClientSchema', () => {
   it('runs every DDL statement, in batches that each end with the completion sentinel', async () => {
     const {db, calls} = fakeDb()
-    await initializeClientSchema(db)
+    await initializeClientSchema(db, 'web')
     const all = batches(calls)
     for (const batch of all) expect(batch.at(-1)).toBe(BATCH_SENTINEL_SQL)
     const executed = new Set(all.flat())
@@ -111,7 +111,7 @@ describe('initializeClientSchema', () => {
 
   it('orders each batch after the schema read that gates it', async () => {
     const {db, calls} = fakeDb()
-    await initializeClientSchema(db)
+    await initializeClientSchema(db, 'web')
     // The local-column migration reads `blocks`, which the first batch creates,
     // and the indexes over those columns come after the migration.
     const blocksTable = batchIndexOf(calls, CREATE_BLOCKS_TABLE_SQL)
@@ -146,7 +146,7 @@ describe('initializeClientSchema', () => {
 
   it('leaves triggers alone when sqlite_master matches, and recreates only a drifted one in a transaction', async () => {
     const settled = fakeDb()
-    await initializeClientSchema(settled.db)
+    await initializeClientSchema(settled.db, 'web')
     expect(settled.calls.filter(c => c.kind === 'tx')).toEqual([])
     expect(settled.calls.some(c => c.sql.includes('DROP TRIGGER'))).toBe(false)
 
@@ -154,7 +154,7 @@ describe('initializeClientSchema', () => {
     const drifted = new Map(CLIENT_SCHEMA_TRIGGER_CREATE_SQL)
     drifted.set(name, createSql.replace('BEGIN', 'BEGIN SELECT 1;'))
     const {db, calls} = fakeDb({storedTriggers: drifted})
-    await initializeClientSchema(db)
+    await initializeClientSchema(db, 'web')
     const tx = calls.filter(c => c.kind === 'tx')
     expect(tx).toHaveLength(1)
     const statements = tx[0].sql.split('\n;\n').map(stmt => stmt.trim())
@@ -163,6 +163,6 @@ describe('initializeClientSchema', () => {
 
   it('throws when a batch returns no sentinel row', async () => {
     const {db} = fakeDb({sentinelRows: 0})
-    await expect(initializeClientSchema(db)).rejects.toThrow(/did not run to completion/)
+    await expect(initializeClientSchema(db, 'web')).rejects.toThrow(/did not run to completion/)
   })
 })
