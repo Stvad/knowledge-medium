@@ -1,1 +1,0 @@
-export{_2 as contributorsDataExtension}from"../../../chunks/app-BkYyt4se.js";

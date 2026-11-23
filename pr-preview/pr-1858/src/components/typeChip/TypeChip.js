@@ -1,1 +1,0 @@
-export{TI as TypeChip}from"../../../chunks/app-BkYyt4se.js";

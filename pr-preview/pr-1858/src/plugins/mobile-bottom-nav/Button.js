@@ -1,1 +1,0 @@
-export{GO as MobileBottomNavButton}from"../../../chunks/app-BkYyt4se.js";

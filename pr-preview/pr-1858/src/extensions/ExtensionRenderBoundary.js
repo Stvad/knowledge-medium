@@ -1,1 +1,0 @@
-export{iU as ExtensionRenderBoundary}from"../../chunks/app-BkYyt4se.js";

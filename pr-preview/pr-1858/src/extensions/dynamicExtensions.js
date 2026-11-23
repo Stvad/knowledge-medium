@@ -1,1 +1,0 @@
-export{TR as dynamicExtensionsExtension}from"../../chunks/app-BkYyt4se.js";

@@ -1,1 +1,0 @@
-export{gI as BlockEmbed}from"../../../chunks/app-BkYyt4se.js";

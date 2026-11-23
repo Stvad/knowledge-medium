@@ -1,1 +1,0 @@
-export{aw as richPastePlugin}from"../../../chunks/app-BkYyt4se.js";

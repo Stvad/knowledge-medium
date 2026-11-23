@@ -1,1 +1,0 @@
-export{CF as CommandPaletteHeaderItem}from"../../../chunks/app-BkYyt4se.js";
