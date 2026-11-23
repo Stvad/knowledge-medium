@@ -11,7 +11,7 @@ import {
 import { focusBlock, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { NO_PROPERTY_DISPLAY_SCOPE, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { OutlineSurface } from '@/data/outlineSurface'
-import { getLastVisibleDescendant } from '@/utils/selection'
+import { lastDrawnStep } from '@/utils/selection'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
 import { showError, showInfo } from '@/utils/toast'
@@ -186,12 +186,13 @@ export class GridController {
   }
 
   /** The last block a row draws: its last note followed down as the outline
-   *  draws it (a table there ends the descent above its grid), or the row itself. */
-  async lastDrawnIn(rowId: string): Promise<Block> {
+   *  draws it, or the row itself. `crossed` when a table there ends what the
+   *  row draws: the block named is above that table's grid, not beside the next row. */
+  async lastDrawnIn(rowId: string): Promise<{block: Block; crossed: boolean}> {
     const lastNote = (await this.drawnChildIds(rowId)).at(-1)
     return lastNote === undefined
-      ? this.host.repo.block(rowId)
-      : getLastVisibleDescendant(this.host.repo.block(lastNote), this.rowSurface(rowId))
+      ? {block: this.host.repo.block(rowId), crossed: false}
+      : lastDrawnStep(this.host.repo.block(lastNote), this.rowSurface(rowId))
   }
 
   /** ArrowDown from a row's text: its first drawn child, edited from its
@@ -216,7 +217,7 @@ export class GridController {
   private async editLastDrawnAbove(row: number) {
     const aboveId = this.rowIds[row - 1]!
     const moves = this.cursorMoves
-    const target = await this.lastDrawnIn(aboveId)
+    const {block: target} = await this.lastDrawnIn(aboveId)
     if (this.cursorMoves !== moves) return
     if (target.id === aboveId) {
       this.focusRow(row - 1)

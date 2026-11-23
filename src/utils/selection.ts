@@ -225,7 +225,7 @@ export const blockAfterSubtreeRemoval = async (
  *  collapsed sibling). A surface's rows are not the walk's to name: one drawn
  *  last steps the descent back to the block drawn before it, as the sibling
  *  loop of `previousDrawnStep` does. */
-const lastDrawnStep = async (
+export const lastDrawnStep = async (
   block: Block,
   surface: OutlineSurface,
 ): Promise<{block: Block; crossed: boolean}> => {
