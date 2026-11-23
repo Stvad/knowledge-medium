@@ -1,0 +1,1 @@
+export{DQ as htmlDocumentDataExtension}from"../../../chunks/app-dSNNBz7H.js";

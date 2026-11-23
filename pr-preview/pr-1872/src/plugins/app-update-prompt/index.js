@@ -1,0 +1,1 @@
+export{ML as appUpdatePromptExtension}from"../../../chunks/app-dSNNBz7H.js";

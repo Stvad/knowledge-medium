@@ -1,0 +1,1 @@
+export{Wb as DATA_MODEL_GUIDE,Gb as dataModelGuide}from"../../../chunks/app-dSNNBz7H.js";

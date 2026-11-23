@@ -1,0 +1,1 @@
+export{Gtt as NAMES_IN_A_SENTENCE,Ktt as describeNames,qtt as firstFew}from"../../chunks/app-dSNNBz7H.js";

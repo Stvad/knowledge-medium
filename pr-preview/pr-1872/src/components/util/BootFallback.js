@@ -1,0 +1,1 @@
+export{UY as BootFallback}from"../../../chunks/app-dSNNBz7H.js";

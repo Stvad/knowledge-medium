@@ -1,0 +1,1 @@
+export{Odt as aliasSeatNamespacesInTx,kdt as resolveAliasSeatNamespaces}from"../../chunks/app-dSNNBz7H.js";

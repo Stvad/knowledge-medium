@@ -1,0 +1,1 @@
+export{Fm as quotedInFooterContribution}from"../../../chunks/app-dSNNBz7H.js";

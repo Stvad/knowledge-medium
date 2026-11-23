@@ -1,0 +1,1 @@
+export{bC as useIsReadOnly}from"../../chunks/app-dSNNBz7H.js";

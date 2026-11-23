@@ -1,0 +1,1 @@
+export{XK as useTypes}from"../../chunks/app-dSNNBz7H.js";

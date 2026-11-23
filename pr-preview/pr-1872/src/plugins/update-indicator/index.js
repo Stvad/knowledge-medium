@@ -1,0 +1,1 @@
+export{vx as updateIndicatorPlugin}from"../../../chunks/app-dSNNBz7H.js";

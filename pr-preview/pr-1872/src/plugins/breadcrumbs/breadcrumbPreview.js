@@ -1,0 +1,1 @@
+export{KO as getBreadcrumbContentPreview}from"../../../chunks/app-dSNNBz7H.js";
