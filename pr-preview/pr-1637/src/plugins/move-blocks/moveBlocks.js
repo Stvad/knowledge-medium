@@ -1,1 +1,0 @@
-export{VC as moveBlocksTo}from"../../../chunks/app-BEOC47df.js";

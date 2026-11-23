@@ -1,1 +1,0 @@
-export{E4 as pluginPrefsExtension,D4 as pluginUIStateExtension}from"../../chunks/app-BEOC47df.js";

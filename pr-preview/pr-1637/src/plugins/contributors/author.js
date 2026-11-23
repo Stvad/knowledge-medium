@@ -1,1 +1,0 @@
-export{py as authorIdOf}from"../../../chunks/app-BEOC47df.js";

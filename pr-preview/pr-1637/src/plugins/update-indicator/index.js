@@ -1,1 +1,0 @@
-export{Ox as updateIndicatorPlugin}from"../../../chunks/app-BEOC47df.js";

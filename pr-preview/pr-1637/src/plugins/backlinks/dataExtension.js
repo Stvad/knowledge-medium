@@ -1,1 +1,0 @@
-export{J2 as backlinksDataExtension}from"../../../chunks/app-BEOC47df.js";

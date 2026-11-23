@@ -1,1 +1,0 @@
-export{T_ as contributorsPlugin}from"../../../chunks/app-BEOC47df.js";

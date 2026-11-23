@@ -1,1 +1,0 @@
-export{Pgt as CHANGE_SCOPE_POLICIES,Fgt as ChangeScope,Igt as isChangeScope,Lgt as policyForScope,Rgt as scopeAllowedInReadOnly,zgt as scopeIsUndoable,Bgt as scopePoliciesEquivalent,Vgt as scopeUploadsToServer,Hgt as sourceForScope}from"../../../chunks/app-BEOC47df.js";

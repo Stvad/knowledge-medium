@@ -1,1 +1,0 @@
-export{KO as mobileBottomNavItemsFacet}from"../../../chunks/app-BEOC47df.js";

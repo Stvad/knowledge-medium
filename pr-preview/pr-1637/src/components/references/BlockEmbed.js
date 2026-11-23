@@ -1,1 +1,0 @@
-export{gI as BlockEmbed}from"../../../chunks/app-BEOC47df.js";

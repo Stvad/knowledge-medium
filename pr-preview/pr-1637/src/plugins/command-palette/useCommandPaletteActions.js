@@ -1,1 +1,0 @@
-export{QP as useCommandPaletteActions}from"../../../chunks/app-BEOC47df.js";

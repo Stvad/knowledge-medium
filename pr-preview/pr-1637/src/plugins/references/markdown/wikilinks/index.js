@@ -1,1 +1,0 @@
-export{US as wikilinkMarkdownExtension}from"../../../../../chunks/app-BEOC47df.js";

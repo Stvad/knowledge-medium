@@ -1,1 +1,0 @@
-export{YL as checkForAppUpdate,XL as registerServiceWorker}from"../chunks/app-BEOC47df.js";

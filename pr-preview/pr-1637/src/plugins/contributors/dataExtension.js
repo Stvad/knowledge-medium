@@ -1,1 +1,0 @@
-export{_2 as contributorsDataExtension}from"../../../chunks/app-BEOC47df.js";

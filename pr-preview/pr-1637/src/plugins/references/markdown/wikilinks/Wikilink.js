@@ -1,1 +1,0 @@
-export{WS as Wikilink}from"../../../../../chunks/app-BEOC47df.js";

@@ -1,1 +1,0 @@
-export{LA as PendingInvitations}from"../../../chunks/app-BEOC47df.js";

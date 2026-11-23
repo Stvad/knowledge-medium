@@ -1,1 +1,0 @@
-export{JC as BlockSearchPicker}from"../../chunks/app-BEOC47df.js";

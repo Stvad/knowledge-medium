@@ -1,1 +1,0 @@
-export{v$ as matchCharTrigger}from"../../chunks/app-BEOC47df.js";

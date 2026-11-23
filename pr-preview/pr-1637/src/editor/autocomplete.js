@@ -1,1 +1,0 @@
-export{CL as editorAutocompleteExtension}from"../../chunks/app-BEOC47df.js";

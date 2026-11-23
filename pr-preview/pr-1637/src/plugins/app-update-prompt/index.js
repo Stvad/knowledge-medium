@@ -1,1 +1,0 @@
-export{BL as appUpdatePromptExtension}from"../../../chunks/app-BEOC47df.js";
