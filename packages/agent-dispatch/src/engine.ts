@@ -37,7 +37,7 @@ export interface EngineDeps {
   /** EXPERIMENTAL: push an event into the ambient channel session
    *  (delivery: 'channel' watchers). Throws if unreachable. */
   deliverToChannel: (event: ChannelEvent) => Promise<void>
-  /** Generated --mcp-config path; null disables graph tools for runs. */
+  /** Generated --mcp-config path and the server names allowed in Claude events. Null disables graph tools. */
   mcpConfig: NonNullable<AgentRunOptions['mcpConfig']> | null
   log: (message: string) => void
   now?: () => number

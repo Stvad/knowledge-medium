@@ -1,3 +1,22 @@
+/**
+ * Billing posture — what a spawned run's tokens bill to, and how loudly
+ * the daemon says so at startup.
+ *
+ * The guard we care about is "don't SILENTLY bill usage-based API on an
+ * unattended daemon by accident". Two vectors:
+ *  - Ambient env credentials (ANTHROPIC_API_KEY, OPENAI_API_KEY, …): the
+ *    common accident — a key exported for something else leaks into the
+ *    child. Handled by scrubbing in `billing: 'subscription'` mode
+ *    (runner.ts / codexRunner.ts), and reported here by NAME so the log
+ *    confirms the scrub is doing something. (Never the value — these are
+ *    secrets.)
+ *  - Stored CLI credentials (including `codex login --with-api-key` in
+ *    auth.json) and Claude project/local or managed settings, including
+ *    an `apiKeyHelper`, live outside the child environment scrub. At the
+ *    default cwd of $HOME, Claude reads ~/.claude/settings.json as project
+ *    settings. Report these sources so operators can verify their login
+ *    and settings.
+ */
 import { BILLING_ENV_DENYLIST } from './runner.js'
 import { CODEX_BILLING_ENV_DENYLIST } from './codexRunner.js'
 import type { DaemonConfig } from './config.js'
@@ -37,9 +56,9 @@ export const reportBillingPosture = (config: DaemonConfig, env: NodeJS.ProcessEn
     lines.push('billing=api — credential env is NOT scrubbed; spawned runs may bill usage-based API/credits')
     if (present.length > 0) lines.push(`  usage-based credentials in env: ${present.join(', ')}`)
   } else {
-    lines.push('billing=subscription — scrubbing credential env for CLI plan login (OAuth)')
+    lines.push('billing=subscription — spawned runs bill your CLI plan login (OAuth)')
     if (present.length > 0) lines.push(`  scrubbing from run env: ${present.join(', ')}`)
-    lines.push('  note: Claude project/local settings (including apiKeyHelper) and a Codex API login in auth.json can still select usage-based billing')
+    lines.push('  note: stored Claude/Codex credentials and Claude settings (including apiKeyHelper) can still select usage-based billing — verify your login and settings if unsure')
   }
   return {mode: config.billing, present, lines}
 }

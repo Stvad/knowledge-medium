@@ -8,8 +8,8 @@
  * Opt into usage-based billing per config (`billing: 'api'`), which
  * skips the scrub (see config.ts + AgentRunOptions.billing).
  *
- * Each live run checks the CLI's startup tool and MCP inventories
- * before accepting progress or a result.
+ * Each live run checks Claude's startup inventory and the tools named
+ * in streamed and finalized tool requests.
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
@@ -163,38 +163,24 @@ export const envForBilling = (
   scrub: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv = scrubEnv,
 ): NodeJS.ProcessEnv => (billing === 'api' ? {...env} : scrub(env))
 
-// Claude accepts comma- and whitespace-separated names in a --tools value.
-// Separators inside permission arguments must never produce additional names.
-const splitToolNames = (value: string): string[] => {
-  const names: string[] = []
-  let depth = 0
-  let start = 0
-  for (let i = 0; i < value.length; i++) {
-    const char = value[i]
-    if (char === '(') depth++
-    else if (char === ')') depth = Math.max(0, depth - 1)
-    else if (depth === 0 && /[\s,]/.test(char)) {
-      if (i > start) names.push(value.slice(start, i))
-      start = i + 1
-    }
-  }
-  if (start < value.length) names.push(value.slice(start))
-  return names
-}
+const reportedToolNames = new Map([['Agent', 'Task'], ['KillShell', 'TaskStop']])
 
-/** A single permission rule such as Bash(git *) offers its built-in by name.
- *  MCP namespaces come exclusively from the generated server configuration. */
-const builtInToolsAllowed = (allowedTools: readonly string[]): string[] => [
-  ...new Set(allowedTools
-    .flatMap(rule => splitToolNames(rule.trim().replace(/\(.*\)$/, '')))
-    .filter(name => !name.startsWith('mcp__'))),
-]
+/** The CLI accepts permission rule names on argv and reports canonical names in JSONL. */
+const claudeToolSet = (options: AgentRunOptions) => {
+  const requested = [...new Set(options.allowedTools.map(rule => rule.trim().split('(', 1)[0])
+    .filter(name => !name.startsWith('mcp__')))]
+  return {
+    requested,
+    reported: requested.map(name => reportedToolNames.get(name) ?? name),
+    serverNames: options.mcpConfig?.serverNames ?? [],
+  }
+}
 
 /** The prompt is deliberately NOT an argv element — it goes via stdin
  *  (claude -p reads stdin when no prompt argument is given). Argv is
  *  visible to every local process in `ps` and capped by ARG_MAX; note
  *  content belongs in neither failure mode. */
-export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
+export const buildClaudeArgs = (options: AgentRunOptions, tools = claudeToolSet(options)): string[] => {
   // stream-json in print mode requires --verbose; --include-partial-
   // messages turns on the incremental stream_event lines (below) so
   // activity/text can be reported before the run finishes.
@@ -209,9 +195,8 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   // Settings scope and --tools reduce what Claude loads. Its init inventory
   // is checked independently because plugins can register additional tools.
   // Skill also needs slash commands enabled.
-  const offeredTools = builtInToolsAllowed(options.allowedTools)
-  if (!offeredTools.includes('Skill')) args.push('--disable-slash-commands')
-  args.push('--tools', offeredTools.join(','))
+  if (!tools.requested.includes('Skill')) args.push('--disable-slash-commands')
+  args.push('--tools', tools.requested.join(','))
   if (options.allowedTools.length > 0) {
     args.push('--allowedTools', options.allowedTools.join(','))
   }
@@ -220,28 +205,55 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
 
 const startupHookEvents: ReadonlySet<unknown> = new Set(['hook_started', 'hook_progress', 'hook_response'])
 
-interface ClaudeToolSet {
-  builtIns: readonly string[]
-  serverNames: readonly string[]
+type ClaudeToolSet = Pick<ReturnType<typeof claudeToolSet>, 'reported' | 'serverNames'>
+
+const unexpectedTool = (name: unknown, intended: ClaudeToolSet): string | null => {
+  if (typeof name !== 'string') return 'malformed tool name'
+  if (intended.reported.includes(name) || intended.serverNames.some(server => name.startsWith(`mcp__${server}__`))) return null
+  return `tool ${name}`
 }
 
 export const unexpectedClaudeInventory = (init: Record<string, unknown>, intended: ClaudeToolSet): string[] => {
   const extras: string[] = []
   if (!Array.isArray(init.tools)) extras.push('missing or malformed tools list')
   else for (const tool of init.tools) {
-    if (typeof tool !== 'string') extras.push('malformed tool name')
-    else if (!intended.builtIns.includes(tool) && !intended.serverNames.some(name => tool.startsWith(`mcp__${name}__`))) {
-      extras.push(`tool ${tool}`)
-    }
+    const extra = unexpectedTool(tool, intended)
+    if (extra) extras.push(extra)
   }
   if (!Array.isArray(init.mcp_servers)) extras.push('missing or malformed mcp_servers list')
   else for (const server of init.mcp_servers) {
-    if (!isRecord(server) || typeof server.name !== 'string') extras.push('malformed MCP server')
-    else if (!intended.serverNames.includes(server.name) || server.source !== 'dynamic') {
-      extras.push(`MCP server ${server.name} (expected a configured server with dynamic source)`)
+    if (!isRecord(server)) extras.push('malformed MCP server')
+    else if (!intended.serverNames.some(name => name === server.name) || server.source !== 'dynamic') {
+      extras.push(`MCP server ${JSON.stringify(server.name)} (expected a configured server with dynamic source)`)
     }
   }
+  if (!Array.isArray(init.plugins)) extras.push('missing or malformed plugins list')
+  else for (const plugin of init.plugins) {
+    const source = isRecord(plugin) ? plugin.source : undefined
+    if (typeof source !== 'string') extras.push('missing or malformed plugin source')
+    else if (!source.endsWith('@builtin')) extras.push(`plugin ${source}`)
+  }
   return extras
+}
+
+// Inspect every block before forwarding any activity from the same message.
+const unexpectedToolUse = (line: Record<string, unknown>, intended: ClaudeToolSet): string | null => {
+  let blocks: unknown[]
+  if (line.type === 'assistant') {
+    const message = line.message as {content?: unknown} | undefined
+    blocks = Array.isArray(message?.content) ? message.content : []
+  } else {
+    const event = line.event as {type?: unknown, content_block?: unknown} | undefined
+    if (line.type !== 'stream_event' || event?.type !== 'content_block_start') return null
+    blocks = [event.content_block]
+  }
+  for (const block of blocks) {
+    if (isRecord(block) && block.type === 'tool_use') {
+      const extra = unexpectedTool(block.name, intended)
+      if (extra) return `Unexpected Claude tool use: ${extra}`
+    }
+  }
+  return null
 }
 
 /** Humanize a tool name for the `activity` event — this is what a user
@@ -408,6 +420,9 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void, inte
       } else if (!initPassed) {
         refusal = 'Claude emitted a stream event before a validated init'
         return
+      } else {
+        refusal = unexpectedToolUse(parsed, intended)
+        if (refusal) return
       }
     }
     try {
@@ -448,11 +463,9 @@ export const runClaude = async (
   options: AgentRunOptions,
   spawnImpl?: SpawnImpl,
 ): Promise<AgentRunResult> => {
-  const args = buildClaudeArgs(options)
-  const parser = createStreamJsonParser(options.onEvent, {
-    builtIns: builtInToolsAllowed(options.allowedTools),
-    serverNames: options.mcpConfig?.serverNames ?? [],
-  })
+  const tools = claudeToolSet(options)
+  const args = buildClaudeArgs(options, tools)
+  const parser = createStreamJsonParser(options.onEvent, tools)
   const env = envForBilling(options.env ?? process.env, options.billing)
   // Convenience for daemons launched inside a desktop session. The init
   // check also covers plugin sources that this process does not know about.
@@ -475,7 +488,7 @@ export const runClaude = async (
   if (refusal) {
     return {
       ok: false, resultText: '', sessionId: null, exitCode, timedOut, raw: null, usage: null,
-      stderr: `Use a runner host without Claude plugins and start the daemon outside a desktop session. ${refusal}`,
+      stderr: `Check plugins and settings in runner.cwd (including the default home directory), managed settings, and tool names in this Claude CLI version. ${refusal}`,
     }
   }
   const ok = !timedOut && exitCode === 0 && parsed !== null && !parsed.isError
