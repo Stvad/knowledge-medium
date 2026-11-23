@@ -1,1 +1,1 @@
-export{YS as remarkBlockrefs}from"../../../../../chunks/app-S_SQ4JW-.js";
+export{YS as remarkBlockrefs}from"../../../../../chunks/app-BEOC47df.js";

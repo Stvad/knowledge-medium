@@ -1,1 +1,1 @@
-export{Ph as DraftEditor}from"../../chunks/app-S_SQ4JW-.js";
+export{Ph as DraftEditor}from"../../chunks/app-BEOC47df.js";

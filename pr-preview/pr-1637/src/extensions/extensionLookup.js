@@ -1,1 +1,1 @@
-export{Zv as findExtensionBlock}from"../../chunks/app-S_SQ4JW-.js";
+export{Zv as findExtensionBlock}from"../../chunks/app-BEOC47df.js";

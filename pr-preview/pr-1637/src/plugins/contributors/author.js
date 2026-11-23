@@ -1,1 +1,1 @@
-export{py as authorIdOf}from"../../../chunks/app-S_SQ4JW-.js";
+export{py as authorIdOf}from"../../../chunks/app-BEOC47df.js";

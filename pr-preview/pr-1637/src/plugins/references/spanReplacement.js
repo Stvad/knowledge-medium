@@ -1,1 +1,1 @@
-export{HZ as preferredSpanReplacement}from"../../../chunks/app-S_SQ4JW-.js";
+export{YZ as preferredSpanReplacement}from"../../../chunks/app-BEOC47df.js";

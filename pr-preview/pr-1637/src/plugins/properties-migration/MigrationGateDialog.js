@@ -1,1 +1,1 @@
-export{$c as MigrationGateDialog}from"../../../chunks/app-S_SQ4JW-.js";
+export{$c as MigrationGateDialog}from"../../../chunks/app-BEOC47df.js";

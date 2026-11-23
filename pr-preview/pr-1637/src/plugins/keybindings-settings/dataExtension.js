@@ -1,1 +1,1 @@
-export{Mr as keybindingsSettingsDataExtension}from"../../../chunks/app-S_SQ4JW-.js";
+export{Mr as keybindingsSettingsDataExtension}from"../../../chunks/app-BEOC47df.js";

@@ -1,1 +1,1 @@
-export{Ir as keybindingsSyncEffect,Lr as pushOverridesToRuntime,Rr as readOverridesFromBlock}from"../../../chunks/app-S_SQ4JW-.js";
+export{Ir as keybindingsSyncEffect,Lr as pushOverridesToRuntime,Rr as readOverridesFromBlock}from"../../../chunks/app-BEOC47df.js";

@@ -1,1 +1,1 @@
-export{kx as UpdateIndicator}from"../../../chunks/app-S_SQ4JW-.js";
+export{kx as UpdateIndicator}from"../../../chunks/app-BEOC47df.js";
