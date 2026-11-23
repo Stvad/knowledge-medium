@@ -1,1 +1,0 @@
-export{FR as defaultRegistry,IR as defaultRendererContributions,LR as defaultRenderersExtension}from"../../chunks/app-D-G6uRcc.js";

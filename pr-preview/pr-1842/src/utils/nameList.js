@@ -1,1 +1,0 @@
-export{Wet as NAMES_IN_A_SENTENCE,Get as describeNames,Ket as firstFew}from"../../chunks/app-D-G6uRcc.js";

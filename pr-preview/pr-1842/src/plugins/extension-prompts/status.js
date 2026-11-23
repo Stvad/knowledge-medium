@@ -1,1 +1,0 @@
-export{JI as extensionPromptDiagnosticContribution,YI as extensionPromptDiagnosticSource}from"../../../chunks/app-D-G6uRcc.js";

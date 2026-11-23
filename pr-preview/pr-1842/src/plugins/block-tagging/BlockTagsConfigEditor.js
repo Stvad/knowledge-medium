@@ -1,1 +1,0 @@
-export{Wf as BlockTagsConfigEditor}from"../../../chunks/app-D-G6uRcc.js";

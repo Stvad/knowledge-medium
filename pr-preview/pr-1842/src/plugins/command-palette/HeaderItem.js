@@ -1,1 +1,0 @@
-export{GP as CommandPaletteHeaderItem}from"../../../chunks/app-D-G6uRcc.js";

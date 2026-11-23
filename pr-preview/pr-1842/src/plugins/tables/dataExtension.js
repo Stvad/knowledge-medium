@@ -1,1 +1,0 @@
-export{yX as tablesDataExtension}from"../../../chunks/app-D-G6uRcc.js";

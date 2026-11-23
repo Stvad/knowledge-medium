@@ -1,1 +1,0 @@
-export{IQ as matchCharTrigger}from"../../chunks/app-D-G6uRcc.js";
