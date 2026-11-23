@@ -1,1 +1,1 @@
-export{aU as ExtensionRenderBoundary}from"../../chunks/app-CMicRqj9.js";
+export{nU as ExtensionRenderBoundary}from"../../chunks/app-DwwBizJm.js";

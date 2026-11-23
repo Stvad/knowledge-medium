@@ -1,1 +1,1 @@
-export{Det as ProcessorRunner}from"../../../chunks/app-CMicRqj9.js";
+export{Tet as ProcessorRunner}from"../../../chunks/app-DwwBizJm.js";

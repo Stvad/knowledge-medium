@@ -1,1 +1,1 @@
-export{pat as open,mat as seal}from"../../../chunks/app-CMicRqj9.js";
+export{fat as open,pat as seal}from"../../../chunks/app-DwwBizJm.js";

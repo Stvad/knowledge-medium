@@ -1,1 +1,1 @@
-export{Fs as queryResolver,Is as useQueryFieldId,Ls as useTableQuery}from"../../../../chunks/app-CMicRqj9.js";
+export{Ps as queryResolver,Fs as useQueryFieldId,Is as useTableQuery}from"../../../../chunks/app-DwwBizJm.js";

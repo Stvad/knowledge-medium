@@ -1,1 +1,1 @@
-export{IP as ShortcutHelpHeaderItem}from"../../../chunks/app-CMicRqj9.js";
+export{FP as ShortcutHelpHeaderItem}from"../../../chunks/app-DwwBizJm.js";

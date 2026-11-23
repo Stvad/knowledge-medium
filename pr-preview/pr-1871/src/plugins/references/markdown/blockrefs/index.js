@@ -1,1 +1,1 @@
-export{LS as blockrefMarkdownExtension}from"../../../../../chunks/app-CMicRqj9.js";
+export{IS as blockrefMarkdownExtension}from"../../../../../chunks/app-DwwBizJm.js";
