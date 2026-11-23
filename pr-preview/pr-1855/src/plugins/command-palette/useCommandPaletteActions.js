@@ -1,1 +1,0 @@
-export{XP as useCommandPaletteActions}from"../../../chunks/app-r96OwSVe.js";

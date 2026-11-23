@@ -1,1 +1,0 @@
-export{Gm as quotedInFooterContribution}from"../../../chunks/app-r96OwSVe.js";

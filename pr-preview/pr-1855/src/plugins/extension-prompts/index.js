@@ -1,1 +1,0 @@
-export{wL as ExtensionPromptSurface,TL as extensionPromptsExtension}from"../../../chunks/app-r96OwSVe.js";

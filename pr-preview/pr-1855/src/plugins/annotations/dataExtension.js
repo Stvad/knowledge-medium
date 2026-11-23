@@ -1,1 +1,0 @@
-export{d1 as annotationsDataExtension}from"../../../chunks/app-r96OwSVe.js";

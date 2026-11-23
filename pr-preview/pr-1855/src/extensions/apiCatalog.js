@@ -1,1 +1,0 @@
-export{wv as extensionApiCatalog,Tv as extensionApiRuntimeExports}from"../../chunks/app-r96OwSVe.js";

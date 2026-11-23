@@ -1,1 +1,0 @@
-export{F2 as characterCounterDataExtension}from"../../../chunks/app-r96OwSVe.js";

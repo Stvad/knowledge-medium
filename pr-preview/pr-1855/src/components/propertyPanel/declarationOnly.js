@@ -1,1 +1,0 @@
-export{ZW as declarationOnlyDefinitionForName,QW as declarationOnlyStatusText}from"../../../chunks/app-r96OwSVe.js";

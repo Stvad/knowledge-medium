@@ -1,1 +1,0 @@
-export{CI as TypeChip}from"../../../chunks/app-r96OwSVe.js";

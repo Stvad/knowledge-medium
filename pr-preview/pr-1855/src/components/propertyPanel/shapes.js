@@ -1,1 +1,0 @@
-export{rY as propertyShapeLabel}from"../../../chunks/app-r96OwSVe.js";

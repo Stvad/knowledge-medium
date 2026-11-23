@@ -1,1 +1,0 @@
-export{vc as propertyRowsPlugin}from"../../../chunks/app-r96OwSVe.js";

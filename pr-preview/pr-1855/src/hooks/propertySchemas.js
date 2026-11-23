@@ -1,1 +1,0 @@
-export{$J as usePropertySchemas}from"../../chunks/app-r96OwSVe.js";

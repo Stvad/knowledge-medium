@@ -1,1 +1,0 @@
-export{h2 as contributorsDataExtension}from"../../../chunks/app-r96OwSVe.js";

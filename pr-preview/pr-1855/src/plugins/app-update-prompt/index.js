@@ -1,1 +1,0 @@
-export{RL as appUpdatePromptExtension}from"../../../chunks/app-r96OwSVe.js";

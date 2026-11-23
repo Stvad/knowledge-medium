@@ -1,1 +1,0 @@
-export{Zc as propertiesMigrationPlugin}from"../../../chunks/app-r96OwSVe.js";

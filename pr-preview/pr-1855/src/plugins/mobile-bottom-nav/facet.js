@@ -1,1 +1,0 @@
-export{WO as mobileBottomNavItemsFacet}from"../../../chunks/app-r96OwSVe.js";

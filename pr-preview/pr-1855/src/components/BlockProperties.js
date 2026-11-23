@@ -1,1 +1,0 @@
-export{SW as BlockProperties}from"../../chunks/app-r96OwSVe.js";

@@ -1,1 +1,0 @@
-export{g$ as matchCharTrigger}from"../../chunks/app-r96OwSVe.js";
