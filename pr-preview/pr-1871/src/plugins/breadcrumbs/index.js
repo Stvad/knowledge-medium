@@ -1,1 +1,1 @@
-export{JO as BreadcrumbList,GO as BreadcrumbRenderer,qO as Breadcrumbs,WO as PromotableBreadcrumbList,VO as breadcrumbRendererContribution,HO as breadcrumbsPlugin,KO as getBreadcrumbContentPreview,UO as usePromotableBreadcrumb}from"../../../chunks/app-DwwBizJm.js";
+export{JO as BreadcrumbList,GO as BreadcrumbRenderer,qO as Breadcrumbs,WO as PromotableBreadcrumbList,VO as breadcrumbRendererContribution,HO as breadcrumbsPlugin,KO as getBreadcrumbContentPreview,UO as usePromotableBreadcrumb}from"../../../chunks/app-D2ZBbwx9.js";
