@@ -1,1 +1,1 @@
-export{Wdt as deriveWorkspaceIdNamespace}from"../../../chunks/app-D_RF6T6W.js";
+export{nft as deriveWorkspaceIdNamespace}from"../../../chunks/app-DmX0OER4.js";
