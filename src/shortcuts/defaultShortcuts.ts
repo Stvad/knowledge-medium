@@ -17,7 +17,9 @@ import { ChangeScope } from '@/data/api'
 import { holdsSource } from '@/data/blockTypes'
 import { bothShowIndependentChildren, mergeUp } from './blockMergeGesture'
 import {
+  nextDrawnStep,
   nextVisibleBlock,
+  previousDrawnStep,
   previousVisibleBlock,
   getRootBlock,
   blockAfterSubtreeRemoval,
@@ -1072,11 +1074,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Refuse if there is none, or if the previous visible block is the
         // panel's top-level block (don't merge into the page/view header).
         // Refuse to merge the scope root upward — its previous visible
-        // block lives outside the surface.
+        // block lives outside the surface — and across a nested surface,
+        // whose rows, not the block past them, are drawn above this one.
         if (!canMergeUp) return
 
-        const prevVisible = await previousVisibleBlock(block, surface)
-        if (!prevVisible || prevVisible.id === surface.scopeRootId) return
+        const {block: prevVisible, crossed} = await previousDrawnStep(block, surface)
+        if (!prevVisible || crossed || prevVisible.id === surface.scopeRootId) return
 
         await mergeUp({
           from: block, into: prevVisible, liveContent, surface, uiStateBlock,
@@ -1122,8 +1125,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Backspace would merge upward if the caret sat at its start
         // (previousVisibleBlock and nextVisibleBlock are inverses over the
         // visible-order list, so this stays at the same boundary).
-        const nextVisible = await nextVisibleBlock(block, surface)
-        if (!nextVisible) return
+        const {block: nextVisible, crossed} = await nextDrawnStep(block, surface)
+        if (!nextVisible || crossed) return
 
         await Promise.all([block.load(), nextVisible.load()])
         if (holdsSource(block) || holdsSource(nextVisible)) return

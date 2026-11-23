@@ -5,7 +5,7 @@ import { merge } from '@/data/mutators'
 import { focusBlock } from '@/data/properties'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import type { ListingSurface } from '@/data/childrenView'
-import { visibleChildIds } from '@/data/visibleChildren'
+import { drawnChildrenOf } from '@/data/visibleChildren'
 import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi'
 
 /** The Roam rule both merge gestures refuse on: `into` and `from` each show
@@ -18,10 +18,10 @@ export const bothShowIndependentChildren = async (
   {into, from}: {into: Block; from: Block},
   surface: ListingSurface,
 ): Promise<boolean> => {
-  const fromChildIds = await visibleChildIds(from, surface)
-  if (fromChildIds.length === 0) return false
-  const intoChildIds = await visibleChildIds(into, surface)
-  return intoChildIds.some(childId => childId !== from.id)
+  const fromChildren = await drawnChildrenOf(from, surface)
+  if (fromChildren.length === 0) return false
+  const intoChildren = await drawnChildrenOf(into, surface)
+  return intoChildren.some(child => child !== from.id)
 }
 
 export interface MergeUpGesture {

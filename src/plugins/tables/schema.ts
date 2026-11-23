@@ -5,8 +5,9 @@
  *  content; its block content is an optional header label. A hidden column
  *  stays a column block, keeping its place and width, so showing it again
  *  restores it. */
-import { ChangeScope, seedProperty, seedType } from '@/data/api'
+import { ChangeScope, seedProperty, seedType, type TypedBlockQuery } from '@/data/api'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 
 export const TABLE_TYPE = 'tables:table'
 export const VIEW_TYPE = 'tables:view'
@@ -51,6 +52,10 @@ export const queryProp = seedProperty({
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
+
+/** The query property's definition id in this workspace, once its seed is materialized. */
+export const queryFieldIdOf = (definitions: PropertyDefinitionRegistrySnapshot | null): string | undefined =>
+  definitions?.definitionsByName.get(queryProp.name)?.[0]?.fieldId
 
 /** On a view: the column its rows sort by. Unset means no sort. */
 export const viewSortColumnProp = seedProperty({
@@ -104,3 +109,12 @@ export const TABLE_TYPE_SEEDS = [
     properties: [columnFieldProp, columnWidthProp, columnHiddenProp],
   }),
 ]
+
+/** No row source returns a table's own configuration, this table's or another's. */
+export const NOT_TABLE_MACHINERY = {types: [VIEW_TYPE, COLUMN_TYPE]}
+
+/** The host's own children in outline order, less field and value rows and
+ *  its table configuration: the rows without a query, what lies outside it with one. */
+export const hostChildrenQuery = (hostId: string, workspaceId: string): TypedBlockQuery => ({
+  workspaceId, propertyChildren: 'none', parentId: hostId, order: 'outline', exclude: [NOT_TABLE_MACHINERY],
+})

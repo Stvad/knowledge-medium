@@ -29,6 +29,20 @@ export interface ChildrenViewContext {
   surface: ListingSurface
 }
 
+/** A surface a layout draws among a parent's children, in a render scope of
+ *  its own (a grid, a board). Its rows are not the parent's to list: a walk of
+ *  the parent's surface passes over it, and a step that does says so
+ *  (`DrawnStep.crossed`). */
+export interface NestedSurface {
+  readonly kind: 'nested-surface'
+  readonly renderScopeId: string
+}
+
+/** One thing drawn under a parent: a block in the parent's own render scope, or a nested surface. */
+export type DrawnChild = string | NestedSurface
+
+export const isNestedSurface = (child: DrawnChild): child is NestedSurface => typeof child !== 'string'
+
 /** The children a surface draws under one parent, in drawn order. A layout
  *  that draws a block's children its own way declares the same list here, so
  *  every gesture that walks "as drawn" (the outline walkers, the edit policy,
@@ -39,7 +53,7 @@ export interface ChildrenViewContext {
  *  is not a child of would be stepped into and never back out of. */
 export interface ChildrenView {
   id: string
-  read(ctx: ChildrenViewContext): LoaderHandle<string[]>
+  read(ctx: ChildrenViewContext): LoaderHandle<string[]> | LoaderHandle<DrawnChild[]>
 }
 
 export type ChildrenViewContribution = (ctx: ChildrenViewContext) => OptionalContributionResult<ChildrenView>

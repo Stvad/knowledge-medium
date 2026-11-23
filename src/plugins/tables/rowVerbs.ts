@@ -110,11 +110,12 @@ const carriesValues = (row: Block): boolean => {
 }
 
 /** Backspace at the start of a row's text: the row merges into the last block
- *  drawn above it (`GridController.lastDrawnIn`: a nested table's title, never
- *  its machinery), by the outline's own merge and its refusals. An empty row
- *  with nothing under it is deleted. Refused: under a query (the row above may
- *  be on another page), and for a row carrying property values (they would
- *  fold into another block). */
+ *  drawn above it (`GridController.lastDrawnIn`), by the outline's own merge
+ *  and its refusals. An empty row with nothing under it is deleted. Refused:
+ *  under a query (the row above may be on another page), for a row carrying
+ *  property values (they would fold into another block), and across a nested
+ *  table ending the row above, as the outline's Backspace refuses across a
+ *  nested surface. */
 const mergeRowUp: ActionDispatchDecorator = {
   actionId: 'delete_empty_block_cm',
   context: EDITING,
@@ -134,7 +135,7 @@ const mergeRowUp: ActionDispatchDecorator = {
       showInfo('This row has values: merge it in the outline.')
       return
     }
-    const into = await grid.lastDrawnIn(aboveId)
+    const {block: into, crossed} = await grid.lastDrawnIn(aboveId)
     const intoData = into.peek()
     const liveContent = editorView!.state.doc.toString()
     // Every child counts, collapsed or not: deleting the row would delete them.
@@ -147,6 +148,7 @@ const mergeRowUp: ActionDispatchDecorator = {
       })
       return
     }
+    if (crossed) return
     await mergeUp({from: block, into, liveContent, surface: listingSurfaceOf(editDeps), uiStateBlock})
   },
 }
