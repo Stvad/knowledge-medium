@@ -1,0 +1,1 @@
+export{o7 as applySyncInvalidation}from"../../../../chunks/app-SsbO_flp.js";

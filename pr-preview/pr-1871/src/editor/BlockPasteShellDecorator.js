@@ -1,0 +1,1 @@
+export{fL as BlockPasteShellDecorator,pL as blockPasteShellDecorator}from"../../chunks/app-SsbO_flp.js";

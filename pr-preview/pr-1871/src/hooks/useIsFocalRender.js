@@ -1,0 +1,1 @@
+export{uW as isFocalRender,dW as useIsFocalRender}from"../../chunks/app-SsbO_flp.js";

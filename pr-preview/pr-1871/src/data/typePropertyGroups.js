@@ -1,0 +1,1 @@
+export{JW as typePropertyGroups}from"../../chunks/app-SsbO_flp.js";

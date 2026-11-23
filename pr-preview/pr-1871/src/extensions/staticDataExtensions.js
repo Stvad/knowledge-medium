@@ -1,0 +1,1 @@
+export{eZ as staticDataExtensions}from"../../chunks/app-SsbO_flp.js";

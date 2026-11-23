@@ -1,0 +1,1 @@
+export{pY as floatingAnchorFromRect,mY as useAnchoredFloating}from"../../../chunks/app-SsbO_flp.js";

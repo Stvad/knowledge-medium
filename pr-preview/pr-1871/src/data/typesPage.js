@@ -1,0 +1,1 @@
+export{Fdt as getOrCreateTypesPage,Idt as typesPageBlockId,Ldt as typesPageSpec}from"../../chunks/app-SsbO_flp.js";

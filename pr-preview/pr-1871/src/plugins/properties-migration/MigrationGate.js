@@ -1,0 +1,1 @@
+export{Uc as MigrationGate}from"../../../chunks/app-SsbO_flp.js";

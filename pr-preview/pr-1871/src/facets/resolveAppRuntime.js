@@ -1,0 +1,1 @@
+export{SR as resolveAppRuntime,CR as resolveAppRuntimeSync}from"../../chunks/app-SsbO_flp.js";

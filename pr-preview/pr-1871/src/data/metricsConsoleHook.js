@@ -1,0 +1,1 @@
+export{LI as ensureMetricsConsoleHook}from"../../chunks/app-SsbO_flp.js";

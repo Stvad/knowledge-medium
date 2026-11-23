@@ -1,0 +1,1 @@
+export{qV as defaultPasteDecision,JV as pasteDecisionVerb}from"../../chunks/app-SsbO_flp.js";

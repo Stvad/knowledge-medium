@@ -1,0 +1,1 @@
+export{Tet as Block,Eet as requireLoadedBlock}from"../../chunks/app-SsbO_flp.js";

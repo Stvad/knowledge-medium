@@ -1,0 +1,1 @@
+export{WO as usePromotableBreadcrumb}from"../../../chunks/app-SsbO_flp.js";

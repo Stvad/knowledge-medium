@@ -1,0 +1,1 @@
+export{IS as remarkWikilinks}from"../../../../../chunks/app-SsbO_flp.js";

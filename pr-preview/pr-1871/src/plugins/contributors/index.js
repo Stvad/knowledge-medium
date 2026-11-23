@@ -1,0 +1,1 @@
+export{g_ as contributorsPlugin}from"../../../chunks/app-SsbO_flp.js";

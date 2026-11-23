@@ -1,0 +1,1 @@
+export{TU as BLOCK_TITLE_TEXT_CLASS,EU as useBlockTitleTextClass}from"../../../chunks/app-SsbO_flp.js";

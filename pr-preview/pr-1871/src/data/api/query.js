@@ -1,0 +1,1 @@
+export{Cgt as defineQuery}from"../../../chunks/app-SsbO_flp.js";

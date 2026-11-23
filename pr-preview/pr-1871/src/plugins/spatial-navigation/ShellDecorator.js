@@ -1,0 +1,1 @@
+export{SD as SpatialNavigationShellDecorator}from"../../../chunks/app-SsbO_flp.js";

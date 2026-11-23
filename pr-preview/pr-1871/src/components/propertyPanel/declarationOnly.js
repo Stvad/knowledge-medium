@@ -1,0 +1,1 @@
+export{QW as declarationOnlyDefinitionForName,$W as declarationOnlyStatusText}from"../../../chunks/app-SsbO_flp.js";

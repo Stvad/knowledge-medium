@@ -1,0 +1,1 @@
+export{ZC as richPasteDecisionContribution}from"../../../chunks/app-SsbO_flp.js";

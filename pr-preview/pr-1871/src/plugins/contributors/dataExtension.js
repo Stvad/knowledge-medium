@@ -1,0 +1,1 @@
+export{q2 as contributorsDataExtension}from"../../../chunks/app-SsbO_flp.js";

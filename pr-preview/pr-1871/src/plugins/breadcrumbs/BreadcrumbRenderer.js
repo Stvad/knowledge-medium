@@ -1,0 +1,1 @@
+export{KO as BreadcrumbRenderer}from"../../../chunks/app-SsbO_flp.js";

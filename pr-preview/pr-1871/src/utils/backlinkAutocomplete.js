@@ -1,0 +1,1 @@
+export{KS as backlinkCompletionSource,qS as createBacklinkAutocomplete,JS as isInsideBacklinkBrackets}from"../../chunks/app-SsbO_flp.js";

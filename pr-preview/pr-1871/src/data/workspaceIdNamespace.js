@@ -1,0 +1,1 @@
+export{Udt as DerivedIdNamespaceUnavailableError,Wdt as derivedIdNamespaceInTx,Gdt as resolveDerivedIdNamespace}from"../../chunks/app-SsbO_flp.js";

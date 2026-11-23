@@ -1,0 +1,1 @@
+export{sR as gestureBindingDescriptor,cR as matchesGestureEvent}from"../../chunks/app-SsbO_flp.js";

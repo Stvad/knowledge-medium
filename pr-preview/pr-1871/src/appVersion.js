@@ -1,0 +1,1 @@
+export{dd as appVersion}from"../chunks/app-SsbO_flp.js";

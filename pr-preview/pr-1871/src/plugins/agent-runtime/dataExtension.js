@@ -1,0 +1,1 @@
+export{k6 as agentRuntimeDataExtension}from"../../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{Xq as isIOS,Zq as isMacPlatform}from"../../chunks/app-SsbO_flp.js";

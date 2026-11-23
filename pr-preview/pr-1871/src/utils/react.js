@@ -1,0 +1,1 @@
+export{dV as useIsMobile,fV as usePointerCoarse}from"../../chunks/app-SsbO_flp.js";

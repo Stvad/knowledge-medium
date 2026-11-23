@@ -1,0 +1,1 @@
+export{FS as Wikilink}from"../../../../../chunks/app-SsbO_flp.js";

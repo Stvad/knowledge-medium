@@ -1,0 +1,1 @@
+export{_x as blockInfoPlugin}from"../../../chunks/app-SsbO_flp.js";

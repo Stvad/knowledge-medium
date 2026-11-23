@@ -1,0 +1,1 @@
+export{YO as BreadcrumbList}from"../../../chunks/app-SsbO_flp.js";

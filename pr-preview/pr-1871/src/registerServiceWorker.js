@@ -1,0 +1,1 @@
+export{JL as checkForAppUpdate,YL as registerServiceWorker}from"../chunks/app-SsbO_flp.js";

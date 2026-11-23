@@ -1,0 +1,1 @@
+export{J3 as aliasDataExtension}from"../../../chunks/app-SsbO_flp.js";

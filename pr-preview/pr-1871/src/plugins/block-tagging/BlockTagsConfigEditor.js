@@ -1,0 +1,1 @@
+export{ap as BlockTagsConfigEditor}from"../../../chunks/app-SsbO_flp.js";

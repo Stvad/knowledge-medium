@@ -1,0 +1,1 @@
+export{zL as appUpdatePromptExtension}from"../../../chunks/app-SsbO_flp.js";

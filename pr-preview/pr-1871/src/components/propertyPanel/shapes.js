@@ -1,0 +1,1 @@
+export{yY as propertyShapeLabel}from"../../../chunks/app-SsbO_flp.js";

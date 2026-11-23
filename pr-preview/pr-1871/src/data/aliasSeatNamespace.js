@@ -1,0 +1,1 @@
+export{Vdt as aliasSeatNamespacesInTx,Hdt as resolveAliasSeatNamespaces}from"../../chunks/app-SsbO_flp.js";

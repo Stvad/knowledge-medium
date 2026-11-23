@@ -1,0 +1,1 @@
+export{v8 as instrumentAdapter}from"../../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{xft as deriveWorkspaceIdNamespace}from"../../../chunks/app-SsbO_flp.js";

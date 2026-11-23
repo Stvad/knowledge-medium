@@ -1,0 +1,1 @@
+export{w1 as dailyNotesLocalSchema}from"../../../chunks/app-SsbO_flp.js";

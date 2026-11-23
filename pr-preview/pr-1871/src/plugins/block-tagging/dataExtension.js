@@ -1,0 +1,1 @@
+export{sp as blockTaggingDataExtension}from"../../../chunks/app-SsbO_flp.js";

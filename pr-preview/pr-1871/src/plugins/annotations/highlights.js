@@ -1,0 +1,1 @@
+export{o_ as HIGHLIGHT_CLASS,s_ as MOVED_HIGHLIGHT_CLASS,c_ as SUGGESTION_HIGHLIGHT_CLASS,l_ as coveringStyle,u_ as highlightClasses,d_ as highlightField,f_ as highlightRange,p_ as highlightRanges,m_ as threadHighlights,h_ as threadHighlightsContribution}from"../../../chunks/app-SsbO_flp.js";

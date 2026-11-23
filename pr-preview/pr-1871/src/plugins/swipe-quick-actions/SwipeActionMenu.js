@@ -1,0 +1,1 @@
+export{DF as SwipeActionMenu}from"../../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{lR as dispatchPointerAction,uR as setPointerActionDispatcher}from"../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{Wc as MigrationGateDialog}from"../../../chunks/app-SsbO_flp.js";

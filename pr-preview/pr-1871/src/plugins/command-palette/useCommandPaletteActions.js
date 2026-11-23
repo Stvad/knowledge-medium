@@ -1,0 +1,1 @@
+export{GP as useCommandPaletteActions}from"../../../chunks/app-SsbO_flp.js";

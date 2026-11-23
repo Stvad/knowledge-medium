@@ -1,0 +1,1 @@
+export{PS as wikilinkMarkdownExtension}from"../../../../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{XO as plainOutlinerPlugin}from"../../../chunks/app-SsbO_flp.js";

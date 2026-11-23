@@ -1,0 +1,1 @@
+export{TQ as preferredSpanReplacement}from"../../../chunks/app-SsbO_flp.js";

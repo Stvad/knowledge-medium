@@ -1,0 +1,1 @@
+export{J$ as matchCharTrigger}from"../../chunks/app-SsbO_flp.js";

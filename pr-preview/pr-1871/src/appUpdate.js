@@ -1,0 +1,1 @@
+export{XL as appUpdate,ZL as useAppUpdateAvailable}from"../chunks/app-SsbO_flp.js";

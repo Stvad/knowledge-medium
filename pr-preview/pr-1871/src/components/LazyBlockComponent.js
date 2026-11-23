@@ -1,0 +1,1 @@
+export{az as LazyBlockComponent}from"../../chunks/app-SsbO_flp.js";

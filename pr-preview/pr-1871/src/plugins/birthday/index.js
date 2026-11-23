@@ -1,0 +1,1 @@
+export{ir as birthdayPlugin}from"../../../chunks/app-SsbO_flp.js";

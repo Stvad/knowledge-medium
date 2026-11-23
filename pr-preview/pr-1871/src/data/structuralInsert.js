@@ -1,0 +1,1 @@
+export{JI as insertDrawnBlock}from"../../chunks/app-SsbO_flp.js";

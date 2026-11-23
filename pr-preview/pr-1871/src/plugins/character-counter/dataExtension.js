@@ -1,0 +1,1 @@
+export{p4 as characterCounterDataExtension}from"../../../chunks/app-SsbO_flp.js";

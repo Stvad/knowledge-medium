@@ -1,0 +1,1 @@
+export{vv as extensionsOverridesProp,yv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-SsbO_flp.js";

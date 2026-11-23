@@ -1,0 +1,1 @@
+export{Ks as openQueryValue}from"../../../../chunks/app-SsbO_flp.js";

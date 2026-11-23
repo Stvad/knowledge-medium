@@ -1,0 +1,1 @@
+export{iy as authorIdOf}from"../../../chunks/app-SsbO_flp.js";

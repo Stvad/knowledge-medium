@@ -1,0 +1,1 @@
+export{ip as blockTagsConfigUi}from"../../../chunks/app-SsbO_flp.js";

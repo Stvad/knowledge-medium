@@ -1,0 +1,1 @@
+export{lc as propertyRowsPlugin}from"../../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{hY as usePropertySchemas}from"../../chunks/app-SsbO_flp.js";

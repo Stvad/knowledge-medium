@@ -1,0 +1,1 @@
+export{uH as useShortcutSurfaceActivations}from"../../chunks/app-SsbO_flp.js";

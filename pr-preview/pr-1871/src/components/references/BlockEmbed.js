@@ -1,0 +1,1 @@
+export{lI as BlockEmbed}from"../../../chunks/app-SsbO_flp.js";

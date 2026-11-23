@@ -1,0 +1,1 @@
+export{in as typeChipsDecoratorContribution}from"../../../chunks/app-SsbO_flp.js";

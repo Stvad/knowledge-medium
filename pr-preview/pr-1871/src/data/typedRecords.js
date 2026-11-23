@@ -1,0 +1,1 @@
+export{X0 as adoptTypedBlock,Z0 as createTypedChild,Xft as derivedBlockId,Q0 as getOrCreateTypedChild}from"../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{NM as Label}from"../../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{Hc as propertiesMigrationPlugin}from"../../../chunks/app-SsbO_flp.js";

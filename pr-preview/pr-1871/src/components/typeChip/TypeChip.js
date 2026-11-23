@@ -1,0 +1,1 @@
+export{vI as TypeChip}from"../../../chunks/app-SsbO_flp.js";

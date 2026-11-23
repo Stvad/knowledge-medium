@@ -1,0 +1,1 @@
+export{Im as quotedInFooterContribution}from"../../../chunks/app-SsbO_flp.js";

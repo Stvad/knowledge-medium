@@ -1,0 +1,1 @@
+export{CW as BlockProperties}from"../../chunks/app-SsbO_flp.js";

@@ -1,0 +1,1 @@
+export{wR as dynamicExtensionsExtension}from"../../chunks/app-SsbO_flp.js";

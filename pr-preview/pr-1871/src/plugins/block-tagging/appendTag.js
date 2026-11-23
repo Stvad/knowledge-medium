@@ -1,0 +1,1 @@
+export{tp as appendTagToBlocks,np as appendTagToContent}from"../../../chunks/app-SsbO_flp.js";

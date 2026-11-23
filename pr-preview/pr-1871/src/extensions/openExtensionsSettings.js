@@ -1,0 +1,1 @@
+export{Pz as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,Fz as openExtensionsSettings}from"../../chunks/app-SsbO_flp.js";

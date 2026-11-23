@@ -1,0 +1,1 @@
+export{Jl as dataIntegrityPlugin}from"../../../chunks/app-SsbO_flp.js";

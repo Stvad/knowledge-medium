@@ -1,0 +1,1 @@
+export{S5 as FacetBridge}from"../../chunks/app-SsbO_flp.js";

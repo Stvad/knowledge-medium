@@ -1,0 +1,1 @@
+export{Bx as inlineBacklinksApplies}from"../../../../chunks/app-SsbO_flp.js";

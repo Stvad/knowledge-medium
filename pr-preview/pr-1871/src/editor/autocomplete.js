@@ -1,0 +1,1 @@
+export{SL as editorAutocompleteExtension}from"../../chunks/app-SsbO_flp.js";

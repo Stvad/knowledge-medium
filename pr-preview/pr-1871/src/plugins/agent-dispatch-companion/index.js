@@ -1,0 +1,1 @@
+export{T_ as agentDispatchCompanionPlugin}from"../../../chunks/app-SsbO_flp.js";
