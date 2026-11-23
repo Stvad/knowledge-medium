@@ -60,6 +60,16 @@ describe('buildClaudeArgs', () => {
       .toEqual(['--tools', 'WebSearch,Bash,Read'])
   })
 
+  it('separates grouped built-ins and excludes MCP rules after trimming', () => {
+    const args = buildClaudeArgs({...baseOptions, allowedTools: ['Read,Edit Grep', ' mcp__extra__marker ', 'Bash(git *) ']})
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,Edit,Grep,Bash')
+  })
+
+  it('keeps separators inside a permission argument out of the built-in inventory', () => {
+    const args = buildClaudeArgs({...baseOptions, allowedTools: ['Bash(echo (nested), Write ignored),Read']})
+    expect(args[args.indexOf('--tools') + 1]).toBe('Bash(echo (nested), Write ignored),Read')
+  })
+
   it('keeps skills and slash commands off while the allow list leaves Skill out', () => {
     const args = buildClaudeArgs({...baseOptions, allowedTools: ['mcp__km__search', 'Bash', 'Read']})
     expect(args).toContain('--disable-slash-commands')
@@ -379,14 +389,9 @@ describe('runClaude', () => {
     ['assistant with hook subtype before init', {type: 'assistant', subtype: 'hook_started'}, 'before'],
     ['task before init', {type: 'system', subtype: 'task_started'}, 'before'],
     ['result before init', {type: 'result', result: 'early'}, 'before'],
-  ])('kills the child on %s and discards buffered output', async (_, first, detail) => {
+  ])('kills the child on %s before another event arrives', async (_, first, detail) => {
     const events: RunEvent[] = []
-    const script = [
-      streamResult(first as Record<string, unknown>),
-      streamResult({...cleanInit, session_id: 'late'}),
-      streamResult({type: 'result', result: 'late success'}),
-      'setInterval(() => {}, 60_000)',
-    ].join('; ')
+    const script = streamResult(first as Record<string, unknown>) + '; setInterval(() => {}, 60_000)'
     const result = await runClaude({...baseOptions, onEvent: event => events.push(event)}, fakeProcess(script))
     expect(result).toMatchObject({ok: false, timedOut: false, exitCode: null, resultText: '', sessionId: null})
     expect(result.stderr).toContain(detail)
@@ -411,12 +416,42 @@ describe('runClaude', () => {
     expect(result.stderr).toContain('Unrequested')
   })
 
-  it('discards an unterminated session event buffered after a refusal', () => {
+  it('discards complete and unterminated events buffered after a refusal', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event), {builtIns: [], serverNames: []})
-    parser.feed(JSON.stringify({...cleanInit, tools: ['Extra']}) + '\n' + JSON.stringify({...cleanInit, session_id: 'late'}))
+    parser.feed([
+      JSON.stringify({...cleanInit, tools: ['Extra']}),
+      JSON.stringify({...cleanInit, session_id: 'late'}),
+      JSON.stringify({...cleanInit, session_id: 'unterminated'}),
+    ].join('\n'))
     parser.finish()
     expect(events).toEqual([])
+  })
+
+  it('keeps recovery instructions visible when the engine truncates a long error', async () => {
+    const tools = Array.from({length: 100}, (_, index) => `Unexpected${index}`)
+    const result = await runClaude(baseOptions, fakeProcess(streamResult({...cleanInit, tools})))
+    expect(result.stderr.slice(0, 500)).toContain('outside a desktop session')
+    expect(result.stderr.slice(0, 500)).toContain('Unexpected0')
+    expect(result.stderr).toContain('Unexpected99')
+  })
+
+  it('refuses an unconfigured MCP tool even when a spaced rule names it', async () => {
+    const name = 'mcp__extra__marker'
+    const result = await runClaude({...baseOptions, allowedTools: [` ${name} `]}, fakeProcess(
+      streamResult({...cleanInit, tools: [name]}),
+    ))
+    expect(result.stderr).toContain(name)
+  })
+
+  it('admits grouped built-ins without admitting tool names from inside arguments', async () => {
+    const options = {...baseOptions, allowedTools: ['Read,Edit', 'Bash(echo (nested), Write ignored),Grep']}
+    const run = (tools: string[]) => runClaude(options, fakeProcess([
+      streamResult({...cleanInit, tools}),
+      streamResult({type: 'result', result: 'ok'}),
+    ].join('; ')))
+    expect((await run(['Read', 'Edit', 'Grep'])).ok).toBe(true)
+    expect((await run(['Write'])).stderr).toContain('tool Write')
   })
 
   it('accepts the server names passed with the generated config', async () => {

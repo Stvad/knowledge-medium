@@ -163,12 +163,31 @@ export const envForBilling = (
   scrub: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv = scrubEnv,
 ): NodeJS.ProcessEnv => (billing === 'api' ? {...env} : scrub(env))
 
-/** The built-in tools among `allowedTools`, by name: `Bash(git *)` allows
- *  Bash. MCP tools come from --mcp-config, not --tools. */
+// Claude accepts comma- and whitespace-separated names in a --tools value.
+// Separators inside permission arguments must never produce additional names.
+const splitToolNames = (value: string): string[] => {
+  const names: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]
+    if (char === '(') depth++
+    else if (char === ')') depth = Math.max(0, depth - 1)
+    else if (depth === 0 && /[\s,]/.test(char)) {
+      if (i > start) names.push(value.slice(start, i))
+      start = i + 1
+    }
+  }
+  if (start < value.length) names.push(value.slice(start))
+  return names
+}
+
+/** A single permission rule such as Bash(git *) offers its built-in by name.
+ *  MCP namespaces come exclusively from the generated server configuration. */
 const builtInToolsAllowed = (allowedTools: readonly string[]): string[] => [
   ...new Set(allowedTools
-    .filter(rule => !rule.startsWith('mcp__'))
-    .map(rule => rule.replace(/\(.*\)$/, '').trim())),
+    .flatMap(rule => splitToolNames(rule.trim().replace(/\(.*\)$/, '')))
+    .filter(name => !name.startsWith('mcp__'))),
 ]
 
 /** The prompt is deliberately NOT an argv element — it goes via stdin
@@ -456,7 +475,7 @@ export const runClaude = async (
   if (refusal) {
     return {
       ok: false, resultText: '', sessionId: null, exitCode, timedOut, raw: null, usage: null,
-      stderr: `${refusal}. Run on a host without Claude plugins and start the daemon outside a desktop session.`,
+      stderr: `Use a runner host without Claude plugins and start the daemon outside a desktop session. ${refusal}`,
     }
   }
   const ok = !timedOut && exitCode === 0 && parsed !== null && !parsed.isError
