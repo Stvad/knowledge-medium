@@ -580,7 +580,7 @@ describe('property scans wait before each page', () => {
     }
   }, 20_000)
 
-  // The audit over both paged scans took 0.75 s when rerun alone under load.
+  // This test took 0.75 s when rerun alone under load.
   it('gets the audit\'s hook, as does the divergence scan', async () => {
     await setMode('children')
     await insertRaw(...pageAndOneOwners())
