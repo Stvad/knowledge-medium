@@ -46,6 +46,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       text: memory.map(entry => `- ${entry.content} ^${entry.id}`).join('\n'),
       sharedRoots: [],
     })),
+    memoryComparisonRoots: vi.fn(async () => []),
     memoryEntries: vi.fn(async () => memory.map(entry => ({...entry}))),
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>

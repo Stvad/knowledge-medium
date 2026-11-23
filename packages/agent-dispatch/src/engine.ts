@@ -266,8 +266,12 @@ export const createEngine = (deps: EngineDeps) => {
    *  as a change to the embed itself. */
   const loadMemory = async (watcher: BacklinksWatcher, mentionId: string) => {
     const blockId = await graph.ensureMemoryBlock(await targetPageId(watcher.target))
-    const index = await graph.memoryIndex(blockId)
-    const scope: MemoryScope = {memoryId: blockId, sharedRoots: index.sharedRoots, mentionId}
+    const [index, comparisonRoots] = await Promise.all([
+      graph.memoryIndex(blockId),
+      graph.memoryComparisonRoots(blockId),
+    ])
+    const sharedRoots = [...new Set([...index.sharedRoots, ...comparisonRoots])]
+    const scope: MemoryScope = {memoryId: blockId, sharedRoots, mentionId}
     return {blockId, index: index.text, scope, entries: await graph.memoryEntries(scope)}
   }
 
@@ -451,7 +455,7 @@ export const createEngine = (deps: EngineDeps) => {
         watcherName: watcher.name,
         target: watcher.target,
         thread: thread ?? undefined,
-        memory: memory ? {blockId: memory.blockId, index: memory.index, shared: memory.scope.sharedRoots.length > 0} : undefined,
+        memory: memory ? {blockId: memory.blockId, index: memory.index} : undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,

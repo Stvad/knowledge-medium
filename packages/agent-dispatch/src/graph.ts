@@ -15,7 +15,7 @@ export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 /** The blocks a run's account of memory changes compares, fixed when it starts. */
 export interface MemoryScope {
   memoryId: string
-  /** Shared roots returned by the memory index. */
+  /** Shared roots found by the index and the comparison outline. */
   sharedRoots: readonly string[]
   /** The mention: under it go the daemon's reply and its progress note,
    *  which can sit inside a shared note or the memory and are not memory. */
@@ -128,6 +128,16 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     return created
   }
 
+  /** The comparison retains the outline's depth and row bounds so it covers
+   *  embeds inside details even though the prompt omits their content. */
+  const memoryComparisonRoots = async (memoryId: string): Promise<string[]> => {
+    const outline = await client.runCommand({
+      type: 'view-outline', ref: memoryId, depth: 3, limit: 50, format: 'json',
+    }) as {rows?: Array<{id?: unknown, embedded?: unknown}>}
+    if (!Array.isArray(outline?.rows)) throw new Error('view-outline returned no rows')
+    return outline.rows.flatMap(row => row.embedded && typeof row.id === 'string' ? [row.id] : [])
+  }
+
   /** Every block below the memory block and every block of the shared notes,
    *  field rows aside, in the memory block's workspace only and without the
    *  mention's subtree, for the reply's account of what a run changed; null
@@ -180,6 +190,7 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     ensureMemoryBlock,
     propertyValueBlocks,
     memoryIndex: bridgeGraph.memoryIndex,
+    memoryComparisonRoots,
     memoryEntries,
     resolvePageId: bridgeGraph.resolvePageId,
     backlinkSources: bridgeGraph.backlinkSources,

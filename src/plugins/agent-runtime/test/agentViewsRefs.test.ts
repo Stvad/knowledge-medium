@@ -174,6 +174,29 @@ describe('memory index', () => {
     expect(index.text).toBe(`- !((${foreign})) !((${ROOT})) !((${NOTE_1})) ^${LOCAL}`)
   })
 
+  it('uses the same summaries for a shared page indexed directly or through an embed', async () => {
+    await createAll([
+      {id: ROOT, content: 'Memory'},
+      {id: LOCAL, parentId: ROOT, content: '![[Guide]]'},
+      {id: SHARED_PAGE, content: 'Guide', properties: {alias: ['Guide']}},
+      {id: NOTE_1, parentId: SHARED_PAGE, content: `!((${SHARED}))`},
+      {id: NOTE_2, parentId: SHARED_PAGE, content: '![[Extra]]'},
+      {id: MEMORY_B, content: 'Extra', properties: {alias: ['Extra']}},
+      {id: MEMORY_A, parentId: MEMORY_B, content: '![[Guide]]'},
+      {id: SHARED, content: 'Actual summary'},
+    ])
+    const expected = `- [shared] Actual summary ^${SHARED}`
+    expect(await view({type: 'view-memory-index', ref: ROOT})).toBe(expected)
+    expect(await view({type: 'view-memory-index', ref: SHARED_PAGE})).toBe(expected)
+  })
+
+  it('prints a legacy note ID losslessly on one line', async () => {
+    await createAll([{id: ROOT, content: 'Index'}, {id: LOCAL, parentId: ROOT, content: 'Summary'}])
+    const id = 'old  id\nsecond line'
+    await sharedDb.db.execute('UPDATE blocks SET id = ? WHERE id = ?', [id, LOCAL])
+    expect(await view({type: 'view-memory-index', ref: ROOT})).toBe(`- Summary id=${JSON.stringify(id)}`)
+  })
+
   it('spends the budget on unique notes in outline order and identifies every omission', async () => {
     const notes = Array.from({length: 102}, (_, i) => ({id: uuid('c0000001', i), content: `Summary ${i}`, parentId: ROOT}))
     await createAll([

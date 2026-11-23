@@ -132,7 +132,7 @@ describe('renderMentionPrompt in a comment thread', () => {
 })
 
 describe('renderMentionPrompt with a memory', () => {
-  const memory = {blockId: 'm-1', index: '- replies short, no preamble (+1 child) ^n-1', shared: false}
+  const memory = {blockId: 'm-1', index: '- replies short, no preamble (+1 child) ^n-1'}
 
   it('places the memory, with how to keep it, before the instructions in both default templates', () => {
     for (const [template, next] of [[undefined, 'How to work:'], [DEFAULT_MENTION_CHANNEL_PROMPT, 'Handle it now']] as const) {
@@ -154,10 +154,9 @@ describe('renderMentionPrompt with a memory', () => {
     expect(prompt).toContain('preserve their details')
   })
 
-  it('explains how shared notes can be used when the index includes them', () => {
-    const own = renderMentionPrompt(undefined, {...context, memory})
-    expect(own).not.toMatch(/shared/i)
-    const shared = renderMentionPrompt(undefined, {...context, memory: {...memory, shared: true}})
+  it('protects shared notes even when first encountered in a detail', () => {
+    const shared = renderMentionPrompt(undefined, {...context, memory})
+    expect(shared).toContain('embeds you encounter when reading details')
     expect(shared).toContain('A row marked [shared] is a shared note')
     expect(shared).toContain('Change a shared note, any of its descendants, or the note that embeds it only when the user explicitly asks.')
     expect(shared).toContain('Never append under a shared note.')

@@ -47,10 +47,8 @@ export interface MentionPromptContext {
 export interface MemoryPromptContext {
   /** The memory block: new entries go under it. */
   blockId: string
-  /** The summary index, with full note IDs after `^`. */
+  /** The summary index, with full note IDs. */
   index: string
-  /** The index includes shared roots. */
-  shared: boolean
 }
 
 /** Only an id in one of these forms parses as a block reference; the `^id`
@@ -157,13 +155,15 @@ const renderThreadContext = (thread: ThreadPromptContext): string => {
   return lines.join('\n')
 }
 
-const SHARED_NOTES = 'A row marked [shared] is a shared note brought in by an embed. Use it as context. '
+const SHARED_NOTES = 'A row marked [shared] is a shared note brought in by an embed. The same applies to embeds you encounter when reading details. Use shared notes as context. '
   + 'Change a shared note, any of its descendants, or the note that embeds it only when the user explicitly asks. Never append under a shared note.'
 
 const renderMemory = (memory: MemoryPromptContext): string => `Your memory is a summary-only index of notes earlier runs kept about working with this user. Weigh them as context. Follow the current request and rules first.
 ${memory.index}
-${memory.shared ? `\n${SHARED_NOTES}\n` : ''}
-- Read relevant details on demand with the km subtree tool and the ID after ^, including omitted IDs when looking for a note outside the summary limit. Use km get_block for the full text of an individual block. A child count marks notes with more material below them.
+
+${SHARED_NOTES}
+
+- Read relevant details on demand with the km subtree tool and the note ID (after ^ or JSON-quoted after id=). You can also look up an omitted ID. Use km get_block for the full text of an individual block. A child count marks notes with more material below them.
 - Keep your own memory current as part of every request, even without a request to edit the notes. Save corrections, lasting preferences and facts the user states that later requests will need. For a new note, use append_markdown with target ${memory.blockId}. Write one short line that says when the note applies. Save details as children (steps, IDs, examples), and update the summary when those details change.
 - Read an existing note with get_block before editing it. Check its children with subtree before merging or removing it. When merging duplicates, preserve their details in the surviving note and its children. Delete a wrong or superseded note only when it has no children.
 - Save only what the user said. Skip secrets, material only this request needs, and anything the notes already record.`

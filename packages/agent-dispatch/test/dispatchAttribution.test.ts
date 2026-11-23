@@ -411,6 +411,21 @@ describe('watcher memory against the app', () => {
       expect(await replyText()).toContain('Memory changed during this run: saved [New shared summary]')
     })
 
+    it('reports edits to a shared note embedded in a detail omitted from the index', async () => {
+      const memoryId = await seedMemory('Writing preferences')
+      const [noteId] = await repo.query['core.childIds']({id: memoryId}).load()
+      await repo.mutate.createChild({parentId: noteId, content: `!((${SHARED}))`})
+      await repo.awaitProcessors()
+
+      const prompts = await runOnce(async () => {
+        await edit(SHARED, 'Cite primary sources.')
+      })
+      expect(prompts[0]).toContain(`Writing preferences (+1 child) ^${noteId}`)
+      expect(prompts[0]).not.toContain(SHARED)
+      expect(await replyText()).toContain(`Memory changed during this run: edited [Cite primary sources.](((${SHARED})))`)
+      expect(prompts[0]).toContain('embeds you encounter when reading details')
+    })
+
     it('reports no edit to a block of another workspace: embedded, under the memory block or under a shared note', async () => {
       await repo.tx(async tx => {
         await tx.create({id: FOREIGN, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Elsewhere.'})
