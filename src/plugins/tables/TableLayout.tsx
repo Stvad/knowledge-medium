@@ -29,6 +29,7 @@ import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, u
 import { useTableQuery, type TableQuery } from './query/source'
 import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
 import { TABLE_CHILDREN_ATTRIBUTE, TABLE_HOST_ATTRIBUTE } from './navigation'
+import { notesAmong } from './childrenViews'
 import { registerGrid, tableRenderScopeId } from './registry'
 import { useIsMobile } from '@/utils/react'
 import { GUTTER_VARIABLE, MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, gutterWidth } from './rowGutter'
@@ -231,20 +232,17 @@ const ValueCellBody = ({row, column, schema, editable}: {
 
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
-/** A row's children as the outline draws them, minus what the grid draws
- *  elsewhere in the same scope, where a second occurrence would have a second
- *  editor: its property rows (its cells), and a child a query also selects as
- *  a row (`GridController.childIdsOf`, the same list for the grid's walks).
- *  The outline's own listing keeps a focused field row, which editing
- *  a list member makes the row's focused child. Accepted: a deeper descendant
- *  a query also selects is drawn both as a row and under its ancestor. */
+/** A row's notes (`notesAmong`, the rule the outline's walks read too). The
+ *  outline's own listing keeps a focused field row, which editing a list
+ *  member makes the row's focused child. Accepted: a deeper descendant a query
+ *  also selects is drawn both as a row and under its ancestor. */
 const RowNotes = ({row}: {row: Block}) => {
   const {renderScopeId} = useBlockContext()
   const {rows} = useContext(TableContext)!
-  const ids = useChildIdsForMode(row, 'none')
+  const ids = notesAmong(useChildIdsForMode(row, 'none'), id => rows.has(id))
   return (
     <PropertyRowListingContext value={null}>
-      {ids.filter(id => !rows.has(id)).map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
+      {ids.map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
     </PropertyRowListingContext>
   )
 }
@@ -429,10 +427,11 @@ const TableBody = ({
   const gridId = useId()
   const displayScope = useContext(PropertyDisplayScopeContext)
   const {childBacked} = displayScope
-  // The grid draws a row's properties as cells, so the rows' subtree lists no
-  // property rows among their children: one occurrence of each value block per
-  // scope, and the walks inside a row see what it draws. Accepted: a row's own
-  // display setting still wins over this, as everywhere.
+  // The grid draws a row's properties as cells, and its notes leave them out
+  // (`rowNotes`); below the notes, the rows' subtree lists no property rows
+  // either, so a list member's or a note's own properties are not drawn as
+  // rows inside the grid. Accepted: a block's own display setting still wins
+  // over this, as everywhere.
   const rowsDisplayScope = useMemo(() => ({...displayScope, panel: 'none' as const}), [displayScope])
   const selected = useRowIds(host, workspaceId, query?.clauses ?? null, order)
   const liveCreated = useLiveRows(repo, useSyncExternalStore(controller.subscribeCreated, controller.getCreated))

@@ -212,7 +212,7 @@ it('uploads a write after promotion and refuses the next write after demotion', 
   }
 }, 40_000)
 
-// Bootstrapping and queuing the real seed rows took 1.53 s in the focused run.
+// Bootstrapping and uploading the seed rows took about 3 s when rerun alone under load.
 it('uploads fresh workspace seed rows with zero-version stamps', async () => {
   const {db} = fixture
   const deliver = syncServer(db)
@@ -230,7 +230,7 @@ it('uploads fresh workspace seed rows with zero-version stamps', async () => {
         `SELECT 1 AS queued FROM ps_crud WHERE json_extract(data, '$.op') = 'PUT'
            AND json_extract(data, '$.id') = ? AND json_extract(data, '$.data.updated_at') = 0`, [seedId],
       )).toEqual({queued: 1})
-    }, {timeout: 15_000})
+    }, {timeout: 25_000})
     expect(uploader).toBeDefined()
     await uploader!.uploadData(db)
     expect(rpc).toHaveBeenCalledWith('apply_block_creates', {
@@ -243,7 +243,7 @@ it('uploads fresh workspace seed rows with zero-version stamps', async () => {
   } finally {
     await host.stop()
   }
-}, 30_000)
+}, 40_000)
 
 // Real bootstrap and rejoin took 8.59 s in the focused run.
 it('holds a rejoining editor read-only behind a durable materialization gap until repaired', async () => {
