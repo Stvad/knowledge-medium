@@ -1,1 +1,1 @@
-export{YP as CommandPalette}from"../../../chunks/app-DZ6Wed76.js";
+export{ZP as CommandPalette}from"../../../chunks/app-Cak92owk.js";

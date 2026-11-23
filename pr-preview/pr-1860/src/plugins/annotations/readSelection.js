@@ -1,1 +1,1 @@
-export{Eg as holdsSelection,Dg as locateReadSelection,Og as mapReadSelection,kg as recordedTexts,Ag as useHoldsReadSelection}from"../../../chunks/app-DZ6Wed76.js";
+export{Eg as holdsSelection,Dg as locateReadSelection,Og as mapReadSelection,kg as recordedTexts,Ag as useHoldsReadSelection}from"../../../chunks/app-Cak92owk.js";

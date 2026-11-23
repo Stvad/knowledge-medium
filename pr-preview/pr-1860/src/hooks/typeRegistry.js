@@ -1,1 +1,1 @@
-export{KK as useTypes}from"../../chunks/app-DZ6Wed76.js";
+export{JK as useTypes}from"../../chunks/app-Cak92owk.js";
