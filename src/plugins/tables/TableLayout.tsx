@@ -12,6 +12,7 @@ import { type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/
 import type { Block } from '@/data/block'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
 import { isPropertyValueEditable } from '@/data/internals/propertyValueEdits'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { focusedBlockLocationFromProperties, isEditingProp } from '@/data/properties'
 import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
@@ -28,7 +29,6 @@ import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn
 import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
 import { useTableQuery, type TableQuery } from './query/source'
 import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
-import { TABLE_CHILDREN_ATTRIBUTE, TABLE_HOST_ATTRIBUTE } from './navigation'
 import { notesAmong } from './childrenViews'
 import { registerGrid, tableRenderScopeId } from './registry'
 import { useIsMobile } from '@/utils/react'
@@ -39,6 +39,7 @@ export const CELL_SURFACE = 'tables.cell'
 
 interface TableState {
   controller: GridController
+  hasQuery: boolean
   columns: readonly TableColumn[]
   schemas: readonly (AnyPropertySchema | undefined)[]
   editable: readonly boolean[]
@@ -232,17 +233,18 @@ const ValueCellBody = ({row, column, schema, editable}: {
 
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
-/** A row's notes (`notesAmong`, the rule the outline's walks read too). The
- *  outline's own listing keeps a focused field row, which editing a list
- *  member makes the row's focused child. Accepted: a deeper descendant a query
- *  also selects is drawn both as a row and under its ancestor. */
+/** Query notes use their own scope because a deeper descendant may also
+ * be drawn as a grid row. Each occurrence must be independently focusable. */
 const RowNotes = ({row}: {row: Block}) => {
-  const {renderScopeId} = useBlockContext()
-  const {rows} = useContext(TableContext)!
+  const {controller, rows, hasQuery} = useContext(TableContext)!
+  const renderScopeId = controller.notesScopeId(row.id, hasQuery)
   const ids = notesAmong(useChildIdsForMode(row, 'none'), id => rows.has(id))
+  const overrides = useMemo(() => ({renderScopeId}), [renderScopeId])
   return (
     <PropertyRowListingContext value={null}>
-      {ids.map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
+      <NestedBlockContextProvider overrides={overrides}>
+        {ids.map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
+      </NestedBlockContextProvider>
     </PropertyRowListingContext>
   )
 }
@@ -305,16 +307,19 @@ const RowKeys = ({controller, rows, renderScopeId}: {
   const uiStateBlock = useUIStateBlock()
   const focus = useHandle(uiStateBlock, {selector: data => {
     const location = focusedBlockLocationFromProperties(data?.properties)
-    return location?.renderScopeId === renderScopeId
-      ? {blockId: location.blockId, editing: data ? safeDecodeRowProperty(data, isEditingProp) : false}
-      : null
+    if (!data || location?.renderScopeId !== renderScopeId) return null
+    return {
+      blockId: location.blockId,
+      editing: safeDecodeRowProperty(data, isEditingProp),
+    }
   }})
   const pending = useSyncExternalStore(controller.subscribePending, controller.getPendingRow)
   const inControl = useSyncExternalStore(controller.subscribeControl, controller.isInControl)
   const normalMode = useActiveContextsState().has(ActionContextTypes.NORMAL_MODE)
   const panelActive = useIsActivePanel(uiStateBlock)
   const rowId = pending ?? focus?.blockId
-  const onRow = panelActive && !inControl && rowId !== undefined && rows.has(rowId) && (pending !== null || !focus?.editing)
+  const onRow = panelActive && !inControl && rowId !== undefined &&
+    rows.has(rowId) && (pending !== null || !focus?.editing)
   const dependencies = useMemo(() => ({gridCommand: controller.command}), [controller])
   // Stable, or every render would release and re-claim the contexts.
   const activations = useMemo(() => !onRow ? []
@@ -427,6 +432,7 @@ const TableBody = ({
   const gridId = useId()
   const displayScope = useContext(PropertyDisplayScopeContext)
   const {childBacked} = displayScope
+  const {scopeRootId, isNestedSurface} = useBlockContext()
   // The grid draws a row's properties as cells, and its notes leave them out
   // (`rowNotes`); below the notes, the rows' subtree lists no property rows
   // either, so a list member's or a note's own properties are not drawn as
@@ -464,8 +470,12 @@ const TableBody = ({
   useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setQuery(query?.parsed.terms ?? null) }, [controller, query])
   useLayoutEffect(() => { controller.setSorted(order !== undefined) }, [controller, order])
-  useLayoutEffect(() => { controller.setDisplayScope(rowsDisplayScope) }, [controller, rowsDisplayScope])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
+  useLayoutEffect(() => {
+    controller.setSurfaces(rowsDisplayScope, outlineSurfaceOf({
+      scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay: displayScope, renderScopeId: parentRenderScopeId,
+    }))
+  }, [controller, displayScope, rowsDisplayScope, isNestedSurface, parentRenderScopeId, scopeRootId])
   useLayoutEffect(() => registerGrid(renderScopeId, controller), [controller, renderScopeId])
 
   const rowSet = useMemo(() => new Set(shown), [shown])
@@ -507,8 +517,8 @@ const TableBody = ({
     return () => observer.disconnect()
   }, [])
   const contentColumn = columns.findIndex(column => column.fieldId === null)
-  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, unmatched, rows: rowSet}),
-    [controller, columns, schemas, editable, contentColumn, unmatched, rowSet])
+  const table = useMemo<TableState>(() => ({controller, hasQuery: query !== null, columns, schemas, editable, contentColumn, unmatched, rows: rowSet}),
+    [controller, query, columns, schemas, editable, contentColumn, unmatched, rowSet])
   const fieldNames = useQueryableFieldNames(repo, workspaceId)
   const sortable = useMemo(() => schemas.map(schema => isSortable(schema, fieldNames)), [fieldNames, schemas])
   const onSort = useCallback((next: ViewSort | undefined) => {
@@ -558,9 +568,8 @@ const TableBody = ({
   )
 }
 
-/** Each row is the root of its own scope: what it draws is its text, its
- *  cells and its children, and the outline's walks and structural edits stay
- *  inside that. Gestures between rows are the grid's (`./keys`). */
+/** The row bounds structural edits and editor gestures on its notes.
+ *  The host's children view declares the order for spatial navigation. */
 const TableRow = ({id, renderScopeId}: {id: string; renderScopeId: string}) => {
   const overrides = useMemo(() => ({[ROW_CONTEXT_KEY]: id, scopeRootId: id}), [id])
   return (
@@ -575,14 +584,13 @@ const TableHostLayout: BlockLayout = ({block, Header, Shell, Controls, Content, 
   const parentRenderScopeId = useBlockContext().renderScopeId ?? ''
   const renderScopeId = tableRenderScopeId(parentRenderScopeId, block.id)
   return (
-    <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls}
-      frameProps={{[TABLE_HOST_ATTRIBUTE]: 'true'}}>
+    <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls}>
       <div className="block-body min-w-0 grow">
         <Content/>
         {Properties && <Properties/>}
         <BelowContent/>
         {/* The grid stands where the children would, so it collapses with them. */}
-        <CollapsibleContent {...{[TABLE_CHILDREN_ATTRIBUTE]: 'true'}}>
+        <CollapsibleContent>
           <QueryFields host={block}/>
           {workspaceId && <TableGrid key={renderScopeId} host={block} renderScopeId={renderScopeId}
             parentRenderScopeId={parentRenderScopeId} workspaceId={workspaceId}/>}

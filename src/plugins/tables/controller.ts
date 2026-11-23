@@ -11,14 +11,15 @@ import {
 import { focusBlock, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { NO_PROPERTY_DISPLAY_SCOPE, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { OutlineSurface } from '@/data/outlineSurface'
-import { lastDrawnStep } from '@/utils/selection'
+import { lastDrawnStep } from '@/utils/drawnWalk'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
 import { showError, showInfo } from '@/utils/toast'
 import { ROW_CAP, canAddRow } from './model'
 import { forgetCellEdit, openedCellEdit, reportRefusal } from './cellEdits'
 import { rowNotes } from './childrenViews'
-import { takeTableStep } from './navigation'
+import { notesInScope, tableNotesScopeId } from './registry'
+import { moveVertical } from '@/plugins/spatial-navigation/actions'
 import { createQueryRow, rowBackfill } from './query/backfill'
 import type { QueryTerm } from './query/parse'
 
@@ -82,6 +83,7 @@ export class GridController {
   /** The query's terms; null when the rows are the host's children. */
   private queryTerms: readonly QueryTerm[] | null = null
   private sorted = false
+  parentSurface: OutlineSurface | null = null
   private displayScope: PropertyDisplayScopeLevels = NO_PROPERTY_DISPLAY_SCOPE
   /** Rows made here while a query is set, drawn for as long as the grid is
    *  mounted whether or not they match. */
@@ -163,13 +165,22 @@ export class GridController {
     await this.host.repo.mutate.move({id: rowId, parentId: this.host.id, position: {kind: step < 0 ? 'before' : 'after', siblingId}})
   }
 
-  /** The property display the rows' subtree is drawn with. */
-  setDisplayScope(scope: PropertyDisplayScopeLevels) {
-    this.displayScope = scope
+  setSurfaces(rows: PropertyDisplayScopeLevels, owner: OutlineSurface | null) {
+    this.displayScope = rows
+    this.parentSurface = owner
   }
 
-  /** Where a row's notes are drawn: the row is the root of its own scope. */
-  private rowSurface(rowId: string): OutlineSurface {
+  get rowsDisplayScope(): PropertyDisplayScopeLevels {
+    return this.displayScope
+  }
+
+  /** During render use the incoming query state until setQuery publishes it at layout commit. */
+  notesScopeId(rowId: string, hasQuery = this.hasQuery): string {
+    return hasQuery ? tableNotesScopeId(this.renderScopeId, rowId) : this.renderScopeId
+  }
+
+  /** The row is the structural root of its notes. */
+  rowSurface(rowId: string): OutlineSurface {
     return {scopeRootId: rowId, scopeRootForcesOpen: false, propertyDisplay: this.displayScope, renderScopeId: this.renderScopeId}
   }
 
@@ -190,16 +201,17 @@ export class GridController {
    *  row draws: the block named is above that table's grid, not beside the next row. */
   async lastDrawnIn(rowId: string): Promise<{block: Block; crossed: boolean}> {
     const lastNote = (await this.drawnChildIds(rowId)).at(-1)
-    return lastNote === undefined
-      ? {block: this.host.repo.block(rowId), crossed: false}
-      : lastDrawnStep(this.host.repo.block(lastNote), this.rowSurface(rowId))
+    if (lastNote === undefined) return {block: this.host.repo.block(rowId), crossed: false}
+    const surface = {...this.rowSurface(rowId), renderScopeId: this.notesScopeId(rowId)}
+    return lastDrawnStep(this.host.repo.block(lastNote), surface, {withinScope: true})
   }
 
   /** ArrowDown from a row's text: its first drawn child, edited from its
    *  start, or the next row in row mode when it draws none. */
   private async editFirstDrawnIn(row: number) {
     const moves = this.cursorMoves
-    const first = (await this.drawnChildIds(this.rowIds[row]!))[0]
+    const rowId = this.rowIds[row]!
+    const first = (await this.drawnChildIds(rowId))[0]
     if (this.cursorMoves !== moves) return
     if (!first) {
       this.focusRow(clamp(row + 1, this.rowIds.length - 1))
@@ -207,7 +219,7 @@ export class GridController {
     }
     await focusBlock(this.uiStateBlock, first, {
       edit: true,
-      renderScopeId: this.renderScopeId,
+      renderScopeId: this.notesScopeId(rowId),
       selection: {start: 0},
     })
   }
@@ -225,7 +237,7 @@ export class GridController {
     }
     await focusBlock(this.uiStateBlock, target.id, {
       edit: true,
-      renderScopeId: this.renderScopeId,
+      renderScopeId: this.notesScopeId(aboveId),
       selection: {line: 'last'},
     })
   }
@@ -369,7 +381,13 @@ export class GridController {
     const pending = this.pendingRowId === null ? undefined : this.rowIndex.get(this.pendingRowId)
     if (pending !== undefined) return {row: pending, onRow: true}
     const location = peekFocusedBlockLocation(this.uiStateBlock)
-    if (location?.renderScopeId !== this.renderScopeId) return undefined
+    if (!location?.renderScopeId) return undefined
+    const notes = notesInScope(location.renderScopeId)
+    if (notes?.grid === this) {
+      const row = this.rowIndex.get(notes.rowId)
+      return row === undefined ? undefined : {row, onRow: false}
+    }
+    if (location.renderScopeId !== this.renderScopeId) return undefined
     const row = this.rowOf(location.blockId)
     return row === undefined ? undefined : {row, onRow: this.rowIndex.has(location.blockId)}
   }
@@ -416,16 +434,15 @@ export class GridController {
   }
 
   /** Up from the first row or Down from the last, with the row focused: the
-   *  step out of the grid (`./navigation`), taken here so it works with or
-   *  without vim, and never left to the outline, whose walk from a row lands
-   *  on blocks the grid does not draw. While the move to this row is still
-   *  committing the key is absorbed: a step written now would be overwritten
-   *  by that move. Where no drawn step can be found (the row not mounted, or
-   *  spatial navigation off), Up still reaches the host. */
+   *  step out of the grid. While a move to this row is still committing,
+   *  absorb the key so that write cannot overwrite the exit. */
   private leaveRows(row: number, direction: 'up' | 'down'): true {
     if (this.pendingRowId !== null) return true
-    const from = {block: this.host.repo.block(this.rowIds[row]!), uiStateBlock: this.uiStateBlock, renderScopeId: this.renderScopeId}
-    if (!takeTableStep(from, direction) && direction === 'up') this.focusHost()
+    const rowId = this.rowIds[row]!
+    const from = {...this.rowSurface(rowId), block: this.host.repo.block(rowId), uiStateBlock: this.uiStateBlock}
+    void moveVertical(from, direction, {descend: false, modelFallback: true}).then(handled => {
+      if (!handled && direction === 'up') this.focusHost()
+    })
     return true
   }
 

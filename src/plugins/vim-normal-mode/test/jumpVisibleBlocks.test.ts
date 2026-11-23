@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * jumpVisibleBlocks is the count/boundary core behind Ctrl-d / Ctrl-u. The
- * single-step visible-traversal it builds on (next/previousVisibleBlock) lives
+ * single-step visible-traversal it builds on (next/previousDrawnStep) lives
  * in utils/selection; this pins what jumpVisibleBlocks adds on top — counting N
  * steps, clamping at the scope edge, and reporting "no movement" as null.
  */
@@ -52,22 +52,22 @@ const jump = (from: string, count: number, direction: 'up' | 'down') =>
 
 describe('jumpVisibleBlocks', () => {
   it('lands exactly `count` visible blocks down', async () => {
-    expect((await jump('c0', 8, 'down'))?.id).toBe('c8')
+    expect((await jump('c0', 8, 'down'))?.block.id).toBe('c8')
   })
 
   it('lands exactly `count` visible blocks up', async () => {
-    expect((await jump('c11', 8, 'up'))?.id).toBe('c3')
+    expect((await jump('c11', 8, 'up'))?.block.id).toBe('c3')
   })
 
   it('clamps to the last visible block when fewer than `count` remain', async () => {
     // c5 has only 6 blocks below it; a jump of 8 stops at the boundary.
-    expect((await jump('c5', 8, 'down'))?.id).toBe('c11')
+    expect((await jump('c5', 8, 'down'))?.block.id).toBe('c11')
   })
 
   it('clamps to the scope root jumping up past the first child', async () => {
     // The panel's top block is itself navigable, so jumping up past c0 lands
     // on the scope root rather than stopping at c0.
-    expect((await jump('c5', 8, 'up'))?.id).toBe(ROOT)
+    expect((await jump('c5', 8, 'up'))?.block.id).toBe(ROOT)
   })
 
   it('returns null when already at the bottom boundary (no movement)', async () => {
