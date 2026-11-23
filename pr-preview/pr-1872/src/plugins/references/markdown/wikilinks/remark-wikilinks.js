@@ -1,1 +1,1 @@
-export{FS as remarkWikilinks}from"../../../../../chunks/app-BgczjmWp.js";
+export{FS as remarkWikilinks}from"../../../../../chunks/app-BrVTuSmk.js";

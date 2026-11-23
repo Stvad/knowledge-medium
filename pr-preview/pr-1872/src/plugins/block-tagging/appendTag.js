@@ -1,1 +1,1 @@
-export{ep as appendTagToBlocks,tp as appendTagToContent}from"../../../chunks/app-BgczjmWp.js";
+export{ep as appendTagToBlocks,tp as appendTagToContent}from"../../../chunks/app-BrVTuSmk.js";

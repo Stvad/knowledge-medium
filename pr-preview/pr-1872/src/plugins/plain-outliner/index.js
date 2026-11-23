@@ -1,1 +1,1 @@
-export{YO as plainOutlinerPlugin}from"../../../chunks/app-BgczjmWp.js";
+export{YO as plainOutlinerPlugin}from"../../../chunks/app-BrVTuSmk.js";
