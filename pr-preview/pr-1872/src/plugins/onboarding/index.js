@@ -1,1 +1,1 @@
-export{yP as EXTENSIONS_PAGE_TITLE,bP as TUTORIAL_DEFAULT_TITLE,xP as TUTORIAL_VIM_TITLE,PE as onboardingPlugin,vP as seedTutorial}from"../../../chunks/app-dSNNBz7H.js";
+export{yP as EXTENSIONS_PAGE_TITLE,bP as TUTORIAL_DEFAULT_TITLE,xP as TUTORIAL_VIM_TITLE,PE as onboardingPlugin,vP as seedTutorial}from"../../../chunks/app-BgczjmWp.js";

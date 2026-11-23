@@ -1,1 +1,1 @@
-export{cY as adoptOrCreatePropertySchema}from"../../chunks/app-dSNNBz7H.js";
+export{cY as adoptOrCreatePropertySchema}from"../../chunks/app-BgczjmWp.js";
