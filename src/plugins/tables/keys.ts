@@ -16,7 +16,7 @@ import {
   type BlockShortcutDependencies, type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
 import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
-import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
+import { nextDrawnStep, previousVisibleBlock } from '@/utils/selection'
 import { showInfo } from '@/utils/toast'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
@@ -191,10 +191,12 @@ const atEditorEdge = (view: EditorView, edge: Edge) => {
 
 /** Whether the outline's step from `block` past `edge` leaves what its scope
  *  draws: from the first block upwards onto the scope root, and from the last
- *  block downwards, where the outline has nothing. */
-const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge): Promise<boolean> => {
+ *  block downwards, where the walk reaches another row of this grid or the
+ *  end. A destination outside the grid stays the outline's. */
+const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge, grid: GridController): Promise<boolean> => {
   if (edge === 'top' || edge === 'start') return (await previousVisibleBlock(block, surface))?.id === surface.scopeRootId
-  return await nextVisibleBlock(block, surface) === null
+  const next = await nextDrawnStep(block, surface)
+  return !next.block || (next.surface.renderScopeId === grid.renderScopeId && grid.isRow(next.block.id))
 }
 
 /** What the grid draws a block as, from the scope it is drawn in: a row's
@@ -230,7 +232,7 @@ const crossing = (step: Step, includeRowNotes = true): Applies => (deps, trigger
   const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : includeRowNotes && step === 'bottom' && place === 'rowChild'
   if (!walks) return place === 'value' || place === 'rowText' || (place === 'member' && step === 'sideways')
   trigger.preventDefault()
-  return leavesScope(block, surface, step as Edge)
+  return leavesScope(block, surface, step as Edge, grid)
 }
 
 /** An editor verb: only at the editor's edge, then as `crossing`. */

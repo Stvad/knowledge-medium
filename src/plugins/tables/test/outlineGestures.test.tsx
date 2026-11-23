@@ -325,11 +325,32 @@ describe('a row draws its children', () => {
 
   it('ArrowDown from a row’s text enters its children, and from the last one goes to the next row', async () => {
     const id = await note()
+    const second = await note()
     mount()
     press(await editAt('row-0', 'end'), 'ArrowDown')
     await waitFor(() => expect(focused()).toEqual({blockId: id, renderScopeId: SCOPE}))
     press(await editorOn(id!), 'ArrowDown')
+    await waitFor(() => expect(focused()).toEqual({blockId: second, renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(true)
+    press(await editorOn(second!), 'ArrowDown')
     await waitFor(() => expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(false)
+  })
+
+  it.each([false, true])('ArrowDown from the final query note with an outside row: %s', async hasOutsideRow => {
+    const note = await repo.mutate.createChild({parentId: 'row-1', content: 'A note', position: {kind: 'last'}})
+    if (!hasOutsideRow) {
+      await repo.tx(tx => tx.move('row-0', {parentId: null, orderKey: 'a2'}), {scope: ChangeScope.BlockDefault})
+    }
+    await db.db.execute("UPDATE blocks SET created_at = 100000 WHERE id = 'row-1'")
+    await repo.block(HOST).set(queryProp, 'created<2000-01-01')
+    await repo.awaitReprojections()
+    mount()
+    const notesScope = tableNotesScopeId(SCOPE, 'row-1')
+    press(await editAt(note!, 'end', notesScope), 'ArrowDown')
+    const expected = hasOutsideRow ? {blockId: 'row-0', renderScopeId: PARENT_SCOPE} : {blockId: 'row-1', renderScopeId: SCOPE}
+    await waitFor(() => expect(focused()).toEqual(expected))
+    expect(ui().peekProperty(isEditingProp)).toBe(hasOutsideRow)
   })
 
   it('ArrowDown from a row’s text enters its first child even when the row shows its property rows', async () => {
@@ -858,6 +879,9 @@ it('focuses both occurrences of a query result and keeps each occurrence’s ges
   await focusLeafAndMoveUp(SCOPE)
   await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
 
+  press(await editAt(middle, 'end', notesScope), 'ArrowDown')
+  await waitFor(() => expect(focused()).toEqual({blockId: 'leaf', renderScopeId: notesScope}))
+  expect(ui().peekProperty(isEditingProp)).toBe(true)
   const editor = await editAt('leaf', 'start', notesScope)
   act(() => { editor.dispatch({selection: {anchor: 2}}) })
   press(editor, 'Enter')
@@ -898,4 +922,40 @@ it('refuses to start selection on a query row or its notes', async () => {
   }
   await trySelection('row-0', SCOPE)
   await trySelection(note!, tableNotesScopeId(SCOPE, 'row-0'))
+})
+
+it('Vim gg from query row notes focuses the owner row drawn in the grid', async () => {
+  configureRuntime(vimNormalModePlugin({repo}))
+  const note = await repo.mutate.createChild({parentId: 'row-0', content: 'A note', position: {kind: 'last'}})
+  await db.db.execute("UPDATE blocks SET created_at = 100000 WHERE id = 'row-0'")
+  await repo.block(HOST).set(queryProp, 'created<2000-01-01')
+  await repo.awaitReprojections()
+  mount()
+  const notesScope = tableNotesScopeId(SCOPE, 'row-0')
+  await act(async () => { await focusBlock(ui(), note!, {renderScopeId: notesScope}) })
+  await waitFor(() => expect(activeContexts.get(ActionContextTypes.NORMAL_MODE)).toMatchObject({
+    block: {id: note}, renderScopeId: notesScope, scopeRootId: 'row-0',
+  }))
+  await act(async () => { await runActionById('jump_to_first_visible_block', new KeyboardEvent('keydown')) })
+  await waitFor(() => expect(focused()?.blockId).toBe('row-0'))
+  expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE})
+  const rowScope = gridOfHost(PARENT_SCOPE, HOST)!.rowSurface('row-0')
+  const deps = {block: repo.block('row-0'), uiStateBlock: ui(), ...rowScope}
+  const first = getEffectiveActions(runtime).find(action => action.id === 'jump_to_first_visible_block')!
+  const last = getEffectiveActions(runtime).find(action => action.id === 'jump_to_last_visible_block')!
+
+  // A grid row itself has a shell in its own scope, despite the declared grid owner.
+  await focusBlock(ui(), note!, {renderScopeId: notesScope})
+  await invokeAction(runtime, {action: first, deps, trigger: new KeyboardEvent('keydown')})
+  await waitFor(() => expect(focused()?.blockId).toBe('row-0'))
+  expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE})
+
+  // A dispatched jump may outlive the removal of the final rendered note.
+  await act(async () => {
+    await repo.block('row-0').set(isCollapsedProp, true)
+    await focusBlock(ui(), note!, {renderScopeId: notesScope})
+    const noteDeps = {...deps, block: repo.block(note!), renderScopeId: notesScope}
+    await invokeAction(runtime, {action: last, deps: noteDeps, trigger: new KeyboardEvent('keydown')})
+  })
+  await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
 })

@@ -5,7 +5,7 @@ import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { focusBlock, selectionStateProp } from '@/data/properties.js'
+import { focusBlock, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties.js'
 import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types.js'
 import {
   extendBlockSelectionAction,
@@ -38,6 +38,16 @@ beforeEach(async () => {
 
 describe('extendBlockSelectionAction', () => {
   const SCOPE = 'panel:root'
+
+  it('focuses the clicked occurrence when there is no range anchor', async () => {
+    const panel = repo.block('panel')
+    await extendBlockSelectionAction.handler({
+      block: repo.block('r3'), uiStateBlock: panel, scopeRootId: 'root',
+      renderScopeId: SCOPE, targetElement: document.body,
+    }, {} as ActionTrigger)
+    expect(peekFocusedBlockLocation(panel)).toEqual({blockId: 'r3', renderScopeId: SCOPE})
+    expect(panel.get(selectionStateProp).selectedBlockIds).toEqual([])
+  })
 
   it('extends from the range origin the gesture carries rather than the focused row', async () => {
     const panel = repo.block('panel')

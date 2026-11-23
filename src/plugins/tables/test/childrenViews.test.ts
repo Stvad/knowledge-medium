@@ -1,15 +1,20 @@
+// @vitest-environment happy-dom
 /** A table host's drawn members, as the outline's walks read them: its
  *  query's field rows, its grid, then under a query its children the query
  *  does not select, drawn below the grid in the host's own scope. */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { propertyDefinitionBlockId, materializePropertySeeds } from '@/data/definitionSeeds'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
+import { focusBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { disarmCut, getArmedCut } from '@/paste/armedCut'
+import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
+import { ActionContextTypes, type ActionTrigger } from '@/shortcuts/types'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { drawnChildrenOf } from '@/data/visibleChildren'
-import { getBlocksInRange, nextDrawnStep, previousDrawnStep } from '@/utils/selection'
+import { getBlocksInRange, locationAfterSubtreeRemoval, nextDrawnStep, previousDrawnStep } from '@/utils/selection'
 import { tableChildrenViews } from '../childrenViews'
 import { GridController } from '../controller'
 import { turnIntoTable } from '../convert'
@@ -111,4 +116,60 @@ it('walks from an unmounted query note through its declared row owner', async ()
     .toMatchObject({block: {id: 'row-0'}, surface: {renderScopeId: TABLE}, crossed: true})
   expect(await nextDrawnStep(repo.block('note'), notes))
     .toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}, crossed: true})
+})
+
+const withProjectedDescendant = async () => {
+  await withQuery()
+  await repo.mutate.move({id: 'row-0', parentId: 'outside-1', position: {kind: 'last'}})
+  await repo.mutate.move({id: 'outside-0', parentId: 'outside-1', position: {kind: 'last'}})
+  controller.setRows(['row-1', 'row-0'], 2)
+  const uiStateBlock = repo.block('ui')
+  const block = repo.block('outside-1')
+  await focusBlock(uiStateBlock, block.id, {renderScopeId: PAGE})
+  expect(await previousDrawnStep(block, surface())).toMatchObject({block: {id: 'row-0'}, surface: {renderScopeId: TABLE}})
+  return {block, uiStateBlock}
+}
+
+it('Delete focuses a surviving grid result when the last outside child contains the last result', async () => {
+  const {block, uiStateBlock} = await withProjectedDescendant()
+  const action = getDefaultActions({repo}).find(action => action.id === 'delete_block' && action.context === ActionContextTypes.NORMAL_MODE)!
+  await action.handler({block, uiStateBlock, ...surface()}, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+  expect(await repo.load('outside-1')).toBeNull()
+  expect(await repo.load('row-0')).toBeNull()
+  expect(await repo.load('row-1')).toBeDefined()
+  await vi.waitFor(() => expect(peekFocusedBlockLocation(uiStateBlock)).toEqual({blockId: 'row-1', renderScopeId: TABLE}))
+})
+
+it('Cut keeps focus out of the armed subtree when it projects a grid result', async () => {
+  const {block, uiStateBlock} = await withProjectedDescendant()
+  vi.stubGlobal('ClipboardItem', class {})
+  vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => {})}})
+  try {
+    const action = getDefaultActions({repo}).find(action => action.id === 'cut_block' && action.context === ActionContextTypes.NORMAL_MODE)!
+    await action.handler({block, uiStateBlock, ...surface()}, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+    expect(getArmedCut()).toBeDefined()
+    await vi.waitFor(() => expect(peekFocusedBlockLocation(uiStateBlock)).toEqual({blockId: 'row-1', renderScopeId: TABLE}))
+  } finally {
+    disarmCut()
+    vi.unstubAllGlobals()
+  }
+})
+
+it('removal recovery skips projections of descendants of other selected roots', async () => {
+  await withQuery()
+  await repo.mutate.move({id: 'row-0', parentId: 'outside-0', position: {kind: 'last'}})
+  controller.setRows(['row-1', 'row-0'], 2)
+  const landing = await locationAfterSubtreeRemoval(repo.block('outside-1'), surface(), new Set(['outside-0']))
+  expect(landing).toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}})
+})
+
+it.each([['host', 'after'], ['page', null]] as const)('removal recovery leaves the grid when removing %s', async (removed, expected) => {
+  await withQuery()
+  const row = repo.block('row-0')
+  await repo.mutate.move({id: 'row-1', parentId: 'ui', position: {kind: 'last'}})
+  const landing = await locationAfterSubtreeRemoval(
+    row, controller.rowSurface(row.id), new Set([removed]),
+  )
+  expect(landing?.block.id ?? null).toBe(expected)
+  if (expected) expect(landing?.surface.renderScopeId).toBe(PAGE)
 })

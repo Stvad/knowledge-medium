@@ -145,7 +145,7 @@ async function siblingsOf({block, surface}: DrawnLocation) {
   return {parent, slots, at: insertion, listed: false, isolated: false}
 }
 
-function scan(parent: DrawnLocation, slots: readonly Slot[], from: number, direction: 1 | -1, fromScope = parent.surface.renderScopeId, leaving?: ReadonlySet<string>): DrawnStep {
+function scan(parent: DrawnLocation, slots: readonly Slot[], from: number, direction: 1 | -1, fromScope = parent.surface.renderScopeId): DrawnStep {
   let crossed = false
   for (let i = from; i >= 0 && i < slots.length; i += direction) {
     const slot = slots[i]
@@ -154,7 +154,7 @@ function scan(parent: DrawnLocation, slots: readonly Slot[], from: number, direc
       continue
     }
     const location = locationAt(parent, slot)
-    if (!leaving?.has(location.block.id)) return {...location, crossed: crossed || fromScope !== location.surface.renderScopeId}
+    return {...location, crossed: crossed || fromScope !== location.surface.renderScopeId}
   }
   return {block: null, surface: parent.surface, crossed: crossed || fromScope !== parent.surface.renderScopeId}
 }
@@ -216,10 +216,27 @@ export async function locationAfterSubtreeRemoval(
   const siblings = await siblingsOf({block, surface})
   if (!siblings) return null
   const {parent, slots, at, listed} = siblings
-  const next = scan(parent, slots, at + Number(listed), 1, surface.renderScopeId, leaving)
-  if (next.block) return {block: next.block, surface: next.surface}
-  const previous = scan(parent, slots, at - 1, -1, surface.renderScopeId, leaving)
-  return previous.block ? {block: previous.block, surface: previous.surface} : parent
+  const removedRoots = new Set(leaving).add(block.id)
+  const survives = async (candidate: Block): Promise<boolean> => {
+    if (removedRoots.has(candidate.id)) return false
+    const {ancestors} = await candidate.repo.query.ancestors({id: candidate.id}).load()
+    return !ancestors.some(ancestor => removedRoots.has(ancestor.id))
+  }
+  // If the owner disappears, every occurrence it draws disappears with it.
+  if (!await survives(parent.block)) return locationAfterSubtreeRemoval(parent.block, parent.surface, removedRoots)
+  const find = async (from: number, direction: 1 | -1): Promise<DrawnLocation | null> => {
+    for (let index = from; index >= 0 && index < slots.length; index += direction) {
+      const slot = slots[index]
+      if (slot == null) continue
+      const location = locationAt(parent, slot)
+      // A projected sibling may live anywhere, including under a removed root.
+      if (typeof slot === 'string'
+        ? !removedRoots.has(slot)
+        : await survives(location.block)) return location
+    }
+    return null
+  }
+  return await find(at + Number(listed), 1) ?? await find(at - 1, -1) ?? parent
 }
 
 export const nextVisibleBlock = async (block: Block, surface: OutlineSurface): Promise<Block | null> =>

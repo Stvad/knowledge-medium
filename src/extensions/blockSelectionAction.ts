@@ -27,13 +27,14 @@ export const extendBlockSelectionAction: ActionConfig<typeof ActionContextTypes.
   pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
   handler: async (deps) => {
     const {block, uiStateBlock, rangeOrigin} = deps
-    await extendSelection(
+    const extended = await extendSelection(
       block.id,
       uiStateBlock,
       uiStateBlock.repo,
       outlineSurfaceOf(deps),
       {originBlockId: rangeOrigin?.blockId, originRenderScopeId: rangeOrigin?.renderScopeId},
     )
+    if (!extended) await focusBlock(uiStateBlock, block.id, {renderScopeId: deps.renderScopeId})
   },
 }
 
