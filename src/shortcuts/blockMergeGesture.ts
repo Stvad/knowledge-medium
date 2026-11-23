@@ -2,7 +2,8 @@ import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import { holdsSource } from '@/data/blockTypes'
 import { merge } from '@/data/mutators'
-import { editorSelection, focusBlock } from '@/data/properties'
+import { focusBlock } from '@/data/properties'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import type { ListingSurface } from '@/data/childrenView'
 import { drawnChildrenOf } from '@/data/visibleChildren'
 import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi'
@@ -51,12 +52,18 @@ export const mergeUp = async (
   onTaken?.()
   const joinOffset = into.peek()?.content.length ?? 0
   if (!await ensureDeletableThroughUi([from])) return false
+  // The editor's pending text is saved as its own undo step first, so undoing
+  // the merge restores `from` with what was typed.
+  flushPendingEditorContent()
   // One transaction: the live text first, so the merge concatenates it.
   await from.repo.tx(async tx => {
     await tx.update(from.id, {content: liveContent})
     await tx.run(merge, {intoId: into.id, fromId: from.id})
   }, {scope: ChangeScope.BlockDefault, description: 'merge into previous block'})
-  await uiStateBlock.set(editorSelection, {blockId: into.id, start: joinOffset})
-  await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId: surface.renderScopeId})
+  await focusBlock(uiStateBlock, into.id, {
+    edit: true,
+    renderScopeId: surface.renderScopeId,
+    selection: {start: joinOffset},
+  })
   return true
 }

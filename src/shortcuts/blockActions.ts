@@ -108,7 +108,8 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   if (uiStateBlock.repo.isReadOnly) return
 
   void resetBlockSelection(uiStateBlock)
-  // Before the edit flag, for the reason in enterEditModeForBlock.
+  // Before the edit flag: the editor places the caret in the commit that
+  // mounts it (see focusBlock's `selection`).
   if (selection) void uiStateBlock.set(editorSelection, selection)
   setIsEditing(uiStateBlock, true)
   requestEditorFocus(uiStateBlock)

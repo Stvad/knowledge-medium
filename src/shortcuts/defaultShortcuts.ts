@@ -30,10 +30,10 @@ import {
   focusBlock,
   isCollapsedProp,
   topLevelBlockIdProp,
-  editorSelection,
   setIsEditing,
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent.js'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
@@ -135,17 +135,20 @@ const applyEndEdit = (editorView: EditorView, edit: EditorEndEdit): EditorEndEdi
 
 /**
  * Run `write` with the editor showing the text its block holds once `write`
- * lands: its text with `edit` applied. The editor is re-armed BEFORE `write`
- * runs, so its debounced pushChange can't later flush the old text over what
- * `write` stored. It stays editable while `write` runs, so a `write` that
- * fails undoes `edit` alone and keeps what was typed meanwhile; that flush
- * saves whatever the editor is left showing.
+ * lands: its text with `edit` applied. The editor's pending text is saved
+ * first, as its own undo step, so undoing `write` restores a row that has it.
+ * The editor is re-armed BEFORE `write` runs, so its debounced pushChange
+ * can't later flush the old text over what `write` stored. It stays editable
+ * while `write` runs, so a `write` that fails undoes `edit` alone and keeps
+ * what was typed meanwhile; the debounced write then saves whatever the editor
+ * is left showing.
  */
 const writeWithEditorRearmed = async <T>(
   editorView: EditorView,
   edit: EditorEndEdit,
   write: () => Promise<T>,
 ): Promise<T> => {
+  flushPendingEditorContent()
   const undo = applyEndEdit(editorView, edit)
   try {
     return await write()
@@ -820,8 +823,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (cursorPos < doc.length) {
           if (holdsSource(block)) return
           const focusId = await splitAtCursor(block, editorView, policy.isScopeRoot ? 'firstChild' : 'siblingBefore')
-          await uiStateBlock.set(editorSelection, {blockId: focusId, start: 0})
-          await focusBlock(uiStateBlock, focusId, {edit: true, renderScopeId: deps.renderScopeId})
+          await focusBlock(uiStateBlock, focusId, {
+            edit: true,
+            renderScopeId: deps.renderScopeId,
+            selection: {start: 0},
+          })
         }
         // Case 2: Cursor at end and the new block belongs as a first
         // child — either the block shows children, or it's the scope
@@ -892,13 +898,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
-        await uiStateBlock.set(editorSelection, {
-          blockId: prevVisible.id,
-          line: 'last',
-          x: caretX,
+        await focusBlock(uiStateBlock, prevVisible.id, {
+          edit: true,
+          renderScopeId: deps.renderScopeId,
+          selection: {line: 'last', x: caretX},
         })
-
-        await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowUp',
@@ -936,12 +940,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const nextVisible = await nextVisibleBlock(block, surface)
         if (!nextVisible) return
 
-        await uiStateBlock.set(editorSelection, {
-          blockId: nextVisible.id,
-          x: caretX,
+        await focusBlock(uiStateBlock, nextVisible.id, {
+          edit: true,
+          renderScopeId: deps.renderScopeId,
+          selection: {x: caretX},
         })
-
-        await focusBlock(uiStateBlock, nextVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowDown',
@@ -967,12 +970,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (!prevVisible) return
 
         const prevData = await prevVisible.load()
-        await uiStateBlock.set(editorSelection, {
-          blockId: prevVisible.id,
-          start: prevData?.content.length ?? 0,
+        await focusBlock(uiStateBlock, prevVisible.id, {
+          edit: true,
+          renderScopeId: deps.renderScopeId,
+          selection: {start: prevData?.content.length ?? 0},
         })
-
-        await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowLeft',
@@ -997,12 +999,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const nextVisible = await nextVisibleBlock(block, surface)
         if (!nextVisible) return
 
-        await uiStateBlock.set(editorSelection, {
-          blockId: nextVisible.id,
-          start: 0,
+        await focusBlock(uiStateBlock, nextVisible.id, {
+          edit: true,
+          renderScopeId: deps.renderScopeId,
+          selection: {start: 0},
         })
-
-        await focusBlock(uiStateBlock, nextVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowRight',
@@ -1060,11 +1061,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             },
           })
           if (deleted && landing.at) {
-            await uiStateBlock.set(editorSelection, {
-              blockId: landing.at.id,
-              start: landing.at.start,
+            await focusBlock(uiStateBlock, landing.at.id, {
+              edit: true,
+              renderScopeId: deps.renderScopeId,
+              selection: {start: landing.at.start},
             })
-            await focusBlock(uiStateBlock, landing.at.id, {edit: true, renderScopeId: deps.renderScopeId})
           }
           return
         }
@@ -1166,11 +1167,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             await tx.run(mergeMutator, {intoId: block.id, fromId})
           }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'}))
 
-        await uiStateBlock.set(editorSelection, {
-          blockId: block.id,
-          start: joinOffset,
+        await focusBlock(uiStateBlock, block.id, {
+          edit: true,
+          renderScopeId: deps.renderScopeId,
+          selection: {start: joinOffset},
         })
-        await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'Delete',
