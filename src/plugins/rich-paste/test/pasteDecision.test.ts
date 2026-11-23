@@ -7,11 +7,11 @@ import { richPasteDecisionContribution } from '../pasteDecision'
 const runtime = resolveFacetRuntimeSync([richPasteDecisionContribution])
 const decide = (request: PasteRequest) => pasteDecisionVerb.runSync(runtime, request)
 
-const editor = (over: Partial<Pick<PasteRequest, 'text' | 'html' | 'intent' | 'files'>>): PasteRequest => ({
+const editor = (over: Partial<Omit<Extract<PasteRequest, {surface: 'editor'}>, 'surface'>>): PasteRequest => ({
   text: 'plain text',
   intent: 'split',
   surface: 'editor',
-  caret: {line: 1, lineCount: 1, from: 0, to: 0},
+  caret: {line: 1, lineStart: 0, lineCount: 1, from: 0, to: 0},
   ...over,
 })
 const shell = (over: Partial<Pick<PasteRequest, 'text' | 'html'>>): PasteRequest => ({
@@ -23,23 +23,34 @@ const shell = (over: Partial<Pick<PasteRequest, 'text' | 'html'>>): PasteRequest
 
 const STRUCTURED = '<h2>Title</h2><p>Body</p>'
 const LINK = '<a href="https://example.com/">site</a>'
+const inlineCaret = {line: 1, lineStart: 0, lineCount: 1, from: 4, to: 4}
 
 describe('rich paste decision', () => {
   it('pastes structured HTML as a block tree', () => {
-    expect(decide(editor({text: 'Title\nBody', html: STRUCTURED}))).toEqual({
+    expect(decide(editor({text: 'Title\nBody', html: STRUCTURED, caret: inlineCaret}))).toEqual({
       kind: 'split',
       blocks: [{content: '## Title', children: [{content: 'Body', children: []}]}],
     })
   })
 
   it('pastes a single formatted line as markdown at the caret in the editor', () => {
-    expect(decide(editor({text: 'site', html: LINK})))
+    expect(decide(editor({text: 'site', html: LINK, caret: inlineCaret})))
       .toEqual({kind: 'single-block', text: '[site](https://example.com/)'})
   })
 
   it('pastes a single formatted line as a block from the shell', () => {
     expect(decide(shell({text: 'site', html: LINK})))
       .toEqual({kind: 'split', text: '[site](https://example.com/)'})
+  })
+
+  it('uses the HTML content when a heading pasted inline has no plain text', () => {
+    expect(decide(editor({text: '', html: `<h2>${LINK}</h2>`, caret: inlineCaret})))
+      .toEqual({kind: 'single-block', text: '[site](https://example.com/)'})
+  })
+
+  it('keeps literal Markdown characters and edge spaces when a heading is pasted inline', () => {
+    expect(decide(editor({text: ' **literal** ', html: '<h2>**literal**</h2>', caret: inlineCaret})))
+      .toEqual({kind: 'single-block', text: ' \\*\\*literal\\*\\* '})
   })
 
   it.each([

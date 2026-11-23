@@ -19,7 +19,7 @@ import {
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
-import { editorPasteRequest, readClipboardContent } from '@/paste/clipboard.js'
+import { editorPasteRequest, readClipboardContent, readPasteCaret } from '@/paste/clipboard.js'
 import { flushEditorContent } from '@/editor/contentFlush.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -105,31 +105,19 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // fires first; the editor always takes over the paste.
     e.preventDefault()
 
-    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`)
-    // and keys on this snapshot. Anything that awaits before the insertion (the
-    // cut check, a media capture) is followed by a re-read of the live caret
-    // below, so text lands where the caret is when it is inserted.
-    const editorView = editorRef.current?.view
-    if (!editorView) return
-    const selection = editorView.state.selection.main
-    const caret = {
-      line: editorView.state.doc.lineAt(selection.from).number,
-      lineCount: editorView.state.doc.lines,
-      from: selection.from,
-      to: selection.to,
-    }
+    const viewAtPaste = editorRef.current?.view
+    if (!viewAtPaste) return
     const renderScopeId = typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
       : undefined
     const surface = {scopeRootId: blockContext.scopeRootId, propertyDisplay, renderScopeId}
-    const request = editorPasteRequest(content, block, intent, caret)
 
     // The stored row lags the view by the content debounce. Both writes below
     // need it current: the cut move reads it (a blank target is replaced), and
     // undoing a multi-line paste restores it. Every chord, since the decision
     // verb may split a ⌘⇧V paste; the flush takes the write lock ahead of
     // either tx.
-    flushEditorContent(editorView)
+    flushEditorContent(viewAtPaste)
 
     // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
     // its target's content; ⌘⇧V still asks for its plain text.
@@ -141,13 +129,17 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         }
         return
       }
-      if (!editorRef.current?.view) return
     }
+
+    // The cut check may have awaited. Read the destination for text paste now.
+    const editorView = editorRef.current?.view
+    if (!editorView) return
+    const request = editorPasteRequest(content, block, intent, readPasteCaret(editorView.state))
 
     // The paste verb decides how the clipboard lands; with no plugin
     // contributions this returns `defaultPasteDecision`, i.e. the previous
     // hardcoded behavior. It's a pure, synchronous policy — an override may key
-    // on the paste-time position (title line 1 vs body line 2+) but must decide
+    // on the insertion position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
     // Resolve the decision, capturing any pasted media first (async) — its `!((id))`

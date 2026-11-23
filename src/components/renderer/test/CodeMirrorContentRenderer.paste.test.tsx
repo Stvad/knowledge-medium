@@ -25,6 +25,7 @@ import {
 import { CodeMirrorContentRenderer } from '../CodeMirrorContentRenderer'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
+import { richPasteDecisionContribution } from '@/plugins/rich-paste/pasteDecision'
 import { showError } from '@/utils/toast.js'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
@@ -79,17 +80,14 @@ vi.mock('@/paste/operations.ts', async importOriginal => {
     ...actual,
     pasteArmedCut: vi.fn(async () => null),
     pasteEditModeMultilineText: vi.fn(async () => null),
-    resolvePasteWithMediaCapture: vi.fn(async (_runtime: unknown, request: {text: string; intent?: 'split' | 'single-block'}) => ({
-      decision: {kind: request.intent ?? 'split'},
-      text: request.text,
-    })),
+    resolvePasteWithMediaCapture: vi.fn(actual.resolvePasteWithMediaCapture),
   }
 })
 
-const dispatchPaste = (target: Element, text: string): Event => {
+const dispatchPaste = (target: Element, text: string, html = ''): Event => {
   const event = new Event('paste', {bubbles: true, cancelable: true})
   Object.defineProperty(event, 'clipboardData', {
-    value: {getData: (type: string) => type === 'text/plain' ? text : ''},
+    value: {getData: (type: string) => type === 'text/plain' ? text : type === 'text/html' ? html : ''},
   })
   target.dispatchEvent(event)
   return event
@@ -116,6 +114,7 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
       newId: () => crypto.randomUUID(),
       extensions: [
         defaultEditorInteractionExtension,
+        richPasteDecisionContribution,
         ...defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
       ],
     }).repo
@@ -207,6 +206,38 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
 
     await vi.waitFor(() => expect(resolvePasteWithMediaCapture).toHaveBeenCalledTimes(1))
     expect(pasteArmedCut).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    {from: 10, to: 14, expected: 'Block\nSee Title here'},
+    {from: 6, to: 14, expected: 'Block\n## **Title** here'},
+  ])('pastes a web heading according to its position on a later line ($from)', async ({from, to, expected}) => {
+    const actual = await vi.importActual<typeof import('@/paste/operations')>('@/paste/operations')
+    const {content, editorView} = renderEditor()
+    await vi.mocked(pasteEditModeMultilineText).withImplementation(actual.pasteEditModeMultilineText, async () => {
+      await act(async () => {
+        editorView.dispatch({changes: {from: 5, insert: '\nSee this here'}, selection: {anchor: to, head: from}})
+        dispatchPaste(content, '\nTitle\n', '<h2><strong>Title</strong></h2>')
+        await vi.waitFor(() => expect(editorView.state.doc.toString()).toBe(expected))
+        await vi.mocked(pasteEditModeMultilineText).mock.results[0]?.value
+      })
+    })
+  })
+
+  it('uses the insertion point after a pending cut check', async () => {
+    let finishCutCheck!: () => void
+    const cutCheck = new Promise<null>(resolve => { finishCutCheck = () => resolve(null) })
+    vi.mocked(pasteArmedCut).mockReturnValueOnce(cutCheck)
+    const {content, editorView} = renderEditor()
+    expect(editorView.state.selection.main.from).toBe(0)
+
+    await act(async () => {
+      dispatchPaste(content, ' Title', '<h2>Title</h2>')
+      expect(pasteArmedCut).toHaveBeenCalledTimes(1)
+      editorView.dispatch({selection: {anchor: 5}})
+      finishCutCheck()
+      await vi.waitFor(() => expect(editorView.state.doc.toString()).toBe('Block Title'))
+    })
   })
 
   it('keeps a refused multiline paste out of the editor document', async () => {
