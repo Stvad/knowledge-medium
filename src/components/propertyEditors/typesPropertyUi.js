@@ -1,1 +1,1 @@
-export{bI as kernelPropertyUiExtension,xI as typesPropertyUi,SI as typesPropertyUiExtension}from"../../../chunks/app-h_5lhWE_.js";
+export{bI as kernelPropertyUiExtension,xI as typesPropertyUi,SI as typesPropertyUiExtension}from"../../../chunks/app-TmvAX5-z.js";
