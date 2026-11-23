@@ -3138,6 +3138,25 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await cellValue('p')).toBeUndefined()
     expect(await liveFieldRows('p')).toEqual([])
   })
+
+  it('unsets a key whose field row the reviving tx brought back and then deleted', async () => {
+    // Net, that field row stayed dead, so no field diff shows its delete.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'done')
+      const revived = (await tx.childrenOf('p', undefined)).filter(row => row.isFieldForm === true)
+      expect(revived.map(row => row.id)).toEqual([field!.id])
+      await deleteSubtreeInTx(tx, field!.id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await liveFieldRows('p')).toEqual([])
+    expect(await cellValue('p')).toBeUndefined()
+  })
 })
 
 describe('§9 recognition on the WRITE side (round-2 review fixes)', () => {

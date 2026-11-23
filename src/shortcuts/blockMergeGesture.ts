@@ -3,6 +3,7 @@ import type { Block } from '@/data/block'
 import { holdsSource } from '@/data/blockTypes'
 import { merge } from '@/data/mutators'
 import { focusBlock } from '@/data/properties'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import type { ListingSurface } from '@/data/childrenView'
 import { visibleChildIds } from '@/data/visibleChildren'
 import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi'
@@ -51,6 +52,9 @@ export const mergeUp = async (
   onTaken?.()
   const joinOffset = into.peek()?.content.length ?? 0
   if (!await ensureDeletableThroughUi([from])) return false
+  // The editor's pending text is saved as its own undo step first, so undoing
+  // the merge restores `from` with what was typed.
+  flushPendingEditorContent()
   // One transaction: the live text first, so the merge concatenates it.
   await from.repo.tx(async tx => {
     await tx.update(from.id, {content: liveContent})

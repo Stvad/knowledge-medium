@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { verifyObjectBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
@@ -126,6 +126,34 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect(await store.get(USER, BLOCK)).toBeNull() // safe to clear — the dedup is genuine
   })
 
+  it('continues the pass when clearing a verified 409 record throws', async () => {
+    const plain = bytes(24)
+    const contentHash = await computeContentHash(plain)
+    await store.stage(stageInput({ contentHash }))
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, plain)
+    const record = await store.get(USER, BLOCK)
+    expect(record).toMatchObject({ status: 'pending', attempts: 0 })
+
+    const laterBlock = 'media:later'
+    const laterBytes = bytes(8)
+    const laterHash = await computeContentHash(laterBytes)
+    const laterKey = laterHash.slice('sha256:'.length)
+    await store.stage(stageInput({ assetBlockId: laterBlock, contentKey: laterKey, contentHash: laterHash }))
+    await store.promote(USER, laterBlock)
+    await byteStore.put(USER, WS, laterKey, laterBytes)
+
+    vi.spyOn(blobStore, 'put').mockResolvedValueOnce('exists')
+    const get = vi.spyOn(blobStore, 'get').mockResolvedValueOnce(plain)
+    const clear = vi.spyOn(store, 'delete').mockRejectedValueOnce(new Error('queue write failed'))
+
+    expect(await drainUploads(USER, deps())).toEqual({ uploaded: 1, failed: 0, deferred: 0, retried: 1 })
+    expect(get).toHaveBeenCalledOnce()
+    expect(clear.mock.calls).toEqual([[USER, BLOCK], [USER, laterBlock]])
+    expect(await store.get(USER, BLOCK)).toEqual({ ...record, attempts: 1 })
+    expect(await store.get(USER, laterBlock)).toBeNull()
+  })
+
   it('409 whose existing object hash-MISMATCHES (poisoned path) → keeps the record failed, never clears', async () => {
     // HASH never matches arbitrary bytes, so the existing object is "poisoned".
     await store.stage(stageInput())
@@ -151,6 +179,26 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
 
     expect(summary).toMatchObject({ retried: 1, failed: 0, uploaded: 0 })
     expect((await store.get(USER, BLOCK))).toMatchObject({ status: 'pending', attempts: 1 })
+  })
+
+  it('preserves the record when upload permission closes during a 409 verification read', async () => {
+    await store.stage(stageInput())
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, bytes(16))
+    const record = await store.get(USER, BLOCK)
+    expect(record).toMatchObject({ status: 'pending', attempts: 0 })
+    blobStore.existing = bytes(16)
+    let writable = true
+    const get = vi.spyOn(blobStore, 'get').mockImplementationOnce(async () => {
+      writable = false
+      throw new Error('verification read failed')
+    })
+
+    const summary = await drainUploads(USER, deps({ canUpload: () => writable, maxAttempts: 1 }))
+
+    expect(get).toHaveBeenCalledOnce()
+    expect(summary).toEqual({ deferred: 1, uploaded: 0, failed: 0, retried: 0 })
+    expect(await store.get(USER, BLOCK)).toEqual(record)
   })
 
   it('does NOT drain a staged (not-yet-promoted) record', async () => {
@@ -191,7 +239,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     await store.promote(USER, BLOCK)
     await byteStore.put(USER, WS, KEY, bytes(8))
 
-    const summary = await drainUploads(USER, deps({ isActiveUser: () => false }))
+    const summary = await drainUploads(USER, deps({ canUpload: () => false }))
 
     expect(summary).toMatchObject({ deferred: 1, uploaded: 0, failed: 0, retried: 0 })
     expect(blobStore.puts).toHaveLength(0) // never touched Storage under the wrong account
@@ -238,6 +286,25 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect(summary).toMatchObject({ deferred: 1, retried: 0, failed: 0 })
     const rec = await store.get(USER, BLOCK)
     expect(rec).toMatchObject({ status: 'pending', attempts: 0 }) // attempt budget untouched
+  })
+
+  it('preserves the record when upload permission closes during a rejected PUT', async () => {
+    await store.stage(stageInput())
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, bytes(8))
+    const record = await store.get(USER, BLOCK)
+    expect(record).toMatchObject({ status: 'pending', attempts: 0 })
+    let writable = true
+    const put = vi.spyOn(blobStore, 'put').mockImplementationOnce(async () => {
+      writable = false
+      throw new BlobPutError('access denied', true, 403)
+    })
+
+    const summary = await drainUploads(USER, deps({ canUpload: () => writable }))
+
+    expect(put).toHaveBeenCalledOnce()
+    expect(summary).toEqual({ deferred: 1, uploaded: 0, failed: 0, retried: 0 })
+    expect(await store.get(USER, BLOCK)).toEqual(record)
   })
 
   it('a transient failure CANNOT exhaust the attempt budget — only AGE quarantines (Codex P2)', async () => {
