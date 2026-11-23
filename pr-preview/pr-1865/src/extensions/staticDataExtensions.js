@@ -1,0 +1,1 @@
+export{UX as staticDataExtensions}from"../../chunks/app-BpEoi1YO.js";

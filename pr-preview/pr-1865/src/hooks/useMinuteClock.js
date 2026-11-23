@@ -1,0 +1,1 @@
+export{Rj as useMinuteClock}from"../../chunks/app-BpEoi1YO.js";

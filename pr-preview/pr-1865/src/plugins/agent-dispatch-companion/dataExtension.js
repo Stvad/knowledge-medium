@@ -1,0 +1,1 @@
+export{i6 as agentDispatchCompanionDataExtension}from"../../../chunks/app-BpEoi1YO.js";

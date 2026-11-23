@@ -1,0 +1,1 @@
+export{BP as openKeybindingsSettingsAction}from"../../../chunks/app-BpEoi1YO.js";

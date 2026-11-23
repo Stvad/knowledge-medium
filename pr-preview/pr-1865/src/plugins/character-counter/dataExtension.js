@@ -1,0 +1,1 @@
+export{B2 as characterCounterDataExtension}from"../../../chunks/app-BpEoi1YO.js";

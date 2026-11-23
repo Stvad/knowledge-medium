@@ -1,0 +1,1 @@
+export{ND as spatialNavigationShellDecorator}from"../../../chunks/app-BpEoi1YO.js";

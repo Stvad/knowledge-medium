@@ -1,0 +1,1 @@
+export{Wdt as deriveWorkspaceIdNamespace}from"../../../chunks/app-BpEoi1YO.js";

@@ -1,0 +1,1 @@
+export{vE as videoPlayerMarkdownExtension}from"../../../chunks/app-BpEoi1YO.js";

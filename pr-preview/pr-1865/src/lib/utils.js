@@ -1,0 +1,1 @@
+export{G8 as cn}from"../../chunks/app-BpEoi1YO.js";

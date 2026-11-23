@@ -1,0 +1,1 @@
+export{tet as kernelDataExtension}from"../../chunks/app-BpEoi1YO.js";

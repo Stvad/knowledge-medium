@@ -1,0 +1,1 @@
+export{rC as blockrefCompletionSource}from"../../chunks/app-BpEoi1YO.js";
