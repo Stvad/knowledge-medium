@@ -483,16 +483,17 @@
     word-break: normal;
   }
 
-  /* Soft background fade for selection (multi-select) and keyboard
-     focus. Without this, `bg-accent/80` (toggled on `.tm-block` by
-     `useIsSelected`) and `bg-accent/40` (toggled on the focused block's
-     content row by `BlockFocusShellDecorator`) snap on/off the moment
-     the user moves selection or focus — visually noisy on rapid j/k
-     stepping. The same selectors that receive those classes are the
-     only ones that animate, so unrelated background changes elsewhere
-     in the block aren't affected. */
-  .tm-block,
-  .tm-block > .block-body > div:first-child {
+  /* Layouts with custom highlights paint their own focus and selection targets. */
+  [data-block-focused]:not([data-block-highlight="custom"]) > .block-body > div:first-child {
+    @apply bg-accent/40;
+  }
+
+  .tm-block[data-block-selected]:not([data-block-highlight="custom"]) {
+    @apply bg-accent/80;
+  }
+
+  .tm-block:not([data-block-highlight="custom"]),
+  .tm-block:not([data-block-highlight="custom"]) > .block-body > div:first-child {
     transition: background-color 150ms ease;
   }
 

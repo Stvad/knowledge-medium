@@ -36,13 +36,14 @@ const PropertyFieldLayout = ({
       className="tm-property-field-row"
       frameProps={{
         'data-property-field-row': 'true',
+        'data-block-highlight': 'custom',
         // Keep the control on collapsed rows so keyboard users can reopen them.
         'data-expanded-single-leaf': String((!isCollapsed || focused) && soleChildIsLeaf),
       }}
     >
       <div className="block-body relative min-w-0 flex-grow">
         <div data-property-row-layout="true" className="grid min-w-0 grid-cols-[minmax(6rem,11rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent hover:border-border/50">
-          <div className="min-w-0" data-property-name-cell="true">
+          <div className="min-w-0 rounded-sm" data-property-name-cell="true">
             <Content/>
           </div>
           <CollapsibleContent forceMount={focused || undefined} hidden={isCollapsed && !focused} className="min-w-0" data-property-value-cell="true">
