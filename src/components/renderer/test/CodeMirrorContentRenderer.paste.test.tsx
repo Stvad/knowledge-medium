@@ -210,6 +210,22 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     })
   })
 
+  it('uses the insertion point after a pending cut check', async () => {
+    let finishCutCheck!: () => void
+    const cutCheck = new Promise<null>(resolve => { finishCutCheck = () => resolve(null) })
+    vi.mocked(pasteArmedCut).mockReturnValueOnce(cutCheck)
+    const {content, editorView} = renderEditor()
+    expect(editorView.state.selection.main.from).toBe(0)
+
+    await act(async () => {
+      dispatchPaste(content, ' Title', '<h2>Title</h2>')
+      expect(pasteArmedCut).toHaveBeenCalledTimes(1)
+      editorView.dispatch({selection: {anchor: 5}})
+      finishCutCheck()
+      await vi.waitFor(() => expect(editorView.state.doc.toString()).toBe('Block Title'))
+    })
+  })
+
   // With the html-document plugin off, a document is edited here as text.
   it('takes a paste into source whole, with no files', async () => {
     await repo.tx(tx => tx.update('block-1', {properties: {types: ['html-document']}}),

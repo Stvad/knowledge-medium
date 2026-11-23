@@ -48,6 +48,11 @@ describe('rich paste decision', () => {
       .toEqual({kind: 'single-block', text: '[site](https://example.com/)'})
   })
 
+  it('keeps literal Markdown characters and edge spaces when a heading is pasted inline', () => {
+    expect(decide(editor({text: ' **literal** ', html: '<h2>**literal**</h2>', caret: inlineCaret})))
+      .toEqual({kind: 'single-block', text: ' \\*\\*literal\\*\\* '})
+  })
+
   it.each([
     ['no html', {text: 'a\nb'}],
     ['html with nothing the text lacks', {text: 'a\nb', html: '<p>a</p><p>b</p>'}],

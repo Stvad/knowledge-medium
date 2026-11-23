@@ -46,9 +46,8 @@ export type PasteDecision =
  *  `defaultPasteDecision`. */
 export type PasteSurface = 'editor' | 'shell'
 
-/** Caret/selection on the editor surface at paste time. The decision is
- *  resolved synchronously (`runSync`), so an override sees the live paste-time
- *  caret and has no opportunity to move it mid-decision. Present only on the
+/** Caret/selection on the editor surface when the text paste is decided.
+ *  The decision resolves synchronously (`runSync`). Present only on the
  *  `editor` surface (see the `surface ⟺ caret` invariant on `PasteRequest`).
  *  Lets overrides vary by position (e.g. title line 1 vs body line 2+) without
  *  re-deriving it from the DOM. */

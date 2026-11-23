@@ -45,20 +45,25 @@ export const convertClipboardHtml = (
     // Clipboard line breaks around a heading delimit it as a block. Breaks
     // within its text become spaces so the heading can fit into a sentence.
     const text = plainText.replace(/^[\r\n]+|[\r\n]+$/g, '').replace(/\r\n?|\n/g, ' ')
-    return {kind: 'inline', markdown: text.trim() ? text : only.content.slice(only.level + 1)}
+    if (!text.trim()) return {kind: 'inline', markdown: only.content.slice(only.level + 1)}
+    const literal = markdown({type: 'text', value: text.replace(/^[ \t]+|[ \t]+$/g, '')})
+    return {kind: 'inline', markdown: restoreInlineEdgeSpaces(literal, text)}
   }
   if (tokens.length === 1 && only.kind === 'paragraph' && !only.content.includes('\n')) {
     // The plain text's lines are ones the html failed to mark (CSS-drawn
     // breaks); a one-line insert would run them together.
     if (plainText.trim().includes('\n')) return {kind: 'plain'}
-    // Whitespace minification drops the selection's edge spaces (a
-    // double-clicked word's trailing one); restore them from the plain text
-    // so a caret paste doesn't glue words together.
-    const lead = /^[ \t]*/.exec(plainText)?.[0] ?? ''
-    const trail = /[ \t]*$/.exec(plainText)?.[0] ?? ''
-    return {kind: 'inline', markdown: `${lead}${only.content}${trail}`}
+    return {kind: 'inline', markdown: restoreInlineEdgeSpaces(only.content, plainText)}
   }
   return {kind: 'outline', blocks: outlineFromTokens(tokens)}
+}
+
+/** Keep the selection's edge spaces, such as a double-clicked word's
+ *  trailing space, so a caret paste doesn't glue words together. */
+const restoreInlineEdgeSpaces = (markdown: string, plainText: string): string => {
+  const lead = /^[ \t]*/.exec(plainText)?.[0] ?? ''
+  const trail = /[ \t]*$/.exec(plainText)?.[0] ?? ''
+  return `${lead}${markdown}${trail}`
 }
 
 /** Roam's 9-character block uids, which this app's own grammar (UUIDs) doesn't read. */
