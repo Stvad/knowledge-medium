@@ -1,1 +1,1 @@
-export{ho as tablesPlugin}from"../../../chunks/app-fvGsszat.js";
+export{ho as tablesPlugin}from"../../../chunks/app-nczJPYjc.js";

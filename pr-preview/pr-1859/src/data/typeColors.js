@@ -1,1 +1,1 @@
-export{mI as DEFAULT_TYPE_COLORS,hI as defaultTypeColor,gI as pickLeastUsedTypeColor}from"../../chunks/app-fvGsszat.js";
+export{xI as DEFAULT_TYPE_COLORS,SI as defaultTypeColor,CI as pickLeastUsedTypeColor}from"../../chunks/app-nczJPYjc.js";

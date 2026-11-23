@@ -1,1 +1,1 @@
-export{xv as extensionsOverridesProp,Sv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-fvGsszat.js";
+export{xv as extensionsOverridesProp,Sv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-nczJPYjc.js";

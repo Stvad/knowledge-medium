@@ -1,1 +1,1 @@
-export{WX as tablesDataExtension}from"../../../chunks/app-fvGsszat.js";
+export{ZX as tablesDataExtension}from"../../../chunks/app-nczJPYjc.js";

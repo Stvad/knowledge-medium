@@ -1,1 +1,1 @@
-export{WJ as usePropertySchemas}from"../../chunks/app-fvGsszat.js";
+export{ZJ as usePropertySchemas}from"../../chunks/app-nczJPYjc.js";

@@ -1,1 +1,1 @@
-export{en as AppRuntimeProvider}from"../../chunks/app-fvGsszat.js";
+export{en as AppRuntimeProvider}from"../../chunks/app-nczJPYjc.js";
