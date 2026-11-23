@@ -87,7 +87,7 @@ export const isNestedSurface = (child: DrawnChild): child is NestedSurface => ty
 export interface ChildrenView {
   readonly order?: ChildrenOrder
   id: string
-  /** Walks load the list. Anchored edits also peek its current publication on writer admission. */
+  /** Walks load the list. Structural edits peek its published membership inside the writer. */
   read(ctx: ChildrenViewContext): {
     load(): Promise<readonly DrawnChild[]>
     peek?(): readonly DrawnChild[] | null | undefined

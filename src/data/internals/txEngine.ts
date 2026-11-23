@@ -23,7 +23,6 @@
  * undo recording, afterCommit dispatch.
  */
 
-import { blockChangeCursor } from '../blockChangeCursor'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
@@ -402,10 +401,6 @@ type EngineWriteOpts = TxWriteOpts & {[derivedWrite]?: true}
 type EngineInsertOpts = TxInsertOpts & EngineWriteOpts
 
 export class TxImpl implements Tx {
-  blockChangeCursor(): Promise<string> {
-    return blockChangeCursor(this.ctx.txDb)
-  }
-
   readonly meta: TxMeta
   private readonly userWrittenIds = new Set<string>()
   private readonly explicitlyUnsetProperties = new Map<string, Set<string>>()

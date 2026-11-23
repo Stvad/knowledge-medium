@@ -8,7 +8,13 @@ import { outlineSurfaceOf } from '@/data/outlineSurface'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { drawnChildrenOf } from '@/data/visibleChildren'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { tableChildrenViews } from '@/plugins/tables/childrenViews'
+import { GridController } from '@/plugins/tables/controller'
+import { turnIntoTable } from '@/plugins/tables/convert'
+import { tablesDataExtension } from '@/plugins/tables/dataExtension'
+import { registerGrid, tableRenderScopeId } from '@/plugins/tables/registry'
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
 import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
 import { ActionContextTypes, type ActionConfig, type ActionTrigger } from '@/shortcuts/types'
@@ -52,9 +58,11 @@ const storedChildren = async (id: string) => (await db.db.getAll<{id: string}>(
   'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [id],
 )).map(row => row.id)
 
-const expectStoredTree = async (changes: Partial<ChildLists>) => {
+const expectStoredTree = async (changes: Partial<ChildLists>, ignoredIds: readonly string[] = []) => {
   const expected = {...INITIAL, ...changes}
-  for (const id of BLOCKS) expect(await storedChildren(id), `children of ${id}`).toEqual(expected[id])
+  for (const id of BLOCKS) {
+    expect((await storedChildren(id)).filter(childId => !ignoredIds.includes(childId)), `children of ${id}`).toEqual(expected[id])
+  }
 }
 
 const deps = (id: string) => ({block: repo.block(id), uiStateBlock: repo.block('ui'), scopeRootId: 'page', renderScopeId: SCOPE})
@@ -65,6 +73,7 @@ async function queueBoth(first: () => void | Promise<void>, second: () => void |
   const writeReleased = new Promise<void>(resolve => { releaseWrite = resolve })
   const runTx = repo.tx.bind(repo)
   let firstWriting = false
+  let firstFinished = false
   const writes = vi.spyOn(repo, 'tx').mockImplementationOnce((fn, options) => runTx(async tx => {
     firstWriting = true
     await writeReleased
@@ -72,10 +81,11 @@ async function queueBoth(first: () => void | Promise<void>, second: () => void |
   }, options))
   const pending: (void | Promise<void>)[] = []
   try {
-    pending.push(first())
-    await vi.waitFor(() => expect(firstWriting).toBe(true), {interval: 5})
+    pending.push(Promise.resolve(first()).then(() => { firstFinished = true }))
+    await vi.waitFor(() => expect(firstWriting || firstFinished).toBe(true), {interval: 5})
+    const expectedWrites = firstWriting ? 2 : 1
     pending.push(second())
-    await vi.waitFor(() => expect(writes).toHaveBeenCalledTimes(2), {interval: 5})
+    await vi.waitFor(() => expect(writes).toHaveBeenCalledTimes(expectedWrites), {interval: 5})
   } finally {
     releaseWrite()
     writes.mockRestore()
@@ -101,22 +111,18 @@ const RACES = [
   {
     name: 'Tab twice', subject: 'c', first: 'indentBlock', second: 'indentBlock',
     plain: {page: ['a', 'b'], b1: ['c']},
-    custom: {page: ['a', 'b'], b: ['b1', 'c']},
   },
   {
     name: 'Move up twice', subject: 'c', first: 'moveBlockUp', second: 'moveBlockUp',
     plain: {page: ['c', 'a', 'b']},
-    custom: {page: ['a', 'c', 'b']},
   },
   {
     name: 'Move up then Tab', subject: 'c', first: 'moveBlockUp', second: 'indentBlock',
     plain: {page: ['a', 'b'], a: ['c']},
-    custom: {page: ['a', 'c', 'b']},
   },
   {
     name: 'Move down then Shift+Tab', subject: 'b1', first: 'moveBlockDown', second: 'outdentBlock',
     plain: {page: ['a', 'b', 'c', 'b1'], b: []},
-    custom: {page: ['a', 'b', 'c'], b: [], c: ['b1']},
   },
 ] as const
 
@@ -197,19 +203,7 @@ describe.each(['plain', 'custom'] as const)('%s outline', kind => {
       () => actions[race.first].handler(deps(race.subject), trigger),
       () => actions[race.second].handler(deps(race.subject), trigger),
     )
-    await expectStoredTree(race[kind])
-  })
-
-  if (kind === 'custom') it.each([
-    ['same parent', 'a'],
-    ['different parents', 'b1'],
-  ] as const)('refuses a stale move between siblings with %s', async (_, subject) => {
-    const {moveBlockUp, moveBlockDown} = createSharedBlockActions({repo})
-    await queueBoth(
-      () => moveBlockUp.handler(deps('c'), trigger),
-      () => moveBlockDown.handler(deps(subject), trigger),
-    )
-    await expectStoredTree({page: ['a', 'c', 'b']})
+    await expectStoredTree(race.plain)
   })
 
   it('reads the new neighbour for sequential Move up then Tab', async () => {
@@ -239,38 +233,87 @@ describe.each(['plain', 'custom'] as const)('%s outline', kind => {
   })
 })
 
-it('refuses a queued indent when a derived view changes its preceding sibling', async () => {
-  const owned = childIds('page')
-  const sort = (ids: readonly string[]) => ids.toSorted((a, b) =>
-    repo.block(a).peek()!.content.localeCompare(repo.block(b).peek()!.content))
-  const sortedChildIds = async () => {
-    const ids = await owned.load()
-    await Promise.all(ids.map(childId => repo.load(childId)))
-    return sort(ids)
+describe('grid rows and notes', () => {
+  const rows = ['a', 'b', 'c']
+  const host = 'page'
+  const options = {scope: ChangeScope.BlockDefault}
+  const propertyDisplay = {childBacked: true, workspace: 'none', panel: 'inherit'} as const
+  let grid: GridController
+  let releaseGrid: () => void
+  let machinery: string[]
+  beforeEach(async () => {
+    await db.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, properties_migration)
+       VALUES (?, 'test', ?, 1, 1, 'none', 'children')`, [WS, USER.id])
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, tablesDataExtension, tableChildrenViews]))
+    await turnIntoTable(repo, host)
+    const outer = outlineSurfaceOf({scopeRootId: host, propertyDisplay, renderScopeId: SCOPE})!
+    const scope = tableRenderScopeId(SCOPE, host)
+    grid = new GridController(repo.block(host), repo.block('ui'), scope, SCOPE)
+    grid.setSurfaces(propertyDisplay, outer)
+    grid.setRows(rows, rows.length)
+    releaseGrid = registerGrid(scope, grid)
+    expect(await drawnChildrenOf(repo.block(host), outer)).toContainEqual(expect.objectContaining({members: rows}))
+    expect(await drawnChildrenOf(repo.block('b'), grid.rowSurface('b'))).toEqual(['b1'])
+    machinery = (await storedChildren(host)).filter(id => !rows.includes(id))
+    expect(machinery).not.toHaveLength(0)
+  })
+  afterEach(() => releaseGrid?.())
+
+  const gridDeps = (subject: string) => ({
+    ...deps(subject), ...grid.rowSurface(subject === 'b1' ? 'b' : subject),
+    ...(subject === 'b1' && {renderScopeId: grid.notesScopeId('b')}),
+  })
+
+  const expectGridTree = async (expected: Partial<ChildLists>) => {
+    await expectStoredTree(expected, machinery)
+    expect((await storedChildren(host)).filter(id => machinery.includes(id))).toEqual(machinery)
   }
-  repo.setRuntimeContributions(childrenViewFacet, 'test.derived', [({parent, surface}) =>
-    parent.id === 'page' && surface.renderScopeId === SCOPE && {
-      id: 'test.derived', order: 'derived', read: () => ({
-        load: sortedChildIds,
-        peek: () => {
-          const ids = owned.peek()
-          return ids && sort(ids)
-        },
-      }),
-    }])
-  expect(await sortedChildIds()).toEqual(['a', 'b', 'c'])
 
-  const {indentBlock} = createSharedBlockActions({repo})
-  await queueBoth(
-    () => repo.tx(tx => tx.update('b', {content: 'z'}), {scope: ChangeScope.BlockDefault}),
-    () => indentBlock.handler(deps('c'), trigger),
-  )
+  it.each(RACES)('queues $name in a plain grid', async race => {
+    const actions = createSharedBlockActions({repo})
+    const occurrence = gridDeps(race.subject)
+    expect(occurrence.scopeRootId).toBe(race.subject === 'b1' ? 'b' : race.subject)
+    await queueBoth(
+      () => actions[race.first].handler(occurrence, trigger),
+      () => actions[race.second].handler(occurrence, trigger),
+    )
 
-  await expectStoredTree({})
-  expect(await sortedChildIds()).toEqual(['a', 'c', 'b'])
+    // Move down from a row's last note stays within that row. Shift+Tab promotes the note.
+    const expected = race.subject === 'b1' ? {page: ['a', 'b', 'b1', 'c'], b: []} : race.plain
+    await expectGridTree(expected)
+  })
+
+  it('skips an undrawn stored child when Tab chooses the preceding grid row', async () => {
+    await repo.tx(tx => tx.create({id: 'undrawn', workspaceId: WS, parentId: host, orderKey: 'a1V'}), options)
+    grid.setRows(rows, rows.length + 1)
+    await createSharedBlockActions({repo}).indentBlock.handler(gridDeps('c'), trigger)
+
+    await expectGridTree({page: ['a', 'b', 'undrawn'], b: ['b1', 'c']})
+    expect(await storedChildren('undrawn')).toEqual([])
+  })
+
+  it.each(['reparented', 'deleted'] as const)('refuses sorted-grid Tab after its drawn predecessor is %s', async change => {
+    grid.setSorted(true)
+    grid.setRows(['b', 'a', 'c'], rows.length)
+    const anchor = 'a'
+    await queueBoth(
+      () => repo.tx(tx => change === 'reparented'
+        ? tx.move(anchor, {parentId: 'b', orderKey: 'a1'})
+        : tx.delete(anchor), options),
+      () => createSharedBlockActions({repo}).indentBlock.handler(gridDeps('c'), trigger),
+    )
+
+    expect(grid.rows).toEqual(['b', 'a', 'c'])
+    await expectGridTree({page: ['b', 'c'], b: change === 'reparented' ? ['b1', anchor] : ['b1']})
+    expect(await db.db.getOptional('SELECT parent_id, order_key, deleted FROM blocks WHERE id = ?', [anchor]))
+      .toEqual(change === 'reparented'
+        ? {parent_id: 'b', order_key: 'a1', deleted: 0}
+        : {parent_id: host, order_key: 'a0', deleted: 1})
+  })
 })
 
-it('refuses an outdated list that is still published after the preceding sibling changes in storage', async () => {
+it('uses stored outline order while the view still publishes its previous order', async () => {
   const members = ['a', 'b', 'c']
   repo.setRuntimeContributions(childrenViewFacet, 'test.lagging-order', [({parent, surface}) =>
     parent.id === 'page' && surface.renderScopeId === SCOPE && {
@@ -285,24 +328,35 @@ it('refuses an outdated list that is still published after the preceding sibling
     () => indentBlock.handler(deps('c'), trigger),
   )
 
-  await expectStoredTree({page: ['a', 'c', 'b']})
+  await expectStoredTree({page: ['a', 'b'], a: ['c']})
 })
 
-it.each([
-  ['its order changes', ['a', 'c', 'b']],
-  ['the subject stops being drawn', ['a', 'b']],
-] as const)('refuses a queued indent without a block edit when %s', async (_, next) => {
+it('refuses a queued indent when the subject stops being drawn', async () => {
   let members: readonly string[] = ['a', 'b', 'c']
   repo.setRuntimeContributions(childrenViewFacet, 'test.presentation-order', [({parent, surface}) =>
     parent.id === 'page' && surface.renderScopeId === SCOPE && {
-      id: 'test.presentation-order', order: 'derived', read: () => ({
+      id: 'test.presentation-order', order: 'outline', read: () => ({
         load: async () => members,
         peek: () => members,
       }),
     }])
   await changeBeforeWrite(
-    () => { members = next },
+    () => { members = ['a', 'b'] },
     () => createSharedBlockActions({repo}).indentBlock.handler(deps('c'), trigger),
+  )
+
+  await expectStoredTree({})
+})
+
+it('refuses a queued move when its source changes from outline to derived order', async () => {
+  let order: 'outline' | 'derived' = 'outline'
+  repo.setRuntimeContributions(childrenViewFacet, 'test.changing-order', [({parent, surface}) =>
+    parent.id === 'page' && surface.renderScopeId === SCOPE && {
+      id: 'test.changing-order', order, read: () => childIds(parent.id),
+    }])
+  await changeBeforeWrite(
+    () => { order = 'derived' },
+    () => createSharedBlockActions({repo}).moveBlockUp.handler(deps('c'), trigger),
   )
 
   await expectStoredTree({})

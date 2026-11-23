@@ -439,6 +439,79 @@ describe('structural writes on a custom view', () => {
     expect(await memberMergePlacement(repo.block(id), surface)).toBeNull()
   })
 
+  it('keeps a foreign nested board slot as a boundary for Tab', async () => {
+    const surface = {...board(['a', 'x', 'b']), scopeRootId: 'b'}
+    const before = await structure()
+
+    await indentDrawnBlock(repo.block('b'), surface)
+
+    expect(await structure()).toEqual(before)
+  })
+
+  it('refuses a queued Tab inside a nested board result that is no longer drawn', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'first-note', workspaceId: WS, parentId: 'x', orderKey: 'a0'})
+      await tx.create({id: 'second-note', workspaceId: WS, parentId: 'x', orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+    const surface = {...board(['a', 'x', 'b']), scopeRootId: 'x'}
+    const before = await structure()
+    const runTx = repo.tx.bind(repo)
+    const writes = vi.spyOn(repo, 'tx').mockImplementationOnce((fn, options) => runTx(tx => {
+      board(['a', 'b'])
+      return fn(tx)
+    }, options))
+    try {
+      await indentDrawnBlock(repo.block('second-note'), surface)
+      expect(writes).toHaveBeenCalledOnce()
+    } finally {
+      writes.mockRestore()
+    }
+
+    expect(await structure()).toEqual(before)
+  })
+
+  it('refuses a queued Tab on a nested board member moved into a hidden branch', async () => {
+    await repo.mutate.createChild({parentId: 'c', id: 'preceding-note'})
+    const surface = {...board(['a', 'b']), scopeRootId: 'b'}
+    const runTx = repo.tx.bind(repo)
+    let afterMove: Awaited<ReturnType<typeof structure>> | undefined
+    const writes = vi.spyOn(repo, 'tx').mockImplementationOnce(async (fn, options) => {
+      await runTx(tx => tx.move('b', {parentId: 'c', orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
+      afterMove = await structure()
+      return runTx(fn, options)
+    })
+    try {
+      await indentDrawnBlock(repo.block('b'), surface)
+      expect(writes).toHaveBeenCalledOnce()
+    } finally {
+      writes.mockRestore()
+    }
+
+    expect(afterMove).toEqual(expect.arrayContaining([
+      {id: 'b', parent_id: 'c', order_key: 'a1'},
+    ]))
+    expect(await structure()).toEqual(afterMove)
+  })
+
+  it.each([
+    {gesture: 'outdent', subject: 'note', root: 'b', expected: ['a', 'b', 'note', 'c']},
+    {gesture: 'move down', subject: 'a', root: 'a', expected: ['b', 'a', 'c']},
+  ])('places a board $gesture before an undrawn row tied with the anchor', async ({gesture, subject, root, expected}) => {
+    await repo.tx(async tx => {
+      await tx.move('c', {parentId: 'owner', orderKey: 'a1'})
+      await tx.create({id: 'note', workspaceId: WS, parentId: 'b', orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    const surface = {...board(['a', 'b'], 'outline', false, () => true), scopeRootId: root}
+    const block = repo.block(subject)
+
+    const moved = gesture === 'outdent'
+      ? await outdentDrawnBlock(block, surface)
+      : await moveDrawnBlock(block, surface, 1)
+
+    expect(moved).toBe(true)
+    expect((await structure()).filter(row => row.parent_id === 'owner').map(row => row.id)).toEqual(expected)
+  })
+
   it('a same-scope query refuses reparenting even when all its members are data children', async () => {
     customList('owner', ['a', 'b', 'c'], 'query')
     const before = await structure()

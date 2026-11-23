@@ -101,9 +101,6 @@ export interface Tx {
    *  outside-tx readers never observe in-flight tx state. */
   peek(id: string): BlockData | null
 
-  /** Latest block change visible inside this transaction, for validating an externally drawn neighbour. */
-  blockChangeCursor(): Promise<string>
-
   // ──── Lifecycle ────
 
   /** Assert that a workspace may be written by this transaction without

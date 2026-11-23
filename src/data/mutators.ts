@@ -522,10 +522,21 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
 
 // ──── outline gestures: indent / outdent / moveVertical ────
 
-/** A gesture supplies its drawn anchor. Imperative callers omit it to resolve
- *  the property-display list inside the transaction, including a retained
- *  hidden subject. `core.move` always takes an explicit structural position. */
+/** Derived-order gestures supply their drawn anchor. Outline order resolves its
+ *  neighbours in the transaction, including a retained hidden subject. `core.move` always takes an explicit structural position. */
 const propertyDisplayArg = {propertyDisplay: propertyDisplayScopeSchema.optional()}
+const memberIds = z.array(z.string()).optional()
+
+/** A view selects eligible children. Their relative order comes from the writing transaction. */
+async function outlineChildren(tx: Tx, parentId: string | null, workspaceId: string, propertyDisplay: PropertyDisplayScopeLevels | undefined, members?: string[]) {
+  if (!members) {
+    const siblings = await visibleChildrenOf(tx, parentId, workspaceId, displayScopeOf({propertyDisplay}))
+    return {listed: siblings, siblings}
+  }
+  const siblings = await tx.childrenOf(parentId, workspaceId)
+  const included = new Set(members)
+  return {listed: siblings.filter(row => included.has(row.id)), siblings}
+}
 
 /** `siblings` with the gesture's subject on it, and its index: a subject the
  *  drawn list leaves out goes where the outline draws it (`unlistedIndexAmong`,
@@ -542,7 +553,7 @@ const withSubject = (
 
 // ──── indent ────
 
-const drawnAnchorSchema = z.object({changeCursor: z.string(), parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional(), foreignRootId: z.string().optional()})
+const drawnAnchorSchema = z.object({parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional(), foreignRootId: z.string().optional()})
 export type DrawnAnchor = z.infer<typeof drawnAnchorSchema>
 
 /** Only live rows still under the parent drawn at dispatch can participate in a relative write. */
@@ -570,12 +581,12 @@ export function captureOccurrenceEdge(
 
 /** `subjectParent` is the drawn parent before the gesture, including for an outdent or a move between parents. */
 async function anchoredSubject(tx: Tx, id: string, anchor: DrawnAnchor, subjectParent: string | null) {
-  if (anchor.changeCursor !== await tx.blockChangeCursor()) return null
   const sibling = await liveChildAt(tx, anchor.siblingId, anchor.parentId)
   return sibling ? liveChildAt(tx, id, subjectParent, anchor.boundaryId, anchor.foreignRootId) : null
 }
 
 interface IndentArgs {
+  members?: string[]
   anchor?: DrawnAnchor
   id: string
   /** The display scope of the surface the gesture ran in (see the section
@@ -585,10 +596,10 @@ interface IndentArgs {
 
 export const indent = defineMutator<IndentArgs, void>({
   name: 'core.indent',
-  argsSchema: z.object({id: z.string(), anchor: drawnAnchorSchema.optional(), ...propertyDisplayArg}),
+  argsSchema: z.object({id: z.string(), members: memberIds, anchor: drawnAnchorSchema.optional(), ...propertyDisplayArg}),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `indent ${id}`,
-  apply: async (tx, {id, propertyDisplay, anchor}) => {
+  apply: async (tx, {id, propertyDisplay, anchor, members}) => {
     if (anchor) {
       const self = await anchoredSubject(tx, id, anchor, anchor.parentId)
       if (!self) return
@@ -601,8 +612,8 @@ export const indent = defineMutator<IndentArgs, void>({
       // No parent — can't indent the root. Legacy was a no-op here.
       return
     }
-    const {siblings, index: ix} = withSubject(
-      await visibleChildrenOf(tx, self.parentId, self.workspaceId, displayScopeOf({propertyDisplay})), self)
+    const {listed} = await outlineChildren(tx, self.parentId, self.workspaceId, propertyDisplay, members)
+    const {siblings, index: ix} = withSubject(listed, self)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
     const newParentChildren = await tx.childrenOf(newParent.id)
@@ -615,6 +626,7 @@ export const indent = defineMutator<IndentArgs, void>({
 // ──── outdent ────
 
 interface OutdentArgs {
+  parentMembers?: string[]
   anchor?: DrawnAnchor
   id: string
   /** Optional surface boundary — the root of the visible subtree the
@@ -635,20 +647,15 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     id: z.string(),
     scopeRootId: z.string().optional(),
     anchor: drawnAnchorSchema.optional(),
+    parentMembers: memberIds,
     ...propertyDisplayArg,
   }),
   resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `outdent ${id}`,
-  apply: async (tx, {id, scopeRootId, propertyDisplay, anchor}) => {
-    if (anchor) {
-      const self = await anchoredSubject(tx, id, anchor, anchor.siblingId)
-      if (!self) return false
-      await relocateBlock(tx, self, anchor.parentId, {kind: 'after', siblingId: anchor.siblingId})
-      return true
-    }
-    const self = await requireBlock(tx, id)
-    if (self.parentId === null) return false  // already at root
+  apply: async (tx, {id, scopeRootId, propertyDisplay, anchor, parentMembers}) => {
+    const self = anchor ? await anchoredSubject(tx, id, anchor, anchor.siblingId) : await requireBlock(tx, id)
+    if (!self || self.parentId === null) return false
     // Refuse to outdent past the surface boundary — a direct child of
     // `scopeRootId` would otherwise pop out to the grandparent (or
     // workspace root), exiting the visible scope.
@@ -661,16 +668,18 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     const grandparent = parent.parentId
     // Pass self.workspaceId so the null-grandparent case scopes
     // correctly even before this tx pins a workspace.
-    const grandSiblings = await visibleChildrenOf(tx, grandparent, self.workspaceId, displayScopeOf({propertyDisplay}))
-    const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
+    const {listed, siblings: grandSiblings} = await outlineChildren(tx, grandparent, self.workspaceId, propertyDisplay, parentMembers)
     // The anchor — the current parent — isn't on the caller's list (a hidden
     // parent, or a stale read): a no-op, not a fallback to the grandparent's
     // end, which would be exactly the silent relocation this rule prevents.
-    if (parentIx < 0) return false
+    if (!listed.some(s => s.id === parent.id)) return false
+    const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
     // Place the outdented block immediately after its parent (between the
     // parent and the parent's next sibling), breaking a tie by re-keying the
     // run when the parent shares an order_key with its next grand-sibling (A1).
-    const orderKey = await keyImmediatelyAfter(tx, grandparent, grandSiblings, parentIx)
+    const orderKey = anchor
+      ? await orderKeyForInsert(tx, grandparent, self.workspaceId, {kind: 'after', siblingId: parent.id})
+      : await keyImmediatelyAfter(tx, grandparent, grandSiblings, parentIx)
     await tx.move(id, {parentId: grandparent, orderKey})
     return true
   },
@@ -681,6 +690,8 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
 const moveAnchorSchema = drawnAnchorSchema.extend({fromParentId: z.string().optional()})
 
 interface MoveVerticalArgs {
+  members?: string[]
+  parentMembers?: string[]
   anchor?: z.infer<typeof moveAnchorSchema>
   id: string
   /** -1 = up (toward the top of the visible list), +1 = down. */
@@ -732,12 +743,14 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     direction: z.union([z.literal(-1), z.literal(1)]),
     scopeRootId: z.string().optional(),
     anchor: moveAnchorSchema.optional(),
+    members: memberIds,
+    parentMembers: memberIds,
     ...propertyDisplayArg,
   }),
   resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id, direction}) => `move ${id} ${direction === -1 ? 'up' : 'down'}`,
-  apply: async (tx, {id, direction, scopeRootId, propertyDisplay, anchor}) => {
+  apply: async (tx, {id, direction, scopeRootId, propertyDisplay, anchor, members, parentMembers}) => {
     if (anchor) {
       const self = await anchoredSubject(tx, id, anchor, anchor.fromParentId ?? anchor.parentId)
       if (!self) return false
@@ -755,8 +768,8 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // The scope root anchors the view; it can't move within itself.
     if (scopeRootId !== undefined && id === scopeRootId) return false
 
-    const {siblings, index: idx} = withSubject(
-      await visibleChildrenOf(tx, self.parentId, self.workspaceId, displayScopeOf({propertyDisplay})), self)
+    const {listed, siblings: stored} = await outlineChildren(tx, self.parentId, self.workspaceId, propertyDisplay, members)
+    const {siblings, index: idx} = withSubject(listed, self)
 
     const up = direction === -1
     const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1
@@ -768,7 +781,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
       // re-keying — instead of widening past the whole tied run (which would
       // overshoot the swap by a slot).
       const adjacent = siblings[up ? idx - 1 : idx + 1]
-      const others = siblings.filter(s => s.id !== id)
+      const others = stored.filter(s => s.id !== id)
       const anchor = others.findIndex(s => s.id === adjacent.id)
       const orderKey = up
         ? await keyImmediatelyBefore(tx, self.parentId, others, anchor)
@@ -785,7 +798,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // shallower level (changing indentation), so it's also a no-op.
     if (scopeRootId === undefined || self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
-    const parentSiblings = await visibleChildrenOf(tx, parent.parentId, self.workspaceId, displayScopeOf({propertyDisplay}))
+    const {listed: parentSiblings} = await outlineChildren(tx, parent.parentId, self.workspaceId, propertyDisplay, parentMembers)
     const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
     // The parent isn't on the caller's list (a hidden parent, or a stale read).
     // Without this guard the DOWN branch reads `parentSiblings[-1 + 1]`,
