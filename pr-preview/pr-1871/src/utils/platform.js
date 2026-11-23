@@ -1,1 +1,0 @@
-export{Xq as isIOS,Zq as isMacPlatform}from"../../chunks/app-D2ZBbwx9.js";

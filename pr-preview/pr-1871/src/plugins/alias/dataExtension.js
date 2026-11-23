@@ -1,1 +1,0 @@
-export{K3 as aliasDataExtension}from"../../../chunks/app-D2ZBbwx9.js";

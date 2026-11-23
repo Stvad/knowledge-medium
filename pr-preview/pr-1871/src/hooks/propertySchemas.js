@@ -1,1 +1,0 @@
-export{pY as usePropertySchemas}from"../../chunks/app-D2ZBbwx9.js";

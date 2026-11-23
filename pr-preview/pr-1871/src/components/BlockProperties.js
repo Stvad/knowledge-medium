@@ -1,1 +1,0 @@
-export{SW as BlockProperties}from"../../chunks/app-D2ZBbwx9.js";

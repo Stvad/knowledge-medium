@@ -1,1 +1,0 @@
-export{bR as resolveAppRuntime,xR as resolveAppRuntimeSync}from"../../chunks/app-D2ZBbwx9.js";

@@ -1,1 +1,0 @@
-export{$tt as agree,ent as pluralize}from"../../chunks/app-D2ZBbwx9.js";
