@@ -1,1 +1,1 @@
-export{Ftt as agree,Itt as pluralize}from"../../chunks/app-CDznvycP.js";
+export{Htt as agree,Utt as pluralize}from"../../chunks/app-CXudEp8Z.js";

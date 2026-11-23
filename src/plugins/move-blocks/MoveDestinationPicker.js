@@ -1,1 +1,1 @@
-export{IC as MoveDestinationPicker}from"../../../chunks/app-CDznvycP.js";
+export{MC as MoveDestinationPicker}from"../../../chunks/app-CXudEp8Z.js";

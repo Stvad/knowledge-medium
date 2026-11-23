@@ -1,1 +1,1 @@
-export{Xc as ConfirmMigrationDialog}from"../../../chunks/app-CDznvycP.js";
+export{Kc as ConfirmMigrationDialog}from"../../../chunks/app-CXudEp8Z.js";

@@ -1,1 +1,1 @@
-export{TS as usePlaceSearch}from"../../../chunks/app-CDznvycP.js";
+export{xS as usePlaceSearch}from"../../../chunks/app-CXudEp8Z.js";
