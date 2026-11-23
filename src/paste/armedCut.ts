@@ -96,28 +96,21 @@ const writeRaw = (raw: string | null): void => {
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every(item => typeof item === 'string' && item.length > 0)
 
-/** The clipboard record is shared across tabs. Keep its persisted field name stable. */
-type StoredArmedCut = Omit<ArmedCut, 'foreignRootId'> & {boundaryId?: string}
-
-const serializeCut = ({foreignRootId, ...cut}: ArmedCut): string =>
-  JSON.stringify({...cut, boundaryId: foreignRootId} satisfies StoredArmedCut)
-
-/** Another build (or a hand edit) may have written the key, so anything not
- *  exactly this shape reads as "nothing armed". */
+/** An invalid clipboard record is treated as disarmed. */
 const parse = (raw: string | null): ArmedCut | null => {
   if (raw === null) return null
   try {
-    const value = JSON.parse(raw) as Partial<StoredArmedCut>
+    const value = JSON.parse(raw) as Partial<ArmedCut>
     if (typeof value.cutId !== 'string' || !value.cutId) return null
     if (typeof value.workspaceId !== 'string' || !value.workspaceId) return null
     if (typeof value.textDigest !== 'string' || !value.textDigest) return null
     if (!isStringArray(value.rootIds) || value.rootIds.length === 0) return null
-    if (value.boundaryId !== undefined && (typeof value.boundaryId !== 'string' || !value.boundaryId)) return null
+    if (value.foreignRootId !== undefined && (typeof value.foreignRootId !== 'string' || !value.foreignRootId)) return null
     return {
       cutId: value.cutId,
       workspaceId: value.workspaceId,
       rootIds: value.rootIds,
-      ...(value.boundaryId === undefined ? {} : {foreignRootId: value.boundaryId}),
+      ...(value.foreignRootId === undefined ? {} : {foreignRootId: value.foreignRootId}),
       textDigest: value.textDigest,
       pasted: value.pasted === true,
     }
@@ -180,7 +173,7 @@ export const armCut = async (
     pasted: false,
   }
   armedUndoTop = undoTop === undefined ? null : {cutId: cut.cutId, entry: undoTop}
-  writeRaw(serializeCut(cut))
+  writeRaw(JSON.stringify(cut))
 }
 
 /** Clear the armed cut — only if it is still `cutId` when one is given, so a
@@ -197,7 +190,7 @@ export const disarmCut = (cutId?: string): void => {
 export const markCutPasted = (cutId: string): void => {
   const current = getArmedCut()
   if (current?.cutId !== cutId || current.pasted) return
-  writeRaw(serializeCut({...current, pasted: true}))
+  writeRaw(JSON.stringify({...current, pasted: true}))
 }
 
 /** Tab-local: the undo entry on top when this tab armed the cut. */
