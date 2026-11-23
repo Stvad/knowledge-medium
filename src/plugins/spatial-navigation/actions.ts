@@ -93,7 +93,7 @@ const currentInstance = (
 }
 
 /** For an unnamed reservation or a nested occurrence, the enclosing rendered
- *  scope can identify a foreign member. The row itself must belong to it. */
+ *  scope can identify an isolated member. The row itself must belong to it. */
 const boundaryOfRow = async (row: PanelRow, uiStateBlock: Block, panel: HTMLElement): Promise<FocusedBlockLocation | undefined> => {
   const block = uiStateBlock.repo.block(row.blockId)
   let boundary = await selectionBoundaryOf(block, row.renderScopeId)
@@ -164,7 +164,7 @@ export const extendSelectionToSpatialTarget = async (
   const anchorBoundary = await boundaryOfRow(anchorRow, uiStateBlock, panel)
   if (!sameSelectionBoundary(anchorBoundary, targetBoundary)) return true
 
-  // A range must stay on one side of every foreign member boundary, even
+  // A range must stay on one side of every isolated member boundary, even
   // when it would skip a row from another scope while collecting blocks.
   const span = rows.slice(Math.min(anchorIndex, targetIndex), Math.max(anchorIndex, targetIndex) + 1)
   for (const row of span.slice(1, -1)) {

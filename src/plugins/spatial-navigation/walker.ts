@@ -529,8 +529,12 @@ export const instanceIn = (
   panel: HTMLElement,
   location: FocusedBlockLocation,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-): HTMLElement | null =>
-  panelInstances(panel, excludedSurfaces).find(el => isInstanceAt(el, location)) ?? null
+): HTMLElement | null => {
+  for (const element of panel.querySelectorAll<HTMLElement>(NAV_ITEM_SELECTOR)) {
+    if (isInstanceAt(element, location) && isNavigable(element, excludedSurfaces) && panelOf(element) === panel) return element
+  }
+  return null
+}
 
 /** `instanceIn` for callers holding a panel id rather than its element. */
 export const instanceAt = (
@@ -566,11 +570,9 @@ export const rowSlotIn = (
   location: FocusedBlockLocation,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
-  const mounted = instanceAt(panelId, location, excludedSurfaces)
-  if (mounted) return mounted
   const panel = panelById(panelId)
   if (!panel) return null
-  return panel.querySelector<HTMLElement>(
+  return instanceIn(panel, location, excludedSurfaces) ?? panel.querySelector<HTMLElement>(
     `[data-lazy-block-id="${CSS.escape(location.blockId)}"]` +
     `[data-lazy-render-scope-id="${CSS.escape(location.renderScopeId)}"]`,
   )
@@ -592,22 +594,17 @@ export const reservedRowBetween = (
   if (!panel) return null
   const fromScope = from.dataset.renderScopeId
   const fromLane = laneOf(from)
-  const slots = Array.from(panel.querySelectorAll<HTMLElement>(LABELLED_SLOT_SELECTOR)).filter(slot =>
-    aheadOf(from, slot, direction) &&
-    // Past the mounted neighbour it isn't "between" — the neighbour is then the
-    // nearer answer and nothing is missing before it.
-    (!to || aheadOf(slot, to, direction)) &&
-    slot.dataset.lazyRenderScopeId !== fromScope &&
-    slot.dataset.lazyRenderScopeId !== modelScope &&
-    (descend || !from.contains(slot)) &&
-    laneOf(slot) === fromLane &&
-    !isInExcludedSurface(slot, excludedSurfaces) &&
-    // Never picks a half-labelled slot and then gives up on it, which would
-    // silently drop a valid one further along.
-    slotLocationOf(slot) !== null,
-  )
-  const nearest = direction === 'down' ? slots[0] : slots[slots.length - 1]
-  return nearest ? slotLocationOf(nearest) : null
+  const slots = panel.querySelectorAll<HTMLElement>(LABELLED_SLOT_SELECTOR)
+  const step = direction === 'down' ? 1 : -1
+  for (let index = direction === 'down' ? 0 : slots.length - 1; index >= 0 && index < slots.length; index += step) {
+    const slot = slots[index]!
+    if (!aheadOf(from, slot, direction) || (to && !aheadOf(slot, to, direction))) continue
+    const location = slotLocationOf(slot)
+    if (!location || location.renderScopeId === fromScope || location.renderScopeId === modelScope) continue
+    if ((!descend && from.contains(slot)) || laneOf(slot) !== fromLane || isInExcludedSurface(slot, excludedSurfaces)) continue
+    return location
+  }
+  return null
 }
 
 /**
