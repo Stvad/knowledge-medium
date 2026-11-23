@@ -1,1 +1,1 @@
-export{EA as forgetRememberedWorkspace,DA as recallRememberedWorkspace,OA as rememberWorkspace}from"../../chunks/app-CCfXGceC.js";
+export{EA as forgetRememberedWorkspace,DA as recallRememberedWorkspace,OA as rememberWorkspace}from"../../chunks/app-Ck19j1Y9.js";

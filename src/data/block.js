@@ -1,1 +1,1 @@
-export{Cet as Block,wet as requireLoadedBlock}from"../../chunks/app-CCfXGceC.js";
+export{wet as Block,Tet as requireLoadedBlock}from"../../chunks/app-Ck19j1Y9.js";
