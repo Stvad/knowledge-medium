@@ -1,1 +1,1 @@
-export{UK as useTypes}from"../../chunks/app-Ck19j1Y9.js";
+export{UK as useTypes}from"../../chunks/app-DlrBuiZp.js";
