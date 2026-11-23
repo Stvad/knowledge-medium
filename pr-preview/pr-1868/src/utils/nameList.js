@@ -1,1 +1,1 @@
-export{Vtt as NAMES_IN_A_SENTENCE,Htt as describeNames,Utt as firstFew}from"../../chunks/app-DwCC3QFk.js";
+export{Vtt as NAMES_IN_A_SENTENCE,Htt as describeNames,Utt as firstFew}from"../../chunks/app-D52m2qj5.js";

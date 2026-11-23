@@ -1,1 +1,1 @@
-export{let as Block,uet as requireLoadedBlock}from"../../chunks/app-DwCC3QFk.js";
+export{let as Block,uet as requireLoadedBlock}from"../../chunks/app-D52m2qj5.js";

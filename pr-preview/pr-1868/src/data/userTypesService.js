@@ -1,1 +1,1 @@
-export{Uet as USER_TYPES_PROJECTOR_ID,Wet as UserTypesService,Get as userTypesProjector}from"../../chunks/app-DwCC3QFk.js";
+export{Uet as USER_TYPES_PROJECTOR_ID,Wet as UserTypesService,Get as userTypesProjector}from"../../chunks/app-D52m2qj5.js";
