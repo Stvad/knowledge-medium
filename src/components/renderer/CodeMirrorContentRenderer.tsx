@@ -7,6 +7,7 @@ import { EditorSelection, type ChangeSet } from '@codemirror/state'
 import { ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import { ExternalChange, type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { showError } from '@/utils/toast.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { focusBlock } from '@/data/properties.js'
@@ -205,7 +206,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         flushEditorContent(editorView)
       }
     }
-    if (!result || editorRef.current?.view !== editorView) return
+    if (!result) {
+      showError("Couldn't paste here. Try again.")
+      return
+    }
+    if (editorRef.current?.view !== editorView) return
 
     await focusBlock(uiStateBlock, result.focusBlock.id, {
       edit: true,

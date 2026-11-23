@@ -122,10 +122,17 @@ describe('the block actions pass their surface\'s display scope', () => {
     repo.setRuntimeContributions(childrenViewFacet, 'test.bulk-indent', [({parent, surface}) =>
       parent.id === 'owner' && surface.renderScopeId === renderScopeId ? {
         id: 'test.bulk-indent',
-        read: () => ({load: async () => {
-          const owned = await childIds(parent.id)
-          return ['c', 'b', 'a'].filter(id => owned.includes(id))
-        }}),
+        read: () => {
+          const owned = repo.query.childIds({id: parent.id})
+          const filtered = (ids: readonly string[]) => ['c', 'b', 'a'].filter(id => ids.includes(id))
+          return {
+            load: async () => filtered(await owned.load()),
+            peek: () => {
+              const ids = owned.peek()
+              return ids && filtered(ids)
+            },
+          }
+        },
       } : undefined])
 
     const uiStateBlock = repo.block('page')

@@ -5,6 +5,7 @@
 import { EditorView } from '@codemirror/view'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { childrenViewFor, type ListingSurface } from '@/data/childrenView'
 import { propertyDefinitionBlockId, materializePropertySeeds } from '@/data/definitionSeeds'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { focusBlock, peekFocusedBlockLocation } from '@/data/properties'
@@ -69,6 +70,12 @@ beforeEach(async () => {
 
 const surface = () => outlineSurfaceOf({scopeRootId: 'page', propertyDisplay: {childBacked: true, workspace: 'none', panel: 'inherit'}, renderScopeId: PAGE})!
 
+const viewHandle = async (id: string, surface: ListingSurface) => {
+  const parent = repo.block(id)
+  const ctx = {parent, data: (await parent.load())!, surface}
+  return childrenViewFor(ctx).read(ctx)
+}
+
 /** A query on the host, and two of its children the query does not select. */
 const withQuery = async () => {
   await materializePropertySeeds(repo, workspaceId, [queryProp])
@@ -132,6 +139,44 @@ describe('a table host’s drawn members', () => {
     expect(await previousDrawnStep(repo.block('after'), surface())).toMatchObject({block: {id: 'outside-1'}, crossed: false})
     expect(await previousDrawnStep(repo.block('outside-0'), surface())).toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}, crossed: true})
   })
+
+  it('peeks the current grid rows and outside children from warmed query handles', async () => {
+    const {fieldRowId} = await withQuery()
+    const handle = await viewHandle('host', surface())
+    expect(handle.peek?.()).toBeUndefined()
+    expect(await handle.load()).toEqual([fieldRowId, grid(ROWS, 'query'), 'outside-0', 'outside-1'])
+    expect(handle.peek?.()).toEqual([fieldRowId, grid(ROWS, 'query'), 'outside-0', 'outside-1'])
+
+    const nextRows = ['row-1', 'outside-0']
+    controller.setRows(nextRows, nextRows.length)
+    expect(handle.peek?.()).toEqual([fieldRowId, grid(nextRows, 'query'), 'row-0', 'outside-1'])
+  })
+})
+
+it('peeks the notes in the grid and in the row’s notes scope', async () => {
+  await withQuery()
+  await repo.tx(tx => tx.create({id: 'note', workspaceId, parentId: 'row-0', orderKey: 'a0'}), options)
+  const rowSurface = controller.rowSurface('row-0')
+  const notesScope = tableNotesScopeId(TABLE, 'row-0')
+  const row = await viewHandle('row-0', rowSurface)
+  const notes = await viewHandle('row-0', {...rowSurface, renderScopeId: notesScope})
+
+  expect(row.peek?.()).toBeUndefined()
+  expect(notes.peek?.()).toBeUndefined()
+  expect(await notes.load()).toEqual(['note'])
+  expect(notes.peek?.()).toEqual(['note'])
+  expect(row.peek?.()).toEqual([{
+    kind: 'nested-surface', order: 'outline', renderScopeId: notesScope,
+    scopeRootId: 'row-0', propertyDisplay: controller.rowsDisplayScope, members: ['note'],
+  }])
+
+  const nextRows = [...ROWS, 'note']
+  controller.setRows(nextRows, nextRows.length)
+  expect(row.peek?.()).toBeUndefined()
+  expect(notes.peek?.()).toBeUndefined()
+  expect(await row.load()).toEqual([])
+  expect(row.peek?.()).toEqual([])
+  expect(notes.peek?.()).toEqual([])
 })
 
 it('releases the notes scope when the grid stops drawing query results', () => {

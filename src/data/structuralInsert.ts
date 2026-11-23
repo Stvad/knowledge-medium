@@ -7,14 +7,14 @@ import type { SurfaceCarrier } from '@/data/outlineSurface'
 import { outdentDrawnBlock, structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
 import { nestedWriteLocation } from '@/utils/drawnWalk'
 
-export type InsertGesture = (
+export type InsertGesture =
   | {kind: 'above' | 'below' | 'enter' | 'empty-enter'}
   | {
     kind: 'split'
+    isCurrent?: () => boolean
     /** Save and re-arm the live editor around the transactional split. */
     write(placement: SplitPlacement, commit: (before: string, after: string) => Promise<string | null>): Promise<string | null>
   }
-) & {isCurrent?: () => boolean}
 
 export type InsertPosition = 'first' | 'last' | 'before' | 'after'
 
@@ -82,7 +82,7 @@ async function insertInDataOrder(
   }
 
   const newId = await repo.tx(async tx => {
-    if (!await currentAtPosition(tx) || request.isCurrent?.() === false) return null
+    if (!await currentAtPosition(tx)) return null
     if (childPosition) return tx.run(createChild, {parentId: id, position: childPosition, revealParent: true})
     return tx.run(position === 'before' ? createSiblingAbove : createSiblingBelow, {siblingId: id})
   }, options)
@@ -129,7 +129,8 @@ export async function insertDrawnBlock(block: Block, carrier: SurfaceCarrier, ge
   const position = positionFor(gesture.kind, policy.isScopeRoot, policy.hasUncollapsedChildren)
   const request: ChildrenInsertRequest = {
     block, data, surface, gesture: gesture.kind, position,
-    boundaryId: declaration?.boundaryId, foreignRootId: declaration?.foreignRootId, isCurrent: gesture.isCurrent,
+    boundaryId: declaration?.boundaryId, foreignRootId: declaration?.foreignRootId,
+    isCurrent: gesture.kind === 'split' ? gesture.isCurrent : undefined,
   }
 
   // The owner can place a nested member beside the others even when editing the member is scoped to its own subtree.
@@ -145,8 +146,8 @@ export async function insertDrawnBlock(block: Block, carrier: SurfaceCarrier, ge
     const result = await insertWithView(parent, surface, request, gesture, projected)
     if (result !== undefined) return result
   }
-  if (gesture.kind === 'empty-enter' && position === 'after' && policy.canOutdent) {
-    const moved = await outdentDrawnBlock(block, surface, data.parentId, gesture.isCurrent)
+  if (gesture.kind === 'empty-enter' && position === 'after') {
+    const moved = await outdentDrawnBlock(block, surface, data.parentId)
     if (moved !== false) return null
   }
   return insertInDataOrder(request, gesture)

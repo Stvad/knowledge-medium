@@ -149,6 +149,41 @@ const pressInEditor = async (actionId: string, blockId: string, cursor: 'start' 
 
 const contentOf = async (id: string) => (await repo.load(id))?.content
 
+describe('outdenting under an isolated member', () => {
+  const memberScope = () => ({...SURFACE_OF_PAGE(), renderScopeId: GRID_SCOPE, scopeRootId: 'r1'})
+  beforeEach(() => {
+    const members: readonly DrawnChild[] = [{kind: 'nested-surface', renderScopeId: GRID_SCOPE, members: ['r2', 'r1']}, 'tail']
+    repo.setRuntimeContributions(childrenViewFacet, 'test.isolated-grid', [({parent}) => parent.id === 'grid' && {
+      id: 'test.isolated-grid',
+      read: () => ({load: async () => members, peek: () => members}),
+    }])
+  })
+
+  it.each([
+    ['empty Enter adds a sibling note', 'split_block_cm', true],
+    ['Shift+Tab refuses to promote a note', 'edit.cm.outdent_block', false],
+  ] as const)('%s at the editing root', async (_, action, createsSibling) => {
+    await repo.mutate.createChild({parentId: 'r1', id: 'note', content: ''})
+    await pressInEditor(action, 'note', 'end', memberScope())
+
+    expect(await repo.query.childIds({id: 'grid', propertyChildren: 'none'}).load()).toEqual(['tail', 'r1', 'r2'])
+    expect((await repo.load('note'))?.parentId).toBe('r1')
+    const notes = await repo.query.childIds({id: 'r1', propertyChildren: 'none'}).load()
+    expect(notes).toHaveLength(createsSibling ? 2 : 1)
+    expect(notes[0]).toBe('note')
+    if (createsSibling) expect(await repo.load(notes[1]!)).toMatchObject({parentId: 'r1', content: ''})
+  })
+
+  it('empty Enter outdents a deeper note within the member', async () => {
+    await repo.mutate.createChild({parentId: 'r1', id: 'branch', content: 'Branch'})
+    await repo.mutate.createChild({parentId: 'branch', id: 'note', content: ''})
+    await pressInEditor('split_block_cm', 'note', 'end', memberScope())
+
+    expect(await repo.query.childIds({id: 'r1', propertyChildren: 'none'}).load()).toEqual(['branch', 'note'])
+    expect(await repo.query.childIds({id: 'branch', propertyChildren: 'none'}).load()).toEqual([])
+  })
+})
+
 describe('a nested surface among drawn children', () => {
   it('the walk passes over it, never into the data children it stands for, and says so', async () => {
     expect((await nextVisibleBlock(repo.block('host'), SURFACE_OF_PAGE()))?.id).toBe('q')

@@ -3,7 +3,7 @@ import { EditorView } from '@codemirror/view'
 import fc from 'fast-check'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { childrenViewFacet, surfaceOwnerFacet, type NestedSurface } from '@/data/childrenView'
+import { childrenViewFacet, surfaceOwnerFacet, type DrawnChild, type NestedSurface } from '@/data/childrenView'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -70,6 +70,7 @@ async function checkGesture(input: Forest, gesture: Gesture, note?: string) {
   const foreignSurface = {...panel, scopeRootId: 'foreign', renderScopeId: 'grid', scopeRootForcesOpen: false}
   const notes: NestedSurface = {kind: 'nested-surface', renderScopeId: 'notes', scopeRootId: 'foreign', order: 'outline',
     members: [...parents.keys()].filter(id => parents.get(id) === 'foreign')}
+  const gridChildren: readonly DrawnChild[] = [grid, 'outside']
   const {repo} = createTestRepo({db: db.db, extensions: [
     surfaceOwnerFacet.of(({renderScopeId}) => {
       if (renderScopeId === 'grid') return {blockId: 'owner', surface: panel}
@@ -77,9 +78,9 @@ async function checkGesture(input: Forest, gesture: Gesture, note?: string) {
       return null
     }),
     childrenViewFacet.of(({parent, surface}) => {
-      if (parent.id === 'owner') return {id: 'board', read: () => ({load: async () => [grid, 'outside']})}
+      if (parent.id === 'owner') return {id: 'board', read: () => ({load: async () => gridChildren, peek: () => gridChildren})}
       if (parent.id === 'foreign' && surface.renderScopeId === 'grid') {
-        return {id: 'notes', read: () => ({load: async () => [notes]})}
+        return {id: 'notes', read: () => ({load: async () => [notes], peek: () => [notes]})}
       }
       return null
     }),

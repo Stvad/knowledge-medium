@@ -1780,48 +1780,38 @@ describe('default CodeMirror shortcuts', () => {
     expect(await childIds('other')).toEqual(change === 'anchor moves' ? ['source'] : [])
   })
 
-  it.each(['empty Enter', 'Enter at end', 'before an insert hook'] as const)('keeps the current edit when %s resolves after the editor changes', async kind => {
+  it.each([
+    {gesture: 'Enter at the end', content: 'a'},
+    {gesture: 'empty Enter', content: ''},
+  ])('creates a sibling when typing follows $gesture before its write', async ({content}) => {
     const {repo} = env
-    const empty = kind === 'empty Enter'
-    const content = empty ? '' : 'original'
-    const hooked = kind === 'before an insert hook'
     await repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
-      await tx.create({id: 'container', workspaceId: WS, parentId: 'root', orderKey: 'a0'})
-      await tx.create({id: 'source', workspaceId: WS, parentId: 'container', orderKey: 'a0', content})
+      await tx.create({id: 'source', workspaceId: WS, parentId: 'root', orderKey: 'a0', content})
+      await tx.create({id: 'next', workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'next'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
     }, {scope: ChangeScope.BlockDefault})
 
-    let announce!: () => void
-    let release!: () => void
-    const ready = new Promise<void>(resolve => { announce = resolve })
-    const viewRead = new Promise<void>(resolve => { release = resolve })
-    const insert = vi.fn(async () => repo.mutate.createChild({parentId: 'container', content: 'New'}))
-    repo.setRuntimeContributions(childrenViewFacet, 'test.delayed-enter', [({parent}) => {
-      if (hooked && parent.id === 'container') return {id: 'test.insert', read: () => ({load: async () => ['source']}), insert}
-      if (parent.id !== 'source') return undefined
-      return {id: 'test.delayed-enter', read: () => ({load: async () => { announce(); await viewRead; return [] }})}
-    }])
     const uiStateBlock = repo.block('ui')
-    const view = codeMirrorEditorView(content, content.length)
-    const action = findEditModeAction(repo, 'split_block_cm')
-    const pending = action.handler({block: repo.block('source'), editorView: view, uiStateBlock, scopeRootId: 'root'},
-      {preventDefault: vi.fn()} as unknown as ActionTrigger)
-    await ready
-    if (empty) {
-      view.dispatch({changes: {from: 0, insert: 'late'}, selection: {anchor: 4}})
-      await repo.block('source').setContent('late')
-    } else {
-      view.dispatch({selection: {anchor: 1}})
-    }
-    release()
-    await pending
+    const editorView = new EditorView({doc: content, selection: {anchor: content.length}})
+    try {
+      const pending = findEditModeAction(repo, 'split_block_cm').handler({
+        block: repo.block('source'), editorView, uiStateBlock, scopeRootId: 'root',
+      }, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      editorView.dispatch({changes: {from: content.length, insert: 'x'}, selection: {anchor: content.length + 1}})
+      await pending
 
-    expect(insert.mock.calls).toHaveLength(0)
-    expect(await childIds('root')).toEqual(['container'])
-    expect(await childIds('container')).toEqual(['source'])
-    expect((await repo.load('source'))?.content).toBe(empty ? 'late' : content)
-    expect(view.state.selection.main.head).toBe(empty ? 4 : 1)
+      const children = await childIds('root')
+      const insertedId = children[1]
+      expect(children).toEqual(['source', insertedId, 'next'])
+      expect(await repo.load(insertedId)).toMatchObject({parentId: 'root', content: ''})
+      expect((await repo.load('source'))?.content).toBe(content)
+      expect(editorView.state.doc.toString()).toBe(content + 'x')
+      expect(editorView.state.selection.main.head).toBe(content.length + 1)
+      expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe(insertedId)
+    } finally {
+      editorView.destroy()
+    }
   })
 
   // Scope-root behaviour: when the focused block is the root of the

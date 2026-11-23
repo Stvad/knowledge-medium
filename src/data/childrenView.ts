@@ -36,7 +36,7 @@ export interface ChildrenViewContext {
  *  surface. A block occurs at most once in a render scope. */
 export interface NestedSurface {
   readonly order?: ChildrenOrder
-  /** Capacity for an existing child promoted to a member by outdent. */
+  /** Opts into Shift+Tab promoting a member's child past its editing root, subject to capacity. */
   readonly allowsNewMember?: () => boolean
   readonly kind: 'nested-surface'
   readonly renderScopeId: string
@@ -86,8 +86,8 @@ export const isNestedSurface = (child: DrawnChild): child is NestedSurface => ty
 export interface ChildrenView {
   readonly order?: ChildrenOrder
   id: string
-  /** A query handle, or any loader: only its `load` is read. */
-  read(ctx: ChildrenViewContext): Pick<LoaderHandle<readonly DrawnChild[]>, 'load'>
+  /** Walks load the list. Anchored edits also peek its current publication on writer admission. */
+  read(ctx: ChildrenViewContext): Pick<LoaderHandle<readonly DrawnChild[]>, 'load'> & {peek?(): readonly DrawnChild[] | null | undefined}
   /** Places a new block requested on this list or one of its nested surfaces.
    *  Return the focus target or an outline position, null on refusal, or undefined for ordinary placement. */
   insert?(ctx: ChildrenViewContext, request: ChildrenInsertRequest): Promise<ChildrenInsertDecision | null | undefined>

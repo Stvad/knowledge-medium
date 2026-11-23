@@ -140,11 +140,19 @@ export interface ApplyToAllOptions {
   applyInReverseOrder?: boolean
 }
 
-/** The panel provides multi-select dependencies. Focus identifies the selection's rendered occurrence. */
+export function focusedOccurrenceInSelection(
+  {uiStateBlock, selectedBlocks}: Pick<MultiSelectModeDependencies, 'uiStateBlock' | 'selectedBlocks'>,
+) {
+  const focused = peekFocusedBlockLocation(uiStateBlock)
+  if (!selectedBlocks.some(block => block.id === focused?.blockId)) return
+  return focused
+}
+
+/** The panel supplies the default surface. A selected focused block can identify a nested occurrence. */
 export async function surfaceForSelection(deps: MultiSelectModeDependencies): Promise<SurfaceCarrier> {
   const surface = outlineSurfaceOf(deps)
   const {uiStateBlock} = deps
-  const focused = peekFocusedBlockLocation(uiStateBlock)
+  const focused = focusedOccurrenceInSelection(deps)
   if (surface && focused) return surfaceForFocus(uiStateBlock.repo.block(focused.blockId), focused.renderScopeId, surface)
   return surface ?? listingSurfaceOf(deps)
 }

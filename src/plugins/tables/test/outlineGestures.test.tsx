@@ -518,7 +518,7 @@ describe('the outline’s verbs between rows', () => {
       await waitFor(() => expect(document.querySelector(`[data-table-row="${target}"][data-table-unmatched]`)).not.toBeNull())
     })
 
-    it('leaves the query rows unchanged when its Enter write waits and the caret moves', async () => {
+    it('inserts a query row when the caret moves while its Enter write waits', async () => {
       mount()
       const view = await editAt('row-1', 'end')
       let announce!: () => void
@@ -542,9 +542,12 @@ describe('the outline’s verbs between rows', () => {
         await entering
       })
 
-      expect(await contentsUnder(source)).toEqual(['second'])
+      expect(await contentsUnder(source)).toEqual(['second', ''])
       expect(await rowsUnderHost()).toEqual(['row-0'])
-      expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE})
+      const location = focused()
+      expect(location).toMatchObject({renderScopeId: SCOPE})
+      expect(location?.blockId).not.toBe('row-1')
+      expect(await repo.load(location!.blockId)).toMatchObject({parentId: source, content: ''})
       expect(view.state.selection.main.head).toBe(2)
     })
 
@@ -663,11 +666,32 @@ describe('the outline’s verbs between rows', () => {
     expect((await repo.load('row-0'))?.parentId).toBe(HOST)
   })
 
-  it('Shift+Tab on a row’s child brings it back as the row after it', async () => {
-    const child = await repo.mutate.createChild({parentId: 'row-0', content: 'a note', position: {kind: 'last'}})
+  it.each([
+    {label: 'empty Enter adds a sibling note', action: 'split_block_cm', key: 'Enter', promote: false, atCap: false},
+    {label: 'Shift+Tab promotes a note to the next row', action: 'edit.cm.outdent_block', key: 'Tab', promote: true, atCap: false},
+    {label: 'Shift+Tab keeps the note under its row at capacity', action: 'edit.cm.outdent_block', key: 'Tab', promote: false, atCap: true},
+  ])('$label in a plain grid', async ({action, key, promote, atCap}) => {
+    const note = (await repo.mutate.createChild({parentId: 'row-0', position: {kind: 'last'}}))!
     mount()
-    press(await editAt(child!, 'end'), 'Tab', {shiftKey: true})
-    await waitFor(async () => expect(await rowsUnderHost()).toEqual(['row-0', child, 'row-1']))
+    const view = await editAt(note, 'end')
+    expect(view.state.doc.length).toBe(0)
+    expect(activeContexts.get(ActionContextTypes.EDIT_MODE_CM)).toMatchObject({scopeRootId: 'row-0', renderScopeId: SCOPE})
+    if (atCap) vi.spyOn(gridOfHost(PARENT_SCOPE, HOST)!, 'allowsNewRow').mockReturnValue(false)
+
+    await act(async () => { await runActionById(action, new KeyboardEvent('keydown', {key, shiftKey: key === 'Tab'})) })
+
+    expect(await rowsUnderHost()).toEqual(promote ? ['row-0', note, 'row-1'] : ['row-0', 'row-1'])
+    expect((await repo.load(note))?.parentId).toBe(promote ? HOST : 'row-0')
+    const notes = await repo.query.childIds({id: 'row-0', propertyChildren: 'none'}).load()
+    if (key === 'Enter') {
+      const sibling = focused()?.blockId
+      expect(sibling).toBeDefined()
+      expect(sibling).not.toBe(note)
+      expect(notes).toEqual([note, sibling])
+      expect(await repo.load(sibling!)).toMatchObject({parentId: 'row-0', content: ''})
+    } else {
+      expect(notes).toEqual(promote ? [] : [note])
+    }
   })
 
   it('Backspace at the start of a row merges it into the row above', async () => {

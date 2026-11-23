@@ -1,9 +1,10 @@
+import { blockChangeCursor } from './blockChangeCursor'
+import { ChangeScope, type Tx } from './api'
+import { indent, liveChildAt, moveVertical, outdent } from './mutators'
 import { Block } from './block'
-import { ChangeScope } from './api'
-import { outdent } from './mutators'
 import type { SurfaceCarrier } from './outlineSurface'
 import { isCollapsedProp } from './properties.js'
-import { childrenViewFor, listingSurfaceOf, propertyDisplayChildrenView, type ChildrenOrder, type DrawnChild, type NestedSurface } from './childrenView'
+import { childrenViewFor, surfaceOwnerFacet, listingSurfaceOf, propertyDisplayChildrenView, type ChildrenOrder, type ChildrenViewContext, type DrawnChild, type NestedSurface } from './childrenView'
 import { lastDrawnStep, nestedWriteLocation, unlistedSiblingIndexLoaded, type DrawnLocation } from '@/utils/drawnWalk'
 import type { OutlineSurface } from './outlineSurface'
 import { drawnChildrenOf } from './visibleChildren'
@@ -130,7 +131,22 @@ export const structuralEditPolicyForBlock = async (
   })
 }
 
+/** Only a synchronous peek is safe while holding the writer. Async loaders can need that same connection. */
+function publication(ctx: ChildrenViewContext, slots: readonly DrawnChild[], order: ChildrenOrder | undefined, nested?: NestedSurface) {
+  const ids = slots.map(slot => typeof slot === 'string' ? slot : null)
+  return () => {
+    const view = childrenViewFor(ctx)
+    const children = view.read(ctx).peek?.()
+    const surface = nested && children?.find((slot): slot is NestedSurface =>
+      typeof slot !== 'string' && slot.renderScopeId === nested.renderScopeId)
+    const members = nested ? surface?.members : children
+    return (nested ? surface?.order : view.order) === order && surface?.scopeRootId === nested?.scopeRootId &&
+      members?.length === ids.length && members.every((slot, i) => (typeof slot === 'string' ? slot : null) === ids[i])
+  }
+}
+
 interface WriteList {
+  current(): boolean
   owner: Block
   members: readonly DrawnChild[]
   index: number
@@ -147,6 +163,19 @@ async function parentListing(owner: Block, carrier: SurfaceCarrier) {
   return {ctx, view: childrenViewFor(ctx)}
 }
 
+/** Only the built-in lists can resolve both the sibling and the cross-parent neighbour inside the mutator. */
+async function outlineArgs(block: Block, carrier: SurfaceCarrier) {
+  const row = block.peek() ?? await block.load()
+  if (!row?.parentId || block.id === carrier.scopeRootId) return null
+  if (carrier.renderScopeId && block.repo.facetRuntime?.read(surfaceOwnerFacet)({repo: block.repo, renderScopeId: carrier.renderScopeId})) return null
+  const parent = await parentListing(block.repo.block(row.parentId), carrier)
+  if (parent?.view !== propertyDisplayChildrenView) return null
+  const grandparent = parent.ctx.data.parentId
+  if (grandparent && parent.ctx.parent.id !== carrier.scopeRootId &&
+      (await parentListing(block.repo.block(grandparent), carrier))?.view !== propertyDisplayChildrenView) return null
+  return {id: block.id, propertyDisplay: carrier.propertyDisplay, scopeRootId: carrier.scopeRootId}
+}
+
 /** Same-scope views list own children, which may still be independently selected by a query. */
 export async function isSameScopeQueryMember(block: Block, carrier: SurfaceCarrier) {
   const row = block.peek() ?? await block.load()
@@ -159,11 +188,15 @@ async function writeList(block: Block, carrier: SurfaceCarrier, retainHidden = f
   if (drawn === null) return null
   const row = block.peek() ?? await block.load()
   if (!row) return null
+  const nestedCurrent = drawn && publication(
+    {parent: drawn.parent.block, data: (await drawn.parent.block.load())!, surface: drawn.parent.surface},
+    drawn.nested.members!, drawn.nested.order, drawn.nested,
+  )
   if (drawn?.memberId === block.id) {
     const {nested, parent} = drawn
     if (drawn.projected) return null
     const members = nested.members!
-    return {owner: parent.block, members, index: members.indexOf(block.id), order: nested.order ?? 'derived', nested,
+    return {current: nestedCurrent!, owner: parent.block, members, index: members.indexOf(block.id), order: nested.order ?? 'derived', nested,
       boundaryId: parent.block.id, foreignRootId: drawn.foreignRootId}
   }
   if (!row.parentId || block.id === carrier.scopeRootId) return null
@@ -172,6 +205,7 @@ async function writeList(block: Block, carrier: SurfaceCarrier, retainHidden = f
   if (!listing) return null
   const {ctx, view} = listing
   let members = await view.read(ctx).load()
+  const current = publication(ctx, members, view.order)
   let index = members.indexOf(block.id)
   if (index < 0 && retainHidden && view === propertyDisplayChildrenView) {
     const ids = members as readonly string[]
@@ -179,7 +213,7 @@ async function writeList(block: Block, carrier: SurfaceCarrier, retainHidden = f
     members = [...ids.slice(0, index), block.id, ...ids.slice(index)]
   }
   if (index < 0 || view.order === 'query') return null
-  return {owner, members, index, order: view.order ?? 'derived', boundaryId: drawn?.boundaryId, foreignRootId: drawn?.foreignRootId}
+  return {current: () => current() && (nestedCurrent?.() ?? true), owner, members, index, order: view.order ?? 'derived', boundaryId: drawn?.boundaryId, foreignRootId: drawn?.foreignRootId}
 }
 
 function adjacent(list: WriteList, direction: -1 | 1) {
@@ -187,46 +221,62 @@ function adjacent(list: WriteList, direction: -1 | 1) {
   return typeof near === 'string' ? {parentId: list.owner.id, siblingId: near, boundaryId: list.boundaryId, foreignRootId: list.foreignRootId} : null
 }
 
-export async function indentDrawnBlock(block: Block, carrier: SurfaceCarrier): Promise<void> {
-  const list = await writeList(block, carrier, true)
-  const anchor = list && adjacent(list, -1)
-  if (anchor) await block.repo.mutate.indent({id: block.id, anchor})
+function writeIfDrawn<R>(block: Block, lists: WriteList[], write: (tx: Tx) => Promise<R>) {
+  return block.repo.tx(async tx => lists.every(list => list.current()) ? write(tx) : null,
+    {scope: ChangeScope.BlockDefault, description: `edit drawn block ${block.id}`})
 }
 
-/** True on a move, false at an ordinary boundary, null when the drawn placement refused or expired. */
+export async function indentDrawnBlock(block: Block, carrier: SurfaceCarrier): Promise<void> {
+  const plain = await outlineArgs(block, carrier)
+  if (plain) return block.repo.mutate.indent({id: block.id, propertyDisplay: plain.propertyDisplay})
+  const changeCursor = await blockChangeCursor(block.repo.db)
+  const list = await writeList(block, carrier, true)
+  const anchor = list && adjacent(list, -1)
+  if (list && anchor) await writeIfDrawn(block, [list], tx => tx.run(indent, {id: block.id, anchor: {...anchor, changeCursor}}))
+}
+
+/** True on a move, false at an ordinary boundary, null when the drawn placement refused or expired.
+ * Empty Enter supplies its original parent so a stale outdent cannot fall back to a sibling insertion. */
 export async function outdentDrawnBlock(
-  block: Block, carrier: SurfaceCarrier, expectedParentId?: string | null, isCurrent?: () => boolean,
+  block: Block, carrier: SurfaceCarrier, expectedParentId?: string | null,
 ): Promise<boolean | null> {
+  const plain = await outlineArgs(block, carrier)
+  if (plain) return block.repo.tx(async tx => {
+    if (expectedParentId !== undefined && !await liveChildAt(tx, block.id, expectedParentId)) return null
+    return tx.run(outdent, plain)
+  }, {scope: ChangeScope.BlockDefault, description: `outdent ${block.id}`})
+  const changeCursor = await blockChangeCursor(block.repo.db)
   const list = await writeList(block, carrier, true)
   if (!list || list.nested) return false
   const parent = list.owner
   if (expectedParentId !== undefined && expectedParentId !== parent.id) return null
   const outer = await writeList(parent, carrier)
+  const destination = outer?.nested
+  if (parent.id === carrier.scopeRootId && (expectedParentId !== undefined || !destination?.allowsNewMember)) return false
   // The workspace's root list has no parent block to declare a view.
-  if (!outer && (list.boundaryId || parent.id === carrier.scopeRootId || (await parent.load())?.parentId !== null)) return false
-  if (outer?.nested?.allowsNewMember?.() === false) return null
-  const args = {id: block.id, anchor: {
-    parentId: outer?.owner.id ?? null, siblingId: parent.id,
+  if (!outer && (list.boundaryId || (await parent.load())?.parentId !== null)) return false
+  if (destination?.allowsNewMember?.() === false) return null
+  const moved = await writeIfDrawn(block, outer ? [list, outer] : [list], tx => tx.run(outdent, {id: block.id, anchor: {
+    changeCursor, parentId: outer?.owner.id ?? null, siblingId: parent.id,
     boundaryId: outer?.boundaryId, foreignRootId: outer?.foreignRootId,
-  }}
-  const moved = isCurrent === undefined
-    ? await block.repo.mutate.outdent(args)
-    : await block.repo.tx(async tx => isCurrent() && tx.run(outdent, args),
-      {scope: ChangeScope.BlockDefault, description: `outdent ${block.id}`})
+  }}))
   return moved || null
 }
 
 export async function moveDrawnBlock(block: Block, carrier: SurfaceCarrier, direction: -1 | 1): Promise<boolean> {
+  const plain = await outlineArgs(block, carrier)
+  if (plain) return block.repo.mutate.moveVertical({...plain, direction})
+  const changeCursor = await blockChangeCursor(block.repo.db)
   const list = await writeList(block, carrier, true)
   if (list?.order !== 'outline') return false
   const anchor = adjacent(list, direction)
-  if (anchor) return block.repo.mutate.moveVertical({id: block.id, direction, anchor})
+  if (anchor) return !!await writeIfDrawn(block, [list], tx => tx.run(moveVertical, {id: block.id, direction, anchor: {...anchor, changeCursor}}))
   // Crossing to a neighbouring parent is allowed only at an actual list edge.
   if (list.members[list.index + direction] !== undefined || list.nested || !carrier.scopeRootId || list.owner.id === carrier.scopeRootId) return false
   const outer = await writeList(list.owner, carrier)
   if (outer?.order !== 'outline') return false
   const neighbour = adjacent(outer, direction)
-  return !!neighbour && block.repo.mutate.moveVertical({id: block.id, direction, anchor: {...neighbour, fromParentId: list.owner.id}})
+  return !!neighbour && !!await writeIfDrawn(block, [list, outer], tx => tx.run(moveVertical, {id: block.id, direction, anchor: {...neighbour, changeCursor, fromParentId: list.owner.id}}))
 }
 
 export interface DrawnMergeAnchor {

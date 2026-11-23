@@ -542,7 +542,7 @@ const withSubject = (
 
 // ──── indent ────
 
-const drawnAnchorSchema = z.object({parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional(), foreignRootId: z.string().optional()})
+const drawnAnchorSchema = z.object({changeCursor: z.number(), parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional(), foreignRootId: z.string().optional()})
 type DrawnAnchor = z.infer<typeof drawnAnchorSchema>
 
 /** Only live rows still under the parent drawn at dispatch can participate in a relative write. */
@@ -557,6 +557,7 @@ export const liveChildAt = async (tx: Tx, id: string, parentId: string | null, .
 
 /** `subjectParent` is the drawn parent before the gesture, including for an outdent or a move between parents. */
 async function anchoredSubject(tx: Tx, id: string, anchor: DrawnAnchor, subjectParent: string | null) {
+  if (anchor.changeCursor !== await tx.blockChangeCursor()) return null
   const sibling = await liveChildAt(tx, anchor.siblingId, anchor.parentId)
   return sibling ? liveChildAt(tx, id, subjectParent, anchor.boundaryId, anchor.foreignRootId) : null
 }

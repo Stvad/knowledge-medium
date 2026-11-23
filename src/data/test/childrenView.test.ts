@@ -229,19 +229,20 @@ describe('childrenViewFacet', () => {
 
 const customList = (owner: string, members: readonly DrawnChild[], order: ChildrenOrder = 'outline') => {
   repo.setRuntimeContributions(childrenViewFacet, 'test.custom-list', [({parent}) => parent.id === owner && {
-    id: 'custom', order, read: () => ({load: async () => members}),
+    id: 'custom', order, read: () => ({load: async () => members, peek: () => members}),
   }])
 }
 
 const board = (members: string[], order: ChildrenOrder = 'outline', shared = false, allowsNewMember?: () => boolean, insert?: ChildrenView['insert']) => {
   repo.setRuntimeContributions(surfaceOwnerFacet, 'test.owner', [({renderScopeId}) =>
     renderScopeId === 'board' && {blockId: 'owner', surface: surfaceIn('outline')}])
+  const drawn: readonly DrawnChild[] = [{
+    kind: 'nested-surface', renderScopeId: 'board', order, members, scopeRootId: shared ? 'owner' : undefined,
+    allowsNewMember,
+  }]
   repo.setRuntimeContributions(childrenViewFacet, 'test.board', [({parent, surface}) =>
     parent.id === 'owner' && surface.renderScopeId === 'outline' && {
-      id: 'board', insert, read: () => ({load: async () => [{
-        kind: 'nested-surface' as const, renderScopeId: 'board', order, members, scopeRootId: shared ? 'owner' : undefined,
-        allowsNewMember,
-      }]}),
+      id: 'board', insert, read: () => ({load: async () => drawn, peek: () => drawn}),
     }])
   return surfaceIn('board')
 }

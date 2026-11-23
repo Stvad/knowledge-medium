@@ -25,9 +25,15 @@ import {
 import { CodeMirrorContentRenderer } from '../CodeMirrorContentRenderer'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
+import { showError } from '@/utils/toast.js'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showError: vi.fn(),
+}))
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => {
@@ -101,6 +107,7 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     vi.mocked(pasteArmedCut).mockClear()
     vi.mocked(pasteEditModeMultilineText).mockClear()
     vi.mocked(resolvePasteWithMediaCapture).mockClear()
+    vi.mocked(showError).mockClear()
 
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({
@@ -241,7 +248,31 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
       resume()
       await vi.mocked(pasteEditModeMultilineText).mock.results[0]!.value
     })
-    expect(await storedLines(editorView)).toEqual([change === 'typing' ? 'Block!' : 'Block'])
+    await act(async () => {
+      expect(await storedLines(editorView)).toEqual([change === 'typing' ? 'Block!' : 'Block'])
+    })
+    expect(showError).toHaveBeenCalledExactlyOnceWith("Couldn't paste here. Try again.")
+  })
+
+  it('reports a refused multiline paste when the stored text changed', async () => {
+    const actual = await vi.importActual<typeof import('@/paste/operations')>('@/paste/operations')
+    const {content, editorView} = renderEditor()
+    const accept = vi.fn()
+    vi.mocked(pasteEditModeMultilineText).mockImplementationOnce(async (plan, block, repo, surface, acceptEditorEdit) => {
+      await repo.tx(tx => tx.update(block.id, {content: 'Changed elsewhere'}), {scope: ChangeScope.BlockDefault})
+      accept.mockImplementation(acceptEditorEdit!)
+      return actual.pasteEditModeMultilineText(plan, block, repo, surface, accept)
+    })
+
+    await act(async () => {
+      dispatchPaste(content, 'first\nsecond')
+      await vi.waitFor(() => expect(pasteEditModeMultilineText).toHaveBeenCalledOnce())
+      await vi.mocked(pasteEditModeMultilineText).mock.results[0]!.value
+    })
+
+    expect(showError).toHaveBeenCalledExactlyOnceWith("Couldn't paste here. Try again.")
+    expect(accept).not.toHaveBeenCalled()
+    expect(await storedLines(editorView)).toEqual(['Changed elsewhere'])
   })
 
   it('keeps typing after acceptance on the pasted line while the transaction finishes', async () => {
@@ -258,6 +289,7 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     await vi.waitFor(() => expect(pasteEditModeMultilineText).toHaveBeenCalledOnce())
     await act(async () => { await vi.mocked(pasteEditModeMultilineText).mock.results[0]!.value })
     expect(await storedLines(editorView)).toEqual(['first!', 'secondBlock'])
+    expect(showError).not.toHaveBeenCalled()
   })
 
   it('rolls back an accepted editor edit and preserves later typing if the write returns no result', async () => {

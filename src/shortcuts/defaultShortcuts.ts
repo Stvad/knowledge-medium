@@ -29,7 +29,6 @@ import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   focusBlock,
   isCollapsedProp,
-  peekFocusedBlockLocation,
   topLevelBlockIdProp,
   setIsEditing,
 } from '@/data/properties.js'
@@ -39,7 +38,7 @@ import { flushPendingEditorContent } from '@/data/pendingEditorContent.js'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
-import { applyToAllBlocksInSelection, makeMultiSelect, surfaceForSelection } from './utils'
+import { applyToAllBlocksInSelection, focusedOccurrenceInSelection, makeMultiSelect, surfaceForSelection } from './utils'
 import {
   BlockAction,
   bindBlockActionContext,
@@ -170,8 +169,9 @@ const writeWithEditorRearmed = async <T>(
 const insertGestureAtCursor = (editorView: EditorView): InsertGesture => {
   const {doc} = editorView.state
   const cursorPos = editorView.state.selection.main.head
+  if (cursorPos === doc.length) return {kind: doc.length === 0 ? 'empty-enter' : 'enter'}
+
   const isCurrent = () => editorView.state.doc === doc && editorView.state.selection.main.head === cursorPos
-  if (cursorPos === doc.length) return {kind: doc.length === 0 ? 'empty-enter' : 'enter', isCurrent}
 
   return {
     kind: 'split',
@@ -1270,9 +1270,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const {uiStateBlock, selectedBlocks, propertyDisplay} = deps
     const surface = outlineSurfaceOf(deps)
     if (!selectedBlocks.length) return
-    const focused = peekFocusedBlockLocation(uiStateBlock)
-    const focusedScope = selectedBlocks.some(block => block.id === focused?.blockId) ? focused?.renderScopeId : undefined
-    const renderScopeId = deps.renderScopeId ?? focusedScope
+    const renderScopeId = deps.renderScopeId ?? focusedOccurrenceInSelection(deps)?.renderScopeId
     const location = await nestedWriteLocation(selectedBlocks[0], renderScopeId)
     if (location === null) return
     const boundaryId = location?.foreignRootId
