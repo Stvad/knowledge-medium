@@ -172,7 +172,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const focusAfterProperties = async () => {
-    const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay})
+    const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay, renderScopeId})
     if (!surface) return
 
     const next = await nextVisibleBlock(block, surface)

@@ -474,6 +474,9 @@ export type SyncObserverOptions = Pick<
   'onCycleDetected' | 'throttleMs' | 'onError'
 >
 
+/** Rows `stampReferenceTargets` stamps per write transaction. */
+export const REFERENCE_TARGET_STAMP_CHUNK = 200
+
 /** One CAS-guarded local-columns write for `stampReferenceTargets` —
  *  `reference_target_id` plus the `is_field_form` bit (§7 grammar box), both
  *  from the same derive. Strictly ADDITIVE: callers pass only rows the scan
@@ -4576,9 +4579,8 @@ export class Repo {
     updates: readonly ReferenceTargetStamp[],
     context: ReferenceTargetStampContext,
   ): Promise<void> {
-    const CHUNK = 200
-    for (let i = 0; i < updates.length; i += CHUNK) {
-      const chunk = updates.slice(i, i + CHUNK)
+    for (let i = 0; i < updates.length; i += REFERENCE_TARGET_STAMP_CHUNK) {
+      const chunk = updates.slice(i, i + REFERENCE_TARGET_STAMP_CHUNK)
       // BOTH gates are re-read per chunk, and the symmetry is the point.
       // `properties_migration` is server-driven (a synced `workspaces` row,
       // no local writer) and `isReadOnly` is mutable and resolved

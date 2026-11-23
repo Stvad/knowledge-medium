@@ -10,18 +10,19 @@ import {
   mediaMimeProp,
   sniffImageMime,
 } from '@/plugins/attachments/mediaBlock.js'
-import type { AssetFailReason, AssetResolver } from '@/plugins/attachments/resolver.js'
+import type { AssetFailReason } from '@/plugins/attachments/resolver.js'
+import type { AgentMedia } from './protocol.ts'
 import { loadRoot } from './agentViews/shared.ts'
 
 const FAILURE_TEXT: Record<AssetFailReason, string> = {
-  deferred: 'its workspace is locked, or the app tab is signed out',
+  deferred: 'its workspace is locked, or this client is signed out',
   'no-content-key': 'this device does not have the workspace key',
   'invalid-hash': 'its media:hash is malformed',
   'fetch-failed': 'its bytes are not on this device and could not be downloaded',
   'decode-failed': 'its downloaded bytes could not be decrypted',
   'hash-mismatch': 'its downloaded bytes do not match its media:hash, so they were discarded',
   'store-failed': 'its bytes could not be stored on this device',
-  error: 'the app hit an internal error resolving it (see the app tab console)',
+  error: 'this client hit an internal error resolving it (see its console or log)',
 }
 
 /** One media block's bytes for an agent. Bytes come only from `resolver.resolve`,
@@ -31,7 +32,7 @@ export const readMedia = async (
   repo: Repo,
   workspaceId: string,
   ref: string,
-  resolver: Pick<AssetResolver, 'resolve'>,
+  resolver: Pick<AgentMedia, 'resolve'>,
 ): Promise<ReadMediaResult> => {
   const {root: block} = await loadRoot(repo, ref, workspaceId, async id => await repo.load(id) ?? undefined)
   if (!hasBlockType(block, MEDIA_TYPE)) {

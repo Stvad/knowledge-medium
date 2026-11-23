@@ -243,10 +243,10 @@ export class Block implements Handle<BlockData | null> {
   // A list of children is always a VIEW (which property rows it includes), so
   // the reader names it: a fixed view is `repo.query.children /
   // childIds({id, propertyChildren})`, the list a surface draws is
-  // `visibleChildIds(block, scope)` (`@/data/visibleChildren`). The two getters
+  // `visibleChildIds(block, surface)` (`@/data/visibleChildren`). The two getters
   // below answer one view without saying which.
 
-  /** @deprecated Removal planned for 2026-11-20. The mode-`none` child ids
+  /** @deprecated Removed once installed extensions have moved off it. The mode-`none` child ids
    *  (no property field row). Say the view instead:
    *  `repo.query.childIds({id, propertyChildren: 'none'})`. */
   get childIds(): LoaderHandle<string[]> {
@@ -254,7 +254,7 @@ export class Block implements Handle<BlockData | null> {
     return this.repo.query.childIds({id: this.id, propertyChildren: 'none'})
   }
 
-  /** @deprecated Removal planned for 2026-11-20. The mode-`none` child rows
+  /** @deprecated Removed once installed extensions have moved off it. The mode-`none` child rows
    *  (no property field row). Say the view instead:
    *  `repo.query.children({id, propertyChildren: 'none'})`. */
   get children(): LoaderHandle<BlockData[]> {

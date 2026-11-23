@@ -9,6 +9,7 @@ import type { blockRenderersFacet } from '@/extensions/core.js'
 import type { ActionConfig } from '@/shortcuts/types.js'
 import type { BlockProperties } from '@/types.js'
 import type { refreshAppRuntime } from '@/facets/runtimeEvents.js'
+import type { MediaLanes } from '@/plugins/attachments/mediaLanes.js'
 import type { GrainWarning, TypeAuditSummary } from './grainAudit.ts'
 import type { PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
 
@@ -296,7 +297,17 @@ export interface AuditPropertiesInput {
   workspaceId?: string
 }
 
+/** Where `read-media` and `add-media` get bytes and store them: the app's own lanes
+ *  in a tab, or the lanes a headless host owns. */
+export interface AgentMedia {
+  /** Why `add-media` is unavailable in this runtime, or null. */
+  captureRefusal(runtime: FacetRuntime): string | null
+  resolve: MediaLanes['resolver']['resolve']
+  capture: MediaLanes['capture']
+}
+
 export interface AgentRuntimeContext {
+  media: AgentMedia
   hostHealth?: () => Readonly<Record<string, unknown>> | Promise<Readonly<Record<string, unknown>>>
   repo: Repo
   db: Repo['db']
@@ -332,6 +343,8 @@ export interface AgentRuntimeContext {
 }
 
 export interface AgentRuntimeBridgeOptions {
+  /** Defaults to the app's media lanes. */
+  media?: AgentMedia
   hostHealth?: AgentRuntimeContext['hostHealth']
   repo: Repo
   runtime: FacetRuntime

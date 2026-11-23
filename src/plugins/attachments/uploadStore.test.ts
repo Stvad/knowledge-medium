@@ -4,12 +4,15 @@
 import 'fake-indexeddb/auto'
 import { IDBFactory } from 'fake-indexeddb'
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   type ByteUploadRecord,
   type ByteUploadStore,
   IndexedDbByteUploadStore,
   InMemoryByteUploadStore,
+  SqliteByteUploadStore,
+  UPLOAD_QUEUE_TABLE,
   uploadRecordId,
   uploadUserPrefix,
   type StageInput,
@@ -44,11 +47,20 @@ describe('uploadRecordId / uploadUserPrefix', () => {
   })
 })
 
-// One contract suite, run against BOTH the in-memory double and the real
-// (fake-)IndexedDB store, so they can never drift.
-const backends: Array<{ name: string; make: (now: () => number) => ByteUploadStore }> = [
+let sqlite: TestDb
+beforeAll(async () => { sqlite = await createTestDb() })
+afterAll(async () => { await sqlite.cleanup() })
+
+const freshSqliteStore = async (now: () => number) => {
+  await sqlite.db.execute(`DROP TABLE IF EXISTS ${UPLOAD_QUEUE_TABLE}`)
+  return new SqliteByteUploadStore(sqlite.db, now)
+}
+
+// One contract suite, run against every backend, so they can never drift.
+const backends: Array<{ name: string; make: (now: () => number) => ByteUploadStore | Promise<ByteUploadStore> }> = [
   { name: 'InMemoryByteUploadStore', make: now => new InMemoryByteUploadStore(now) },
   { name: 'IndexedDbByteUploadStore', make: now => new IndexedDbByteUploadStore(now) },
+  { name: 'SqliteByteUploadStore', make: freshSqliteStore },
 ]
 
 for (const backend of backends) {
@@ -57,10 +69,10 @@ for (const backend of backends) {
     const now = () => clock
     let store: ByteUploadStore
 
-    beforeEach(() => {
+    beforeEach(async () => {
       freshIndexedDb()
       clock = 1000
-      store = backend.make(now)
+      store = await backend.make(now)
     })
 
     it('stage → get returns a staged record stamped with status/attempts/stagedAt', async () => {
@@ -260,5 +272,15 @@ describe('IndexedDbByteUploadStore — durability across instances', () => {
     await a.stage(stageInput())
     const b = new IndexedDbByteUploadStore(() => 2000)
     expect((await b.get('u1', 'media:ck-abc'))?.status).toBe('staged')
+  })
+})
+
+describe('SqliteByteUploadStore — durability across instances', () => {
+  it('a record staged by one instance is visible to a fresh instance over the same database', async () => {
+    const a = await freshSqliteStore(() => 1000)
+    await a.stage(stageInput())
+    await a.promote('u1', 'media:ck-abc')
+    const b = new SqliteByteUploadStore(sqlite.db, () => 2000)
+    expect(await b.get('u1', 'media:ck-abc')).toMatchObject({ status: 'pending', stagedAt: 1000, attempts: 0 })
   })
 })
