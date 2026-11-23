@@ -1,1 +1,1 @@
-export{up as appendTagToBlocks,dp as appendTagToContent}from"../../../chunks/app-Cak92owk.js";
+export{up as appendTagToBlocks,dp as appendTagToContent}from"../../../chunks/app-BaJP_-qR.js";
