@@ -84,14 +84,8 @@ export interface UploadDrainDeps {
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
   /** The server's workspace row read NOW (`fetchWorkspaceConversionState`). */
   readonly readLiveWorkspace: (workspaceId: string) => Promise<WorkspaceConversionRead>
-  /** Is `userId` (the QUEUED user whose records we're draining) still the active
-   *  account? The mode/key deps and the BlobStore session resolve against the
-   *  ACTIVE user, so if an account switch lands between the drain being armed and
-   *  this body running, draining userA's records under userB's session can hit a
-   *  permanent 403 (B isn't a writer for A's workspace) and wrongly mark A's record
-   *  `failed`. So a record is processed only while its user is active; otherwise it
-   *  defers (no attempt burn) and re-drains when that user is active again.
-   *  Defaults to always-active for the source-based unit path. */
+  /** May the bound user still upload? A session hold defers without consuming
+   *  the record's retry budget. Defaults to always-active. */
   readonly isActiveUser?: () => boolean
   readonly now?: () => number
   readonly maxAttempts?: number
@@ -162,10 +156,7 @@ const drainOne = async (
   rec: ByteUploadRecord,
   ctx: DrainOneCtx,
 ): Promise<DrainOutcome> => {
-  // (0) Bind to the queued user. The mode/key deps + BlobStore session resolve
-  //     against the ACTIVE account; if it changed since this drain was armed,
-  //     skip (no attempt burn) rather than touch userId's record under the wrong
-  //     identity — re-drains when userId is active again.
+  // (0) The queued user's session must still be eligible for upload.
   if (!ctx.isActiveUser()) return 'deferred'
 
   // (1) Can we encode for this workspace right now? defer/unexpected → leave pending.
@@ -218,6 +209,8 @@ const drainOne = async (
     await ctx.store.delete(userId, rec.assetBlockId)
     return 'uploaded'
   } catch (err) {
+    // The blob store may refuse a PUT after the session gate closes mid-record.
+    if (!ctx.isActiveUser()) return 'deferred'
     if (err instanceof BlobPutError) {
       if (err.permanent) {
         await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
@@ -254,6 +247,7 @@ const verifyExistingOrQuarantine = async (
   try {
     stored = await ctx.blobStore.get(rec.workspaceId, objectKey)
   } catch {
+    if (!ctx.isActiveUser()) return 'deferred'
     return retryOrFail(userId, rec, ctx) // exists, but the verify read failed — transient
   }
   const verified = await verifyObjectBytes(stored, mode, ctx.getCek, rec)

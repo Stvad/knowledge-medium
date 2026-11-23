@@ -5,28 +5,13 @@ import {
   getActiveSyncResolver,
   getActiveUserId,
 } from '@/data/repoProvider.js'
-import { supabase } from '@/services/supabase.js'
-import { getMediaLanesForUser, remoteSyncGated } from './assetUpload.js'
-import { createSupabaseBlobStore, NO_REMOTE_BLOB_STORE, type BlobStore } from './blobStore.js'
+import { buildBlobStore, getMediaLanesForUser } from './assetUpload.js'
 import { getByteStore } from './byteStore.js'
 import { createAssetResolver, type AssetResolver } from './resolver.js'
 
 let singleton: AssetResolver | null = null
 
-export { remoteSyncGated } from './assetUpload.js'
-
-/** The live resolver and cleanup share the browser session's remote-sync gate. */
-export const buildBlobStore = (): BlobStore => {
-  if (!supabase) return NO_REMOTE_BLOB_STORE
-  const client = supabase
-  return remoteSyncGated(
-    createSupabaseBlobStore({
-      // Presence probe only — the upload/download ride the client's own session.
-      client,
-      getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
-    }),
-  )
-}
+export { buildBlobStore, remoteSyncGated } from './assetUpload.js'
 
 export const getAssetResolver = (): AssetResolver => {
   if (singleton) return singleton

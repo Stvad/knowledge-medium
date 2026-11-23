@@ -20,9 +20,6 @@ const getSupabaseAccessToken = async (): Promise<string | null> =>
   supabase ? ((await supabase.auth.getSession()).data.session?.access_token ?? null) : null
 
 let blobStoreSingleton: BlobStore | null = null
-const configuredBlobStore = (): BlobStore => (blobStoreSingleton ??= supabase
-  ? createSupabaseBlobStore({ client: supabase, getAccessToken: getSupabaseAccessToken })
-  : NO_REMOTE_BLOB_STORE)
 
 /** Check the live session on each call, including operations on a cached store. */
 export const remoteSyncGated = (remote: BlobStore, canUseRemote = isRemoteSyncActive): BlobStore => ({
@@ -34,9 +31,15 @@ export const remoteSyncGated = (remote: BlobStore, canUseRemote = isRemoteSyncAc
 
 const hasRemoteSync = () => supabase !== null && isRemoteSyncActive()
 
+export const buildBlobStore = (canUseRemote = isRemoteSyncActive): BlobStore => {
+  if (!supabase) return NO_REMOTE_BLOB_STORE
+  blobStoreSingleton ??= createSupabaseBlobStore({ client: supabase, getAccessToken: getSupabaseAccessToken })
+  return remoteSyncGated(blobStoreSingleton, canUseRemote)
+}
+
 /** The browser blob store when remote sync is enabled, or null in local-only mode. */
 export const getBlobStore = (): BlobStore | null =>
-  hasRemoteSync() ? remoteSyncGated(configuredBlobStore()) : null
+  hasRemoteSync() ? buildBlobStore() : null
 
 const lanesByUser = new Map<string, MediaLanes>()
 
@@ -49,7 +52,7 @@ export const getMediaLanesForUser = (userId: string): MediaLanes => {
     userId,
     byteStore: getByteStore(),
     uploadStore,
-    blobStore: remoteSyncGated(configuredBlobStore(), canDrain),
+    blobStore: buildBlobStore(canDrain),
     keys: syncResolverForUser(userId),
     readLiveWorkspace: fetchWorkspaceConversionState,
     canDrain,
