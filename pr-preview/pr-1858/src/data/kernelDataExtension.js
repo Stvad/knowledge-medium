@@ -1,0 +1,1 @@
+export{Q9 as kernelDataExtension}from"../../chunks/app-NiFa047w.js";

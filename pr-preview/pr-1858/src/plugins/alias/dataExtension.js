@@ -1,0 +1,1 @@
+export{v3 as aliasDataExtension}from"../../../chunks/app-NiFa047w.js";

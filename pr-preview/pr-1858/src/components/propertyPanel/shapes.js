@@ -1,0 +1,1 @@
+export{aY as propertyShapeLabel}from"../../../chunks/app-NiFa047w.js";

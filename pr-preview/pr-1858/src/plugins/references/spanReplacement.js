@@ -1,0 +1,1 @@
+export{YZ as preferredSpanReplacement}from"../../../chunks/app-NiFa047w.js";

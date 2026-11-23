@@ -1,0 +1,1 @@
+export{bC as blockDragPlugin}from"../../../chunks/app-NiFa047w.js";

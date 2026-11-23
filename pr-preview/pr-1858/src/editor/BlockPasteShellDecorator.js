@@ -1,0 +1,1 @@
+export{pL as BlockPasteShellDecorator,mL as blockPasteShellDecorator}from"../../chunks/app-NiFa047w.js";

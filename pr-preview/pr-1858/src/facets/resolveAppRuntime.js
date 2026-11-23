@@ -1,0 +1,1 @@
+export{CR as resolveAppRuntime,wR as resolveAppRuntimeSync}from"../../chunks/app-NiFa047w.js";

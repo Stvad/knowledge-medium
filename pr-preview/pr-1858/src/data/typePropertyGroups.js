@@ -1,0 +1,1 @@
+export{YW as typePropertyGroups}from"../../chunks/app-NiFa047w.js";

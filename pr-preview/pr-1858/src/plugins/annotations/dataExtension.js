@@ -1,0 +1,1 @@
+export{p1 as annotationsDataExtension}from"../../../chunks/app-NiFa047w.js";

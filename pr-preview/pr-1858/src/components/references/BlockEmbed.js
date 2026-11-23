@@ -1,0 +1,1 @@
+export{gI as BlockEmbed}from"../../../chunks/app-NiFa047w.js";

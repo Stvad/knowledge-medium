@@ -1,0 +1,1 @@
+export{$J as floatingAnchorFromRect,eY as useAnchoredFloating}from"../../../chunks/app-NiFa047w.js";

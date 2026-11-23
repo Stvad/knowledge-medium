@@ -1,0 +1,1 @@
+export{Ex as blockInfoPlugin}from"../../../chunks/app-NiFa047w.js";

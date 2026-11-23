@@ -1,0 +1,1 @@
+export{VS as referencesMarkdownExtension}from"../../../../chunks/app-NiFa047w.js";

@@ -1,0 +1,1 @@
+export{VC as moveBlocksTo}from"../../../chunks/app-NiFa047w.js";

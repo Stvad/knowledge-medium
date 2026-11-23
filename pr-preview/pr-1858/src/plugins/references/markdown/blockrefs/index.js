@@ -1,0 +1,1 @@
+export{KS as blockrefMarkdownExtension}from"../../../../../chunks/app-NiFa047w.js";

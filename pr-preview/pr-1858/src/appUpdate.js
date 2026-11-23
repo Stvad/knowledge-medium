@@ -1,0 +1,1 @@
+export{ZL as appUpdate,QL as useAppUpdateAvailable}from"../chunks/app-NiFa047w.js";

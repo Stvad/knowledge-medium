@@ -1,0 +1,1 @@
+export{RQ as geoDataExtension}from"../../../chunks/app-NiFa047w.js";

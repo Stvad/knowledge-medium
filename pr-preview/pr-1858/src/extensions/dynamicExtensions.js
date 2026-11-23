@@ -1,0 +1,1 @@
+export{TR as dynamicExtensionsExtension}from"../../chunks/app-NiFa047w.js";

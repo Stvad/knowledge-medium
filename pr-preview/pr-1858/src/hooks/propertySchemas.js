@@ -1,0 +1,1 @@
+export{tY as usePropertySchemas}from"../../chunks/app-NiFa047w.js";

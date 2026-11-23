@@ -1,0 +1,1 @@
+export{K8 as FacetBridge}from"../../chunks/app-NiFa047w.js";

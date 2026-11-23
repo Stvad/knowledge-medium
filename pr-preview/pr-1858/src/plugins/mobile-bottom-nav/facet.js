@@ -1,0 +1,1 @@
+export{KO as mobileBottomNavItemsFacet}from"../../../chunks/app-NiFa047w.js";

@@ -1,0 +1,1 @@
+export{R2 as CHAR_COUNTER_TYPE,U2 as RAW_CHARACTER_COUNT_PROFILE_ID,W2 as WORDS_COUNT_PROFILE_ID,V2 as WORD_COUNTER_TYPE,tr as charCountDisplay,G2 as charLimitProp,K2 as charProfileProp,q2 as charScopeProp,qn as characterCountProfilesFacet,Hn as characterCounterPlugin,Zn as textCountProfile}from"../../../chunks/app-NiFa047w.js";

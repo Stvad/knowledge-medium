@@ -1,0 +1,1 @@
+export{J2 as backlinksDataExtension}from"../../../chunks/app-NiFa047w.js";

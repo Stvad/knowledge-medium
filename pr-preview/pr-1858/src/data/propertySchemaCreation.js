@@ -1,0 +1,1 @@
+export{oY as adoptOrCreatePropertySchema}from"../../chunks/app-NiFa047w.js";
