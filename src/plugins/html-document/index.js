@@ -1,1 +1,1 @@
-export{sn as htmlDocumentPlugin}from"../../../chunks/app-CYZ5ccsU.js";
+export{sn as htmlDocumentPlugin}from"../../../chunks/app-h_5lhWE_.js";
