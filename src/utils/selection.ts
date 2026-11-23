@@ -13,7 +13,8 @@ import { ChangeScope, type BlockData } from '@/data/api'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import { siblingPrecedes, unlistedIndexAmong } from '@/data/orderKey'
 import type { OutlineSurface } from '@/data/outlineSurface'
-import { visibleChildIds } from '@/data/visibleChildren'
+import { isNestedSurface, type DrawnChild } from '@/data/childrenView'
+import { drawnChildrenOf, visibleChildIds } from '@/data/visibleChildren'
 
 /** Whether `block` shows its children on `surface`: not collapsed, or the
  *  scope root of a surface that draws its root open whatever the flag
@@ -47,84 +48,121 @@ const unlistedSiblingIndexLoaded = async (
   return unlistedSiblingIndex(repo, listedIds, row)
 }
 
-/** Returns the next visible block in document order on `surface`,
- *  walking *relatively* — descend into the first child if `current` is
- *  expanded and has children, otherwise climb ancestors looking for a
- *  next sibling. Stops at the scope boundary (`surface.scopeRootId`);
- *  returns null when `current` is the last visible block.
+/** One step through the order `surface` draws: the block it lands on (null
+ *  past the scope's edge), and whether it passed over a nested surface
+ *  (`NestedSurface`) on the way. The walk cannot name a nested surface's rows,
+ *  so the block it lands on is not the one drawn beside the start: a gesture
+ *  that acts on the two as neighbours (a merge) refuses a crossed step. */
+export interface DrawnStep {
+  block: Block | null
+  crossed: boolean
+}
+
+/** Where `current` sits among its parent's drawn children: its index, or for a
+ *  row the list leaves out, the index it is drawn at (`unlistedSiblingIndex`),
+ *  as a position before which it sits. */
+const positionAmong = async (
+  repo: Repo,
+  members: readonly DrawnChild[],
+  current: BlockData,
+): Promise<{at: number; listed: boolean}> => {
+  const listedAt = members.indexOf(current.id)
+  if (listedAt !== -1) return {at: listedAt, listed: true}
+  const ids = members.filter((member): member is string => !isNestedSurface(member))
+  const before = ids[await unlistedSiblingIndexLoaded(repo, ids, current)]
+  return {at: before === undefined ? members.length : members.indexOf(before), listed: false}
+}
+
+/** The next block in the order `surface` draws, walking *relatively* —
+ *  descend into the first child if `current` is expanded and has children,
+ *  otherwise climb ancestors looking for a next sibling. Stops at the scope
+ *  boundary (`surface.scopeRootId`): null past the last drawn block.
  *
  *  Every child list the walkers in this file read is the one the surface
- *  draws (`visibleChildIds`), so a property row the display mode shows is a
- *  row to land on and one it hides is passed by.
+ *  draws (`drawnChildrenOf`), so a property row the display mode shows is a
+ *  row to land on and one it hides is passed by, and so is a nested surface.
  *
  *  Touches O(depth) blocks (one SQL per parent's child list, all small
  *  + handle-cached) instead of materializing the surface's full
  *  visible-id list. Works correctly inside any surface with an arbitrary
  *  scope root because no global "active panel" state is consulted. */
-export const nextVisibleBlock = async (
+export const nextDrawnStep = async (
   current: Block,
   surface: OutlineSurface,
-): Promise<Block | null> => {
+): Promise<DrawnStep> => {
   const repo = current.repo
   await current.load()
+  let crossed = false
+  const firstBlock = (members: readonly DrawnChild[], from: number): Block | null => {
+    for (const member of members.slice(from)) {
+      if (!isNestedSurface(member)) return repo.block(member)
+      crossed = true
+    }
+    return null
+  }
 
-  // Step into the first child if expanded.
   if (isExpanded(current, surface)) {
-    const childIds = await visibleChildIds(current, surface)
-    if (childIds.length > 0) return repo.block(childIds[0])
+    const first = firstBlock(await drawnChildrenOf(current, surface), 0)
+    if (first) return {block: first, crossed}
   }
 
   // Climb ancestors looking for a next sibling. Stop at the scope root.
   let walker: Block = current
   while (walker.id !== surface.scopeRootId) {
     const data = walker.peek()
-    if (!data || data.parentId === null) return null
-    const parentId = data.parentId
-    const parent = repo.block(parentId)
+    if (!data || data.parentId === null) return {block: null, crossed}
+    const parent = repo.block(data.parentId)
     // The climb reads the parent's own row next (`walker.peek()`).
     await parent.load()
-    const siblingIds = await visibleChildIds(parent, surface)
-    const idx = siblingIds.indexOf(walker.id)
-    const nextIdx = idx !== -1 ? idx + 1 : await unlistedSiblingIndexLoaded(repo, siblingIds, data)
-    if (nextIdx < siblingIds.length) {
-      return repo.block(siblingIds[nextIdx])
-    }
+    const siblings = await drawnChildrenOf(parent, surface)
+    const {at, listed} = await positionAmong(repo, siblings, data)
+    const next = firstBlock(siblings, listed ? at + 1 : at)
+    if (next) return {block: next, crossed}
     walker = parent
   }
-  return null
+  return {block: null, crossed}
 }
 
-/** Returns the previous visible block in document order on `surface`.
- *  Mirror of `nextVisibleBlock`: if `current` has a previous sibling,
- *  descend into that sibling's last visible descendant; otherwise return
- *  the parent. Stops at the scope root (returns null when `current` is it). */
-export const previousVisibleBlock = async (
+export const nextVisibleBlock = async (current: Block, surface: OutlineSurface): Promise<Block | null> =>
+  (await nextDrawnStep(current, surface)).block
+
+/** The previous block in the order `surface` draws. Mirror of
+ *  {@link nextDrawnStep}: if `current` has a previous sibling, descend into
+ *  that sibling's last drawn descendant; otherwise land on the parent. Stops at
+ *  the scope root (null when `current` is it). */
+export const previousDrawnStep = async (
   current: Block,
   surface: OutlineSurface,
-): Promise<Block | null> => {
-  if (current.id === surface.scopeRootId) return null
+): Promise<DrawnStep> => {
+  if (current.id === surface.scopeRootId) return {block: null, crossed: false}
   const repo = current.repo
   await current.load()
 
   const data = current.peek()
-  if (!data || data.parentId === null) return null
-  const parentId = data.parentId
+  if (!data || data.parentId === null) return {block: null, crossed: false}
 
-  const parent = repo.block(parentId)
+  const parent = repo.block(data.parentId)
   await parent.load()
-  const siblingIds = await visibleChildIds(parent, surface)
-  const idx = siblingIds.indexOf(current.id)
-  const prevIdx = (idx !== -1 ? idx : await unlistedSiblingIndexLoaded(repo, siblingIds, data)) - 1
-
-  if (prevIdx >= 0) {
-    // Descend into the previous sibling's last visible descendant.
-    return getLastVisibleDescendant(repo.block(siblingIds[prevIdx]), surface)
+  const siblings = await drawnChildrenOf(parent, surface)
+  const {at} = await positionAmong(repo, siblings, data)
+  let crossed = false
+  for (let index = at - 1; index >= 0; index--) {
+    const sibling = siblings[index]!
+    if (isNestedSurface(sibling)) {
+      crossed = true
+      continue
+    }
+    const last = await lastDrawnStep(repo.block(sibling), surface)
+    return {block: last.block, crossed: crossed || last.crossed}
   }
-  // No previous sibling — the parent is the previous visible block.
-  // When current is a direct child of the scope root, parent is that root,
-  // which is itself the first visible block in the surface.
-  return parent
+  // No previous sibling — the parent is the previous drawn block. When current
+  // is a direct child of the scope root, that is the root itself, the first
+  // drawn block of the surface.
+  return {block: parent, crossed}
 }
+
+export const previousVisibleBlock = async (current: Block, surface: OutlineSurface): Promise<Block | null> =>
+  (await previousDrawnStep(current, surface)).block
 
 /** Picks the block that should hold focus after `current` and its
  *  entire subtree are removed. Uses the data tree (not the DOM):
@@ -175,27 +213,33 @@ export const blockAfterSubtreeRemoval = async (
   return parent
 }
 
-/** Last visible descendant of `block` (deepest, last child of last
- *  child, etc.). Used by keyboard navigation that needs to land on
- *  the bottom of an expanded subtree. Returns the input block if it
- *  does not show children (`isExpanded`) or has none; a collapsed block
- *  mid-walk ends the descent, which is `previousVisibleBlock`'s contract
- *  (don't dive into a collapsed sibling). */
-export const getLastVisibleDescendant = async (
+/** Last drawn descendant of `block` (deepest, last child of last child, etc.)
+ *  and whether what is drawn last under it is a nested surface. The descent
+ *  stops at a block that does not show its children (`isExpanded`) or has
+ *  none, which is `previousDrawnStep`'s contract (don't dive into a collapsed
+ *  sibling), and at one whose drawn children end in a nested surface: the
+ *  surface's rows are not the walk's to name, so that block, `crossed`. */
+const lastDrawnStep = async (
   block: Block,
   surface: OutlineSurface,
-): Promise<Block> => {
+): Promise<{block: Block; crossed: boolean}> => {
   const repo = block.repo
   await block.load()
   let current = block
   while (true) {
-    if (!isExpanded(current, surface)) return current
-    const childIds = await visibleChildIds(current, surface)
-    if (childIds.length === 0) return current
-    current = repo.block(childIds[childIds.length - 1])
+    if (!isExpanded(current, surface)) return {block: current, crossed: false}
+    const last = (await drawnChildrenOf(current, surface)).at(-1)
+    if (last === undefined) return {block: current, crossed: false}
+    if (isNestedSurface(last)) return {block: current, crossed: true}
+    current = repo.block(last)
     await current.load()
   }
 }
+
+/** {@link lastDrawnStep}'s block: used by keyboard navigation that lands on
+ *  the bottom of an expanded subtree. */
+export const getLastVisibleDescendant = async (block: Block, surface: OutlineSurface): Promise<Block> =>
+  (await lastDrawnStep(block, surface)).block
 
 /** Walks ancestors via cache snapshots and returns the topmost block
  *  reachable. Used by some shortcut handlers that need to jump to

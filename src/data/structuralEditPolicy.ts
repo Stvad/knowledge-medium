@@ -2,7 +2,7 @@ import { Block } from './block'
 import type { SurfaceCarrier } from './outlineSurface'
 import { isCollapsedProp } from './properties.js'
 import { listingSurfaceOf } from './childrenView'
-import { visibleChildIds } from './visibleChildren'
+import { drawnChildrenOf } from './visibleChildren'
 
 /**
  * Where a "new block below" gesture (vim `o`, Enter-at-end-of-line)
@@ -113,12 +113,12 @@ export const structuralEditPolicyForBlock = async (
   carrier: SurfaceCarrier,
 ): Promise<StructuralEditPolicy> => {
   const data = block.peek() ?? await block.load()
-  const childIds = await visibleChildIds(block, listingSurfaceOf(carrier))
+  const drawn = await drawnChildrenOf(block, listingSurfaceOf(carrier))
   const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
   return resolveStructuralEditPolicy({
     blockId: block.id,
     parentId: data?.parentId ?? null,
-    hasUncollapsedChildren: childIds.length > 0 && !isCollapsed,
+    hasUncollapsedChildren: drawn.length > 0 && !isCollapsed,
     scopeRootId: carrier.scopeRootId,
   })
 }

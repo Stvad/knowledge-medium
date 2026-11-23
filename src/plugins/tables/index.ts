@@ -8,6 +8,7 @@ import { propertyRowsPlugin } from '@/plugins/property-rows'
 import { drawsPropertyRows } from '@/plugins/property-rows/fieldRow'
 import { spatialNavExclusionsFacet } from '@/plugins/spatial-navigation/exclusionsFacet'
 import { tableConversionActions } from './actions'
+import { tableChildrenViews } from './childrenViews'
 import { cellEditorExtension } from './cellEdits'
 import { tablesDataExtension } from './dataExtension'
 import { queryPropertyUi } from './QueryUi'
@@ -42,6 +43,7 @@ export const tablesPlugin: AppExtension = systemToggle({
   // Cells draw value rows through its inline controls and value completions.
   propertyRowsPlugin,
   tablesDataExtension,
+  tableChildrenViews,
   blockLayoutFacet.of(tableLayoutContribution, {source: SOURCE, precedence: 100}),
   shortcutSurfaceActivationsFacet.of(tableShortcutActivation, {source: SOURCE}),
   spatialNavExclusionsFacet.of(CELL_SURFACE, {source: SOURCE}),

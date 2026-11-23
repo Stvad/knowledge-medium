@@ -8,15 +8,16 @@ import type { Block } from '@/data/block'
 import {
   PropertyEditRefusedError, clearPropertyValue, finishPropertyValueEdit, openPropertyValue,
 } from '@/data/internals/propertyValueEdits'
-import { editorSelection, focusBlock, hasBlockType, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { editorSelection, focusBlock, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { NO_PROPERTY_DISPLAY_SCOPE, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import type { OutlineSurface } from '@/data/outlineSurface'
 import { getLastVisibleDescendant } from '@/utils/selection'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
 import { showError, showInfo } from '@/utils/toast'
 import { ROW_CAP, canAddRow } from './model'
-import { TABLE_TYPE } from './schema'
 import { forgetCellEdit, openedCellEdit, reportRefusal } from './cellEdits'
+import { rowNotes } from './childrenViews'
 import { takeTableStep } from './navigation'
 import { createQueryRow, rowBackfill } from './query/backfill'
 import type { QueryTerm } from './query/parse'
@@ -50,20 +51,6 @@ const ownCell = (row: HTMLElement, column: number) =>
 
 const ownControl = (cell: HTMLElement) =>
   [...cell.querySelectorAll<HTMLElement>(CELL_CONTROL_SELECTOR)].find(control => control.closest('[data-table-col]') === cell)
-
-/** The outermost table host between `block` and its ancestor `rowId`. The
- *  outline's walk follows a table host's data tree (its view, its columns,
- *  rows it draws in a scope of its own), none of which is drawn where the
- *  walk started: the host's own title is the last thing drawn there. */
-const outermostTableOnPath = (block: Block, rowId: string): Block | undefined => {
-  let found: Block | undefined
-  for (let current: Block | undefined = block; current && current.id !== rowId;) {
-    const data = current.peek()
-    if (data && hasBlockType(data, TABLE_TYPE)) found = current
-    current = data?.parentId ? current.repo.block(data.parentId) : undefined
-  }
-  return found
-}
 
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
 
@@ -181,30 +168,30 @@ export class GridController {
     this.displayScope = scope
   }
 
-  /** A row's children as the grid draws them: none while it is collapsed,
-   *  never its property rows (its cells draw those). */
+  /** Where a row's notes are drawn: the row is the root of its own scope. */
+  private rowSurface(rowId: string): OutlineSurface {
+    return {scopeRootId: rowId, scopeRootForcesOpen: false, propertyDisplay: this.displayScope, renderScopeId: this.renderScopeId}
+  }
+
+  /** A row's notes as the grid draws them: none while it is collapsed. */
   async drawnChildIds(rowId: string): Promise<string[]> {
     const row = this.host.repo.block(rowId)
     await row.load()
     return row.peekProperty(isCollapsedProp) ?? false ? [] : this.childIdsOf(rowId)
   }
 
-  /** A row's children, shown or collapsed, less its property rows and any it
-   *  is drawn beside as a row of its own (`RowNotes` draws the same list). */
-  async childIdsOf(rowId: string): Promise<string[]> {
-    const ids = await this.host.repo.query.childIds({id: rowId, propertyChildren: 'none'}).load()
-    return ids.filter(id => !this.rowIndex.has(id))
+  /** A row's notes, shown or collapsed: the list `RowNotes` draws. */
+  childIdsOf(rowId: string): Promise<string[]> {
+    return rowNotes(this.host.repo.block(rowId), this.rowIds).load()
   }
 
-  /** The last block a row draws: its last child as the outline draws it
-   *  (followed down to its last shown descendant), or the row itself. */
+  /** The last block a row draws: its last note followed down as the outline
+   *  draws it (a table there ends the descent at its title), or the row itself. */
   async lastDrawnIn(rowId: string): Promise<Block> {
-    const repo = this.host.repo
-    const lastChild = (await this.drawnChildIds(rowId)).at(-1)
-    if (!lastChild) return repo.block(rowId)
-    const deepest = await getLastVisibleDescendant(repo.block(lastChild),
-      {scopeRootId: rowId, scopeRootForcesOpen: false, propertyDisplay: this.displayScope})
-    return outermostTableOnPath(deepest, rowId) ?? deepest
+    const lastNote = (await this.drawnChildIds(rowId)).at(-1)
+    return lastNote === undefined
+      ? this.host.repo.block(rowId)
+      : getLastVisibleDescendant(this.host.repo.block(lastNote), this.rowSurface(rowId))
   }
 
   /** ArrowDown from a row's text: its first drawn child, edited from its
@@ -274,6 +261,11 @@ export class GridController {
 
   isRow(blockId: string): boolean {
     return this.rowIndex.has(blockId)
+  }
+
+  /** The rows, in the order drawn. */
+  get rows(): readonly string[] {
+    return this.rowIds
   }
 
   /** Focus on a cell's field row, which the grid does not draw (an outline

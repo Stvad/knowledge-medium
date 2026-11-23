@@ -356,6 +356,15 @@ describe('a row draws its children', () => {
     expect(ui().peekProperty(isEditingProp)).toBe(true)
   })
 
+  it('ArrowUp from its first child edits the row’s text even when the row shows its property rows', async () => {
+    const id = await note()
+    await repo.block('row-0').set(propertyDisplayProp, 'all')
+    mount()
+    press(await editAt(id!, 'start'), 'ArrowUp')
+    await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(true)
+  })
+
   it('ArrowUp from its first child edits the row’s text', async () => {
     const id = await note()
     mount()
@@ -744,5 +753,55 @@ describe('normal mode on a list member', () => {
     await normalRun(alpha!, 'enter_edit_mode')
     await waitFor(() => expect(ui().peekProperty(isEditingProp)).toBe(true))
     expect(focused()).toEqual({blockId: alpha, renderScopeId: SCOPE})
+  })
+})
+
+describe('the outline around a table', () => {
+  /** The host on a page, with a block after it, the page the scope root. */
+  const mountPage = async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'page'})
+      await tx.move(HOST, {parentId: 'page', orderKey: 'a0'})
+      await tx.create({id: 'after', workspaceId: WS, parentId: 'page', orderKey: 'a1', content: 'after'})
+    }, {scope: ChangeScope.BlockDefault})
+    render(
+      <RepoContext value={repo}>
+        <AppRuntimeContextProvider value={runtime}>
+          <ActiveContextsProvider>
+            <HotkeyReconciler/>
+            <ContextProbe/>
+            <Suspense fallback={null}>
+              <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: PARENT_SCOPE, scopeRootId: 'page'}}>
+                <PropertyDisplayScopeContext value={{childBacked: true, workspace: 'non-hidden', panel: 'inherit'}}>
+                  <BlockComponent blockId="page"/>
+                </PropertyDisplayScopeContext>
+              </BlockContextProvider>
+            </Suspense>
+          </ActiveContextsProvider>
+        </AppRuntimeContextProvider>
+      </RepoContext>,
+    )
+  }
+
+  it('Backspace at the start of the block after a table merges it into nothing above', async () => {
+    await mountPage()
+    await act(async () => {
+      await ui().set(editorSelection, {blockId: 'after', start: 0})
+      await focusBlock(ui(), 'after', {edit: true, renderScopeId: PARENT_SCOPE})
+    })
+    const node = await waitFor(() => {
+      const editor = document.querySelector<HTMLElement>('[data-block-id="after"] .cm-editor')
+      expect(editor).not.toBeNull()
+      return editor!
+    })
+    await waitFor(() => expect((activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as {block?: {id: string}})?.block?.id).toBe('after'))
+    const machinery = await db.db.getAll<{id: string; content: string}>(
+      'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY id', [HOST])
+    press(EditorView.findFromDOM(node)!, 'Backspace')
+    // The merge, when it runs, lands within a few macrotasks; nothing may have moved by then.
+    for (let turn = 0; turn < 5; turn++) await act(() => new Promise(resolve => setTimeout(resolve, 20)))
+    expect(await repo.load('after')).toMatchObject({content: 'after'})
+    expect(await db.db.getAll('SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY id', [HOST]))
+      .toEqual(machinery)
   })
 })
