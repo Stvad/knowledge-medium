@@ -22,7 +22,7 @@
  *  `repo.types` registry, `addType`, `createTypeBlock`) happens in the
  *  plugin's CodeMirror extension. */
 
-import { EditorSelection } from '@codemirror/state'
+import { EditorSelection, Facet } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import type {
   Completion,
@@ -328,6 +328,10 @@ const candidateToOption = (
   },
 })
 
+/** A document where `#` is not a type tag: the plugin that reads the text as its own syntax
+ *  contributes `true` and completes `#` there itself (a table's query). */
+export const typeTagsOff = Facet.define<boolean, boolean>({combine: values => values.some(Boolean)})
+
 export const typeTagCompletionSource = (
   options: TypeTagAutocompleteOptions,
 ): CompletionSource => {
@@ -349,7 +353,7 @@ export const typeTagCompletionSource = (
     // fence, a CSS `#id` in backticks, `http://…/#anchor`) — and with
     // the dropdown open, Enter accepts the auto-selected "Create type"
     // sentinel: it deletes that text and mints a junk type.
-    if (isInsideLiteralMarkdown(state, pos)) return null
+    if (isInsideLiteralMarkdown(state, pos) || state.facet(typeTagsOff)) return null
 
     const candidates = await options.getCandidates(match.query)
     if (candidates.length === 0 && !explicit) return null

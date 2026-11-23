@@ -1082,8 +1082,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (!prevVisible || prevVisible.id === surface.scopeRootId) return
 
         await mergeUp({
-          from: block, into: prevVisible, liveContent, propertyDisplay: surface.propertyDisplay,
-          uiStateBlock, renderScopeId: deps.renderScopeId,
+          from: block, into: prevVisible, liveContent, surface, uiStateBlock,
           // Vestigial, and kept only because it costs nothing: the event has
           // finished dispatching by now (every step above awaits), and block
           // editors pass `defaultKeymap: false`, so Backspace at offset 0 has
@@ -1131,7 +1130,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         await Promise.all([block.load(), nextVisible.load()])
         if (holdsSource(block) || holdsSource(nextVisible)) return
-        if (await bothShowIndependentChildren({into: block, from: nextVisible}, surface.propertyDisplay)) return
+        if (await bothShowIndependentChildren({into: block, from: nextVisible}, surface)) return
 
         // Ask the deletion guards BEFORE any side effect — the merge destroys
         // `nextVisible`, so a guarded page must not be folded away. This has to

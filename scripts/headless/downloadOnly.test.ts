@@ -60,7 +60,7 @@ it('keeps an admitted editor read-only, preserving an allowed UI-state write wit
   }))
   const stopping = new AbortController()
   const host = serveDatabase(db, {mode: 'plaintext', writable: false, workspaceId, profile: 'fixture', stateDir: fixture.dir},
-    user, stopping.signal, undefined, register)
+    user, stopping.signal, {register})
 
   const queue = () => db.getAll<{id: number, tx_id: number, data: string}>('SELECT id, tx_id, data FROM ps_crud ORDER BY id')
   try {

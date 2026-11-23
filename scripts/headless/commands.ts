@@ -5,9 +5,9 @@ import {executeCommand} from '@/plugins/agent-runtime/commands'
 import type {AgentRuntimeContext} from '@/plugins/agent-runtime/protocol'
 
 const extensions = {refuse: 'extension loading requires a browser'}
-const media = {refuse: 'media storage requires a browser'}
 // `writable`: served once the gate is open and the host may upload. For writes
-// that bypass the Repo, so its read-only state cannot refuse them.
+// that bypass the Repo, so its read-only state cannot refuse them: add-media
+// stores bytes and queues their upload before its transaction.
 const commands: Record<KnownCommandType, 'always' | 'open' | 'writable' | {refuse: string}> = {
   ping: 'always',
   health: 'always',
@@ -56,8 +56,8 @@ const commands: Record<KnownCommandType, 'always' | 'open' | 'writable' | {refus
   'run-action': {refuse: 'actions require the app runtime'},
   'run-backfill': {refuse: 'workspace backfills require an operator'},
   'audit-properties': {refuse: 'property audits require the operator path'},
-  'add-media': media,
-  'read-media': media,
+  'add-media': 'writable',
+  'read-media': 'open',
 }
 
 const classified = (type: string): type is KnownCommandType => Object.hasOwn(commands, type)

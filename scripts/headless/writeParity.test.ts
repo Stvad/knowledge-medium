@@ -210,10 +210,10 @@ it('writes the same rows as the tab and seals every uploaded content column', as
   const ready = new Promise<Execute>(resolve => { register = resolve })
   const running = serveDatabase(host.db, {
     workspaceId, stateDir: host.dir, profile: 'fixture', mode: 'e2ee', keyFile, writable: true,
-  }, user, controller.signal, undefined, async (_config, _user, execute) => {
+  }, user, controller.signal, {register: async (_config, _user, execute) => {
     register(execute)
     return {postEvent: async () => {}, close: async () => {}}
-  })
+  }})
   try {
     const hostCommand = await Promise.race([ready, running.then(() => { throw new Error('Host stopped') })])
     await vi.waitFor(async () => {

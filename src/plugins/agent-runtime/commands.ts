@@ -31,6 +31,7 @@ import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
+import { captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
 import { CHOOSE_CONTRIBUTOR_MESSAGE } from '@/plugins/contributors/processor.js'
 import { addMedia } from './addMedia.ts'
 import { readMedia } from './readMedia.ts'
@@ -116,6 +117,7 @@ import {
 } from '@/data/internals/propertyCellBackfill'
 import {readIsChildBackedWorkspace} from '@/data/workspaceSchema'
 import type {
+  AgentMedia,
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
   BlockPosition,
@@ -2240,13 +2242,25 @@ ${code}
   return fn(context, data)
 }
 
+/** The app's media lanes, behind the Attachments plugin's toggle. Its renderer
+ *  stands in for "the plugin is on". */
+const appMedia: AgentMedia = {
+  captureRefusal: runtime => runtime.read(blockRenderersFacet).media === undefined
+    ? 'Enable the Attachments plugin to add media.'
+    : null,
+  resolve: request => getAssetResolver().resolve(request),
+  capture: captureMediaFromFiles,
+}
+
 export const createAgentRuntimeContext = ({
   repo,
   runtime,
   safeMode,
   hostHealth,
+  media = appMedia,
 }: AgentRuntimeBridgeOptions): AgentRuntimeContext => {
   const context: AgentRuntimeContext = {
+    media,
     hostHealth,
     repo,
     db: repo.db,
@@ -2305,6 +2319,7 @@ export const executeCommand = async (
       runtime: context.runtime,
       safeMode: context.safeMode,
       hostHealth: context.hostHealth,
+      media: context.media,
     })
   }
   return executeAttributedCommand(command, context)
@@ -2389,18 +2404,17 @@ const executeAttributedCommand = async (
         context.repo,
         viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId)),
         requireString(command.ref, 'ref'),
-        getAssetResolver(),
+        context.media,
       )
 
     case 'add-media': {
       const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
-      if (context.runtime.read(blockRenderersFacet).media === undefined) {
-        throw new Error('Enable the Attachments plugin to add media.')
-      }
+      const refusal = context.media.captureRefusal(context.runtime)
+      if (refusal !== null) throw new Error(refusal)
       // Refused here, not left to the attribution check inside the capture's tx: by
       // then the bytes are stored, and nothing reclaims them.
       refuseUnchosenContributor(context, command)
-      return addMedia(context.repo, workspaceId, {
+      return addMedia(context.repo, workspaceId, context.media.capture, {
         base64: requireString(command.base64, 'base64'),
         filename: command.filename,
         mime: command.mime,

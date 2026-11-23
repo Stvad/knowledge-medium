@@ -38,14 +38,12 @@ const refusals: KnownAgentCommand[] = [
   {type: 'audit-extension'},
   {type: 'run-backfill', backfillId: 'test'},
   {type: 'audit-properties'},
-  {type: 'read-media', ref: 'test'},
-  {type: 'add-media', base64: ''},
 ]
 
 it.each(refusals)('refuses $type even with an open gate', async command => {
   const error = command.type === 'action' || command.type === 'set-extension-enabled'
     ? `Unsupported headless command: ${command.type}`
-    : new RegExp(`^${command.type}: (?:arbitrary code|actions require|extension loading|workspace backfills|property audits|media storage)`)
+    : new RegExp(`^${command.type}: (?:arbitrary code|actions require|extension loading|workspace backfills|property audits)`)
   await expect(executeHeadlessCommand(command, context(), open)).rejects.toThrow(error)
 })
 
@@ -71,6 +69,8 @@ it('refuses reads and document writes while closed with the gate condition', asy
     {type: 'reconcile-markdown-subtree', parentId: 'test', markdown: 'test', key: 'test'},
     {type: 'add-comment', target: 'test'},
     {type: 'retry-rejected-upload', txId: 1},
+    {type: 'read-media', ref: 'test'},
+    {type: 'add-media', base64: ''},
   ]
   const runtime = context()
   for (const command of commands) {
@@ -119,4 +119,12 @@ it('refuses an upload retry with the reason the host cannot upload, after the ga
     .rejects.toThrow('retry-rejected-upload: the member role viewer cannot write')
   expect(order).toEqual(['gate', 'write'])
   await expect(executeHeadlessCommand(command, context(), gate(null, null))).rejects.toThrow('No rejected transaction 1')
+})
+
+it('refuses add-media on a host that cannot write, before capturing anything', async () => {
+  const runtime = context()
+  const capture = vi.spyOn(runtime.media, 'capture')
+  await expect(executeHeadlessCommand({type: 'add-media', base64: 'AQID'}, runtime, open))
+    .rejects.toThrow(`add-media: ${viewer}`)
+  expect(capture).not.toHaveBeenCalled()
 })

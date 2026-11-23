@@ -147,7 +147,7 @@ class TermError extends Error {
 }
 
 /** Where a quote opened at `start` closes, past its `\"` and `\\` escapes; -1 if it never does. */
-const closingQuote = (text: string, start: number): number => {
+export const closingQuote = (text: string, start: number): number => {
   for (let i = start + 1; i < text.length; i++) {
     if (text[i] === '\\' && (text[i + 1] === '"' || text[i + 1] === '\\')) i++
     else if (text[i] === '"') return i
@@ -330,6 +330,10 @@ const capabilityValue = (capability: WhereCapability<unknown>, text: string): un
 const operandCapability = (schema: AnyPropertySchema): WhereCapability<unknown> | undefined =>
   schema.codec.where ?? schema.codec.contains
 
+/** Whether `name=value` can be written for this property; otherwise only its presence can be tested. */
+export const takesOperand = (schema: AnyPropertySchema): boolean =>
+  isRefCodec(schema.codec) || isRefListCodec(schema.codec) || operandCapability(schema) !== undefined
+
 const operandProblem = (property: QueryProperty, text: string): string => {
   const {name, schema: {codec}} = property
   switch (operandCapability(property.schema)?.storage) {
@@ -471,6 +475,11 @@ const readCompare = (reader: Reader, property: QueryProperty, op: CompareOp, sta
   return {kind: 'compare', property, op, operand: {kind: 'text', value}, start, end: reader.i}
 }
 
+/** The engine keys a property term by name, so a name that is both a property's
+ *  and a field's cannot be queried, however the property is addressed. */
+export const isPropertyAndField = (resolver: QueryResolver, name: string): boolean =>
+  resolver.field(name) !== undefined && resolver.propertyByName(name) !== undefined
+
 const readKeyed = (reader: Reader, negated: boolean, start: number): QueryTerm => {
   const quotedName = reader.peek() === '"'
   const name = reader.name()
@@ -487,9 +496,7 @@ const readKeyed = (reader: Reader, negated: boolean, start: number): QueryTerm =
   const {resolver} = reader
   const property = savedId !== undefined ? resolver.propertyById(savedId) : resolver.propertyByName(name)
   const field = savedId === undefined ? resolver.field(name) : undefined
-  // The engine keys a property term by name, so a property named like a field
-  // is ambiguous however it is addressed here.
-  if (property && resolver.field(property.name)) {
+  if (property && isPropertyAndField(resolver, property.name)) {
     reader.fail(start, `${property.name} is both a property and a field; rename the property to query it`, keyEnd)
   }
   if (field) {

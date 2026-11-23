@@ -62,6 +62,7 @@ import {
   mediaHashProp,
   mediaMimeProp,
   mediaSizeProp,
+  resolveCaptureMime,
 } from './mediaBlock.js'
 import type { ByteUploadStore } from './uploadStore.js'
 
@@ -129,6 +130,19 @@ export type MediaCaptureResult =
   // — capture no longer mints the reference/embed block).
   | { readonly ok: true; readonly assetBlockId: string; readonly deduped: boolean }
   | { readonly ok: false; readonly reason: MediaCaptureFailure }
+
+/** User-facing message per capture failure. `captureMediaFromFiles` returns failures
+ *  as RESOLVED `{ok:false}` values (not throws), so without this a paste that's
+ *  rejected (oversize, locked workspace, …) does nothing visible — the user believes
+ *  it worked. */
+export const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
+  'no-user': 'Sign in to attach media.',
+  empty: 'That file is empty — nothing to attach.',
+  'too-large': 'That file is too large to attach.',
+  'unsupported-mime': 'That file type can’t be attached.',
+  'workspace-locked': 'Unlock this workspace to attach media.',
+  'no-content-key': 'Re-paste your workspace key to attach media.',
+}
 
 /** Capture ONE file. See the module header for the ordering contract. */
 export const captureMedia = async (
@@ -213,4 +227,34 @@ export const captureMedia = async (
   deps.drain(userId)
 
   return { ok: true, assetBlockId, deduped: !inserted }
+}
+
+/** Capture each File as a media block, one result per file. Files are read and
+ *  captured ONE AT A TIME (bounded memory), and a grossly-oversize file is rejected
+ *  by its declared `size` BEFORE `arrayBuffer()`, so a multi-GB file never allocates
+ *  its full size just to be rejected. `captureMedia` still applies the precise,
+ *  mode-aware limit (the e2ee envelope overhead) to the bytes it reads. */
+export const captureMediaFiles = async (
+  workspaceId: string,
+  files: readonly File[],
+  deps: MediaCaptureDeps,
+): Promise<MediaCaptureResult[]> => {
+  const results: MediaCaptureResult[] = []
+  for (const file of files) {
+    if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {
+      results.push({ ok: false, reason: 'too-large' })
+      continue
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>
+    const source: MediaSource = {
+      bytes,
+      // Derive the MIME from the bytes when File.type is missing/generic — a typeless
+      // image must still render inline, and the stored MIME must be a function of the
+      // bytes so it can't disagree with a content-dedup'd row.
+      mime: resolveCaptureMime(file.type, bytes),
+      filename: file.name || undefined,
+    }
+    results.push(await captureMedia({ workspaceId, source }, deps))
+  }
+  return results
 }
