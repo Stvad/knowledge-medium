@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema, type Tx } from '@/data/api'
 import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
-import { keepsStoredValue } from './internals/propertyChildrenProcessor'
+import { withPendingMembersKept } from './internals/propertyChildrenProcessor'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet, sameTxProcessorsFacet } from '@/data/facets'
@@ -198,25 +198,26 @@ describe('awaitsReferenceTarget', () => {
   })
 })
 
-describe('keepsStoredValue', () => {
+describe('withPendingMembersKept', () => {
   const refs = defineProperty('refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
   const ref = defineProperty('ref', {codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault})
   const shape = defineProperty('shape', {codec: codecs.unsafeIdentity<string[]>(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
 
   it.each([
-    ['an absent key, by anything', refs, undefined, ['a'], true],
-    ['an absent key, by an unset', refs, undefined, undefined, true],
-    ['a list, by an unset', refs, ['a'], undefined, false],
-    ['a list, by a superset in another order', refs, ['a', 'b'], ['b', 'c', 'a'], true],
-    ['a list, by one missing a member', refs, ['a', 'b'], ['a'], false],
-    ['a list, by one with fewer copies', refs, ['a', 'a'], ['a'], false],
-    ['a scalar, by itself', ref, 'a', 'a', true],
-    ['a scalar, by another value', ref, 'a', 'b', false],
-    ['a scalar, by an unset', ref, 'a', undefined, false],
+    ['an absent key takes the projection', refs, undefined, ['a'], ['a']],
+    ['a list keeps a member the projection lacks', refs, ['a', 'b'], ['a'], ['a', 'b']],
+    ['a list is never emptied', refs, ['a'], [], ['a']],
+    ['a list is never unset', refs, ['a'], undefined, ['a']],
+    ['a malformed list cell is kept as it is', refs, 'a', ['b'], 'a'],
+    ['a list gains a projected member, after its own', refs, ['a', 'b'], ['c', 'a'], ['a', 'b', 'c']],
+    ['a list keeps its order when nothing is added', refs, ['b', 'a'], ['a', 'b'], ['b', 'a']],
+    ['copies are counted', refs, ['a'], ['a', 'a'], ['a', 'a']],
+    ['a scalar keeps its value', ref, 'a', 'b', 'a'],
+    ['a scalar is never unset', ref, 'a', undefined, 'a'],
     // Only a list's members are counted; any other array is one value.
-    ['an array scalar, by a superset', shape, ['a'], ['a', 'b'], false],
+    ['an array scalar keeps its value', shape, ['a'], ['a', 'b'], ['a']],
   ] as const)('%s', (_case, schema, stored, projected, expected) => {
-    expect(keepsStoredValue(schema, stored, projected)).toBe(expected)
+    expect(withPendingMembersKept(schema, stored, projected)).toEqual(expected)
   })
 })
 

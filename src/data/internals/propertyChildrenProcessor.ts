@@ -127,14 +127,8 @@ export type ProjectableRow =
  * with no field rows at all, and a `full` re-projection there would read
  * "nothing parses" as "unset" and drive materialize into tombstoning the
  * very rows it just recognized.
- *
- * `resolved` — `full`, except that while a field has a value row still awaiting
- * its reference target ({@link awaitsReferenceTarget}) the write may only ADD
- * to what the cell holds ({@link keepsStoredValue}). That member is unknown on
- * this device, not absent, so a projection without it is no evidence that it
- * was removed. Used where a stamp, not a user, dispatched the projection.
  */
-export type ProjectionMode = 'full' | 'additive' | 'resolved'
+export type ProjectionMode = 'full' | 'additive'
 
 const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => ({
   resolveFieldSchema: (fieldId) => {
@@ -262,28 +256,32 @@ export const projectFieldRowValues = (
     schema, unionValuesAcrossFieldRows(schema, perFieldRow))
 }
 
-/** Does writing `projected` over `stored` keep everything `stored` holds? A
- *  list keeps it when every stored member is still there, counted with
- *  multiplicity; any other value only when it is unchanged. An absent key holds
- *  nothing, so anything keeps it. */
-export const keepsStoredValue = (
+/** What a field writes while one of its value rows still awaits its reference
+ *  target ({@link awaitsReferenceTarget}). That member is unknown on this
+ *  device, not absent, so the projection's lack of it is no evidence it was
+ *  removed: the write may only ADD. A list keeps every stored member, counted
+ *  with multiplicity, and gains the projected members it lacks; any other
+ *  stored value is kept as it is. Accepted cost: a removal made on this device
+ *  reaches the cell only once the pending member resolves. */
+export const withPendingMembersKept = (
   schema: AnyPropertySchema, stored: unknown, projected: unknown | undefined,
-): boolean => {
-  if (stored === undefined) return true
+): unknown | undefined => {
+  if (stored === undefined) return projected
   if (memberCodecOf(schema.codec) === undefined || !Array.isArray(stored) || !Array.isArray(projected)) {
-    return jsonValuesEqual(stored, projected)
+    return stored
   }
-  const remaining = new Map<string, number>()
-  for (const member of projected) {
+  const unmatched = new Map<string, number>()
+  for (const member of stored) {
     const key = persistedJsonKey(member)
-    remaining.set(key, (remaining.get(key) ?? 0) + 1)
+    unmatched.set(key, (unmatched.get(key) ?? 0) + 1)
   }
-  return stored.every(member => {
+  const added = projected.filter(member => {
     const key = persistedJsonKey(member)
-    const left = remaining.get(key) ?? 0
-    remaining.set(key, left - 1)
-    return left > 0
+    const left = unmatched.get(key) ?? 0
+    unmatched.set(key, left - 1)
+    return left <= 0
   })
+  return [...stored, ...added]
 }
 
 /** Re-project ONE owner's cell for every field of it this pass touched.
@@ -332,10 +330,10 @@ const reprojectOwner = async (
     // deep under a value child never re-projects the owner.
     const perFieldRow: BlockData[][] = []
     for (const fieldRow of fieldRows) perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
-    const projected = projectFieldRowValues(schema, perFieldRow)
-    if (mode === 'resolved'
-      && perFieldRow.flat().some(row => awaitsReferenceTarget(schema, row))
-      && !keepsStoredValue(schema, storedPropertyValue(nextProperties, schema.name), projected)) continue
+    const fromChildren = projectFieldRowValues(schema, perFieldRow)
+    const projected = perFieldRow.flat().some(row => awaitsReferenceTarget(schema, row))
+      ? withPendingMembersKept(schema, storedPropertyValue(nextProperties, schema.name), fromChildren)
+      : fromChildren
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via
@@ -1386,7 +1384,7 @@ export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor(
         if (row) rows.push(row)
       }
     }
-    await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'resolved')
+    await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'full')
   },
 })
 

@@ -543,9 +543,7 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     // Measured at 1.4–3.8s under a loaded machine: two stamp chunks.
   }, 20_000)
 
-  // The user-edit projection is outside this rule; whether it should hold a
-  // pending sibling is #1852. What it must keep doing either way is shown here.
-  it('a user removing a member still removes it while a sibling is pending', async () => {
+  it("a user's removal waits for a pending sibling, then lands", async () => {
     await flipWorkspace()
     const repo = setup()
     await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
@@ -556,8 +554,40 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
 
     await repo.tx(tx => tx.delete('named-value-0'), {scope: ChangeScope.BlockDefault})
     await repo.awaitProcessors()
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-c'])
 
-    expect(await cellOf('named-owner', schema.name)).not.toContain('target-a')
+    await repo.tx(async tx => {
+      await tx.create({id: 'target-c', workspaceId: WS, parentId: null, orderKey: 'a9', content: 'target'})
+      await tx.setProperty('target-c', aliasesProp, ['Name C'])
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    await vi.waitFor(async () => {
+      await repo.awaitReferenceTargetDerive()
+      expect(await readColumn('named-value-1')).toBe('target-c')
+      expect(await cellOf('named-owner', schema.name)).toEqual(['target-c'])
+    })
+  })
+
+  it('a user edit of one member keeps a pending sibling and adds the new member', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    await seedRow({id: 'target-b', properties: {[aliasesProp.name]: ['Name B']}})
+    const schema = await seedSyncedNamedRefList(repo, ['Name A', 'Name C'], ['target-a', 'target-c'])
+    await runPass(repo)
+    await repo.awaitProcessors()
+    expect(await readColumn('named-value-1')).toBeNull()
+
+    await repo.tx(tx => tx.update('named-value-0', {content: '[[Name B]]'}), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    expect(await readColumn('named-value-0')).toBe('target-b')
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-c', 'target-b'])
+
+    await repo.tx(tx => tx.setProperty('named-owner', schema, ['target-c', 'target-b']),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    expect(await repo.load('named-value-1')).toMatchObject({content: '[[Name C]]', deleted: false})
   })
 
   it('with nothing left pending, a stamp still repairs a stale member', async () => {
