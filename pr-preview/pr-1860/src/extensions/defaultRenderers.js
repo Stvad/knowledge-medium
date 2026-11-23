@@ -1,1 +1,1 @@
-export{_z as defaultRegistry,vz as defaultRendererContributions,yz as defaultRenderersExtension}from"../../chunks/app-BaJP_-qR.js";
+export{_z as defaultRegistry,vz as defaultRendererContributions,yz as defaultRenderersExtension}from"../../chunks/app-DgCsu_eU.js";

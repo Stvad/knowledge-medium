@@ -1,1 +1,1 @@
-export{CF as CommandPaletteHeaderItem}from"../../../chunks/app-BaJP_-qR.js";
+export{CF as CommandPaletteHeaderItem}from"../../../chunks/app-DgCsu_eU.js";

@@ -1,1 +1,1 @@
-export{KO as mobileBottomNavItemsFacet}from"../../../chunks/app-BaJP_-qR.js";
+export{KO as mobileBottomNavItemsFacet}from"../../../chunks/app-DgCsu_eU.js";

@@ -1,1 +1,1 @@
-export{eC as blockrefCompletionSource}from"../../chunks/app-BaJP_-qR.js";
+export{eC as blockrefCompletionSource}from"../../chunks/app-DgCsu_eU.js";
