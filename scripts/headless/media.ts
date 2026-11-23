@@ -60,7 +60,7 @@ export function openHostMedia({db, stateDir, userId, keys, writeRefusal, ...remo
     health: lanes.counts,
     start(repo: Pick<Repo, 'load'>) {
       if (timer) return
-      reconciling = lanes.reconcile(repo).catch(error => console.warn('[headless media] reconcile failed', error))
+      reconciling = lanes.reconcile(repo).then(lanes.drain).catch(error => console.warn('[headless media] reconcile failed', error))
       timer = setInterval(() => void lanes.drain(), MEDIA_DRAIN_INTERVAL_MS)
       timer.unref()
     },

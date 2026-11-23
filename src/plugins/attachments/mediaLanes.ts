@@ -1,13 +1,5 @@
-/**
- * The attachments lanes for a client that serves ONE user and owns its stores: the
- * headless host. It assembles the same pure pieces the browser wiring does
- * (`assetUpload.ts` / `assetResolver.ts`): capture, the up-lane drain, the boot
- * reconcile and the read resolver, with the stores, the blob store and the §6 key
- * deps injected. There is no ambient account and no local-only mode to track, so
- * nothing here reads `repoProvider`.
- *
- * No down-lane: bytes reach this client only by capture or by a read's fetch.
- */
+/** Capture, upload and resolve attachments for one bound user. The browser and
+ *  headless host supply their own stores, key policy and upload permissions. */
 
 import type { Repo } from '@/data/repo.js'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
@@ -18,6 +10,7 @@ import { captureMediaFiles, type MediaCaptureDeps, type MediaCaptureResult } fro
 import { createAssetResolver, type AssetResolver } from './resolver.js'
 import { drainUploads } from './uploadDrain.js'
 import { isAssetBlockPresent, reconcileUploads } from './uploadReconcile.js'
+import { recoverFailedUploads } from './uploadRecovery.js'
 import type { ByteUploadStatus, ByteUploadStore } from './uploadStore.js'
 
 export interface MediaLaneDeps {
@@ -32,6 +25,9 @@ export interface MediaLaneDeps {
    *  while it may not stays pending; uploading regardless would turn a demotion's 403
    *  into a permanent `failed`. */
   readonly canDrain: () => boolean
+  /** Browser tabs share a per-user lock. A single-owner host can run the pass directly. */
+  readonly exclusive?: (work: () => Promise<void>) => Promise<void>
+  readonly afterPass?: () => Promise<void>
 }
 
 export interface MediaLanes {
@@ -47,18 +43,34 @@ export interface MediaLanes {
   drain(): Promise<void>
   /** Settles once no drain is running. */
   settled(): Promise<void>
-  /** Promote staged records whose block is present (a crash between the capture's
-   *  commit and its promote), then drain. */
+  /** Promote staged records whose block is present, leaving drain scheduling to the caller. */
   reconcile(repo: Pick<Repo, 'load'>): Promise<void>
+  /** Probe failed records and drain the queue in the same exclusive pass. */
+  recover(getAccessToken: () => Promise<string | null>): Promise<void>
   counts(): Promise<Record<ByteUploadStatus, number>>
 }
 
 export const createMediaLanes = (deps: MediaLaneDeps): MediaLanes => {
-  const { userId, byteStore, uploadStore: store, blobStore, keys, readLiveWorkspace, canDrain } = deps
+  const {
+    userId, byteStore, uploadStore: store, blobStore, keys, readLiveWorkspace,
+    canDrain, exclusive = work => work(), afterPass,
+  } = deps
   const keyDeps = {
     getMaterializability: keys.getMaterializability,
     getCek: keys.getCek,
     getContentKeyHmac: keys.getContentKeyHmac,
+  }
+  const uploadDeps = { store, blobStore, ...keyDeps, isActiveUser: canDrain }
+  const runPass = async (label: 'drain' | 'recovery', beforeDrain?: () => Promise<unknown>): Promise<void> => {
+    try {
+      await exclusive(async () => {
+        if (beforeDrain) await beforeDrain()
+        await drainUploads(userId, { ...uploadDeps, byteStore, readLiveWorkspace })
+        await afterPass?.()
+      })
+    } catch (error) {
+      console.warn(`[mediaLanes] ${label} failed`, error)
+    }
   }
 
   let running: Promise<void> | null = null
@@ -71,12 +83,7 @@ export const createMediaLanes = (deps: MediaLaneDeps): MediaLanes => {
       try {
         do {
           again = false
-          try {
-            // Also the per-record gate, so a demotion mid-pass defers the records after it.
-            await drainUploads(userId, { store, byteStore, blobStore, readLiveWorkspace, ...keyDeps, isActiveUser: canDrain })
-          } catch (error) {
-            console.warn('[mediaLanes] drain failed', error)
-          }
+          await runPass('drain')
         } while (again && canDrain())
       } finally {
         running = null
@@ -99,7 +106,10 @@ export const createMediaLanes = (deps: MediaLaneDeps): MediaLanes => {
     settled: async () => { await running },
     async reconcile(repo) {
       await reconcileUploads(userId, { store, isBlockPresent: (_ws, id) => isAssetBlockPresent(repo, id) })
-      await drain()
+    },
+    async recover(getAccessToken) {
+      if (!canDrain()) return
+      await runPass('recovery', () => recoverFailedUploads(userId, { ...uploadDeps, getAccessToken }))
     },
     async counts() {
       const [staged, pending, failed] = await Promise.all(
