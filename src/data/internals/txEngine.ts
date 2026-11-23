@@ -402,7 +402,7 @@ type EngineWriteOpts = TxWriteOpts & {[derivedWrite]?: true}
 type EngineInsertOpts = TxInsertOpts & EngineWriteOpts
 
 export class TxImpl implements Tx {
-  blockChangeCursor(): Promise<number> {
+  blockChangeCursor(): Promise<string> {
     return blockChangeCursor(this.ctx.txDb)
   }
 

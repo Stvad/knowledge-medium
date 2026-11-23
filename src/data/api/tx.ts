@@ -102,7 +102,7 @@ export interface Tx {
   peek(id: string): BlockData | null
 
   /** Latest block change visible inside this transaction, for validating an externally drawn neighbour. */
-  blockChangeCursor(): Promise<number>
+  blockChangeCursor(): Promise<string>
 
   // ──── Lifecycle ────
 

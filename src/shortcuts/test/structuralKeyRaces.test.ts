@@ -141,6 +141,50 @@ it.each([
   await expectStoredTree({page: ['a', 'b'], b1: ['c']})
 })
 
+function filterChildrenOfB() {
+  repo.setRuntimeContributions(childrenViewFacet, 'test.filtered-destination', [({parent}) =>
+    parent.id === 'b' && {id: 'test.filtered-destination', order: 'derived', read: () => ({
+      load: async () => (await childIds(parent.id).load()).filter(id => id === 'c'),
+      peek: () => childIds(parent.id).peek()?.filter(id => id === 'c'),
+    })}])
+}
+
+it('refuses the second queued Tab when the new parent’s plugin view hides the previous sibling', async () => {
+  filterChildrenOfB()
+  const {indentBlock} = createSharedBlockActions({repo})
+  const tab = () => indentBlock.handler(deps('c'), trigger)
+  await queueBoth(tab, tab)
+
+  expect(await storedChildren('b1')).toEqual([])
+  await expectStoredTree({page: ['a', 'b'], b: ['b1', 'c']})
+})
+
+it('reads the stored parent when the rendered cache still shows the block elsewhere', async () => {
+  filterChildrenOfB()
+  const runTx = repo.tx.bind(repo)
+  vi.spyOn(repo, 'tx').mockImplementationOnce((fn, options) => runTx(async tx => {
+    await tx.move('c', {parentId: 'b', orderKey: 'a1'})
+    expect(repo.block('c').peek()?.parentId).toBe('page')
+    return fn(tx)
+  }, options))
+
+  await createSharedBlockActions({repo}).indentBlock.handler(deps('c'), trigger)
+
+  await expectStoredTree({page: ['a', 'b'], b: ['b1', 'c']})
+})
+
+it('preserves a deleted block’s stored placement when Tab was queued before deletion committed', async () => {
+  const {indentBlock} = createSharedBlockActions({repo})
+  await queueBoth(
+    () => repo.tx(tx => tx.delete('c'), {scope: ChangeScope.BlockDefault}),
+    () => indentBlock.handler(deps('c'), trigger),
+  )
+
+  expect(await db.db.getOptional(
+    "SELECT parent_id, order_key, deleted FROM blocks WHERE id = 'c'",
+  )).toEqual({parent_id: 'page', order_key: 'a2', deleted: 1})
+})
+
 describe.each(['plain', 'custom'] as const)('%s outline', kind => {
   beforeEach(() => {
     if (kind === 'custom') repo.setRuntimeContributions(childrenViewFacet, 'test.outline', [({parent, surface}) =>
@@ -282,6 +326,28 @@ it.each([
     () => { nested = {...nested, ...change} },
     () => createSharedBlockActions({repo})[action].handler(deps(subject), trigger),
   )
+
+  await expectStoredTree({})
+})
+
+it.each([
+  {label: 'the layout owner leaves the cache', evict: true},
+  {label: 'the render scope changes owners', evict: false},
+])('refuses a queued nested Tab when $label', async ({evict}) => {
+  const outer = outlineSurfaceOf({scopeRootId: 'page', renderScopeId: 'test.owner'})!
+  const nested: NestedSurface = {kind: 'nested-surface', scopeRootId: 'page', renderScopeId: SCOPE, order: 'outline', members: ['a', 'b', 'c']}
+  let ownerId = 'page'
+  repo.setRuntimeContributions(surfaceOwnerFacet, 'test.owner', [({renderScopeId}) =>
+    renderScopeId === SCOPE && {blockId: ownerId, surface: outer}])
+  repo.setRuntimeContributions(childrenViewFacet, 'test.published-grid', [({parent, surface}) =>
+    (parent.id === 'page' || parent.id === 'a') && surface.renderScopeId === outer.renderScopeId && {
+      id: 'test.published-grid', read: () => ({load: async () => [nested], peek: () => [nested]}),
+    }])
+
+  await changeBeforeWrite(() => {
+    if (evict) expect(repo.cache.deleteSnapshot('page')).toBe(true)
+    else ownerId = 'a'
+  }, () => createSharedBlockActions({repo}).indentBlock.handler(deps('c'), trigger))
 
   await expectStoredTree({})
 })

@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { blockChangeCursor } from '@/data/blockChangeCursor'
+import { syncBulkLoadScope } from '@/data/internals/clientSchema'
 import { listingSurfaceOf } from '@/data/childrenView'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -30,6 +31,20 @@ const rows = () => db.db.getAll('SELECT id, parent_id, order_key, deleted, conte
 const moveAway = (id: string) => repo.mutate.move({id, parentId: 'outside', position: {kind: 'last'}})
 const anchor = {parentId: 'owner', siblingId: 'a'}
 const cursor = () => blockChangeCursor(repo.db)
+
+it('refuses an anchored indent after a bulk download inserts an unlogged neighbour', async () => {
+  const changeCursor = await cursor()
+  await db.db.writeTransaction(async tx => {
+    await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [syncBulkLoadScope(['ws'])])
+    await tx.execute(`INSERT INTO blocks (id, parent_id, order_key, workspace_id, created_at, updated_at, created_by, updated_by)
+      VALUES ('downloaded', 'owner', 'a0V', 'ws', 1, 1, 'user', 'user')`)
+    await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
+  })
+  expect(await db.db.getAll("SELECT id FROM row_events WHERE block_id = 'downloaded'")).toEqual([])
+  const before = await rows()
+  await repo.mutate.indent({id: 'b', anchor: {...anchor, changeCursor}})
+  expect(await rows()).toEqual(before)
+})
 
 it.each(['move', 'delete'] as const)('indent preserves every row after its drawn sibling undergoes %s', async change => {
   if (change === 'move') await moveAway('a')

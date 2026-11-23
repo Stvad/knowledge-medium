@@ -1,7 +1,9 @@
 import type { QueryReadDb } from './api/query'
 
-/** The latest committed block change, including sync writes. An extension may sort on any block in the graph. */
-export async function blockChangeCursor(db: Pick<QueryReadDb, 'getOptional'>): Promise<number> {
-  const row = await db.getOptional<{id: number}>('SELECT id FROM row_events ORDER BY id DESC LIMIT 1')
-  return row?.id ?? 0
+/** Both index tails matter: bulk downloads insert new blocks without logging their arrival in row_events. */
+export async function blockChangeCursor(db: Pick<QueryReadDb, 'get'>): Promise<string> {
+  const row = await db.get<{cursor: string}>(`
+    SELECT coalesce((SELECT max(id) FROM row_events), 0)
+        || '/' || coalesce((SELECT max(rowid) FROM blocks), 0) AS cursor`)
+  return row.cursor
 }

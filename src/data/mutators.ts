@@ -542,8 +542,8 @@ const withSubject = (
 
 // ──── indent ────
 
-const drawnAnchorSchema = z.object({changeCursor: z.number(), parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional(), foreignRootId: z.string().optional()})
-type DrawnAnchor = z.infer<typeof drawnAnchorSchema>
+const drawnAnchorSchema = z.object({changeCursor: z.string(), parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional(), foreignRootId: z.string().optional()})
+export type DrawnAnchor = z.infer<typeof drawnAnchorSchema>
 
 /** Only live rows still under the parent drawn at dispatch can participate in a relative write. */
 export const liveChildAt = async (tx: Tx, id: string, parentId: string | null, ...boundaries: (string | undefined)[]) => {

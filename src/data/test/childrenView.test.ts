@@ -469,7 +469,7 @@ describe('structural writes on a custom view', () => {
     const runTx = repo.tx.bind(repo)
     let afterMove: Awaited<ReturnType<typeof structure>> | undefined
     vi.spyOn(repo, 'tx').mockImplementationOnce(async (fn, options) => {
-      await runTx(tx => tx.move(block.id, {parentId: 'other', orderKey: 'b0'}), {scope: ChangeScope.BlockDefault})
+      await runTx(tx => tx.move(block.id, {parentId: 'other', orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
       afterMove = await structure()
       return runTx(fn, options)
     })
@@ -481,7 +481,7 @@ describe('structural writes on a custom view', () => {
 
   it('refuses to outdent a direct child beyond a root-level panel or projected root', async () => {
     await repo.tx(async tx => {
-      await tx.create({id: 'result', parentId: null, workspaceId: WS, orderKey: 'b0'})
+      await tx.create({id: 'result', parentId: null, workspaceId: WS, orderKey: 'a1'})
       await tx.create({id: 'note', parentId: 'result', workspaceId: WS, orderKey: 'a0'})
     }, {scope: ChangeScope.BlockDefault})
     const before = await structure()

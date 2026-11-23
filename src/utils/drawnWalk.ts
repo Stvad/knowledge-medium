@@ -92,24 +92,24 @@ async function locationAt(parent: DrawnLocation, slot: Exclude<Slot, null>): Pro
   }
 }
 
-const ownerOf = (repo: Repo, renderScopeId: string | undefined) =>
+export const surfaceOwnerOf = (repo: Repo, renderScopeId: string | undefined) =>
   renderScopeId === undefined ? undefined : repo.facetRuntime?.read(surfaceOwnerFacet)({repo, renderScopeId})
 
 /** Declared surfaces participate in their owner's outline. An undeclared
  *  surface (such as an embed) remains an independent DOM outline. */
 export function outerRenderScopeId(repo: Repo, renderScopeId: string | undefined): string | undefined {
-  const owner = ownerOf(repo, renderScopeId)
+  const owner = surfaceOwnerOf(repo, renderScopeId)
   return owner ? outerRenderScopeId(repo, owner.surface.renderScopeId) : renderScopeId
 }
 
 /** A nested scope whose root is its owner draws the root in the enclosing scope. */
 export const scopeRootRenderScope = (repo: Repo, scopeRootId: string, renderScopeId: string | undefined): string | undefined => {
-  const owner = ownerOf(repo, renderScopeId)
+  const owner = surfaceOwnerOf(repo, renderScopeId)
   return owner?.blockId === scopeRootId ? owner.surface.renderScopeId : renderScopeId
 }
 
 async function declarationOf(repo: Repo, renderScopeId: string | undefined) {
-  const owner = ownerOf(repo, renderScopeId)
+  const owner = surfaceOwnerOf(repo, renderScopeId)
   if (!owner) return undefined
   const parent = {block: repo.block(owner.blockId), surface: owner.surface}
   const members = await drawnChildrenOf(parent.block, parent.surface)
