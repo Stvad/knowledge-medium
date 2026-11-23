@@ -1,1 +1,1 @@
-export{AC as useIsReadOnly}from"../../chunks/app-DgCsu_eU.js";
+export{AC as useIsReadOnly}from"../../chunks/app-Dz6uzPi0.js";
