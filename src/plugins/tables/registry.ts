@@ -1,4 +1,4 @@
-import { surfaceRenderScopeId } from '@/utils/renderScope'
+import { surfaceRenderScopeId, surfaceRenderScopeParts } from '@/utils/renderScope'
 import type { GridController } from './controller'
 
 export const TABLE_SURFACE = 'tables'
@@ -14,15 +14,11 @@ export const tableNotesScopeId = (gridScope: string, rowId: string): string =>
 
 /** The owner is declared as soon as the grid lists the row, including lazy rows. */
 export const notesInScope = (renderScopeId: string): {grid: GridController; rowId: string} | undefined => {
-  const [surface, row, parent, ...rest] = renderScopeId.split(':')
-  if (surface !== `surface.${NOTES_SURFACE}` || !row || !parent || rest.length > 0) return undefined
-  try {
-    const rowId = decodeURIComponent(row)
-    const grid = grids.get(decodeURIComponent(parent))
-    if (grid?.hasQuery && grid.isRow(rowId)) return {grid, rowId}
-  } catch {
-    return undefined
-  }
+  const parts = surfaceRenderScopeParts(renderScopeId)
+  if (parts?.surface !== NOTES_SURFACE) return undefined
+  const grid = grids.get(parts.parentRenderScopeId)
+  const rowId = parts.occurrenceId
+  return grid?.isRow(rowId) && grid.notesScopeId(rowId) !== grid.renderScopeId ? {grid, rowId} : undefined
 }
 
 /** Mounted grids by render scope, for dispatch wraps and editor teardown,

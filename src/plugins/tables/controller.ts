@@ -174,8 +174,9 @@ export class GridController {
     return this.displayScope
   }
 
-  notesScopeId(rowId: string): string {
-    return this.hasQuery ? tableNotesScopeId(this.renderScopeId, rowId) : this.renderScopeId
+  /** During render use the incoming query state until setQuery publishes it at layout commit. */
+  notesScopeId(rowId: string, hasQuery = this.hasQuery): string {
+    return hasQuery ? tableNotesScopeId(this.renderScopeId, rowId) : this.renderScopeId
   }
 
   /** The row is the structural root of its notes. */

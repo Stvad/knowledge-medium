@@ -1,10 +1,8 @@
 // @vitest-environment node
 import fc from 'fast-check'
 import { afterAll, beforeAll, expect, it } from 'vitest'
-import { z } from 'zod'
-import { ChangeScope, defineQuery } from '@/data/api'
+import { ChangeScope } from '@/data/api'
 import { childrenViewFacet, surfaceOwnerFacet, type DrawnChild } from '@/data/childrenView'
-import { queriesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
 import { isCollapsedProp, type FocusedBlockLocation } from '@/data/properties'
@@ -13,27 +11,6 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { getBlocksInRange, lastDrawnStep, nextDrawnStep, previousDrawnStep, selectionBoundaryOf } from '@/utils/selection'
-
-const MEMBERS = 'test.drawnOccurrences'
-
-declare module '@/data/api' {
-  interface QueryRegistry {
-    [MEMBERS]: typeof membersQuery
-  }
-}
-
-const membersQuery = defineQuery<{id: string; members: DrawnChild[]}, DrawnChild[]>({
-  name: MEMBERS,
-  argsSchema: z.object({
-    id: z.string(),
-    members: z.array(z.union([
-      z.string(),
-      z.object({kind: z.literal('nested-surface'), renderScopeId: z.string(), members: z.array(z.string()), scopeRootId: z.string().optional()}),
-    ])),
-  }),
-  resultSchema: {parse: input => input as DrawnChild[]},
-  resolve: async ({members}) => members,
-})
 
 const shape = fc.array(fc.record({
   parent: fc.nat(),
@@ -121,10 +98,9 @@ it('walks the exact rendered occurrences forward and backward through nested sur
 
     repo.setFacetRuntime(resolveFacetRuntimeSync([
       kernelDataExtension,
-      queriesFacet.of(membersQuery, {source: 'test'}),
       childrenViewFacet.of(({parent}) => ({
-        id: MEMBERS,
-        read: () => parent.repo.query[MEMBERS]({id: parent.id, members: views.get(parent.id) ?? []}),
+        id: 'test.drawnOccurrences',
+        read: () => ({load: async () => views.get(parent.id) ?? []}),
       }), {source: 'test'}),
       surfaceOwnerFacet.of(({renderScopeId}) => owners.get(renderScopeId) ?? null, {source: 'test'}),
     ]))

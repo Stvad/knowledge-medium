@@ -11,8 +11,8 @@ import {
   lastDrawnStep,
   nextDrawnStep,
   previousDrawnStep,
+  scopeRootRenderScope,
 } from '@/utils/selection.js'
-import { surfaceOwnerFacet } from '@/data/childrenView.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
@@ -51,16 +51,6 @@ const focusMovedDuringWalk = (deps: BlockShortcutDependencies): boolean => {
     peekFocusedBlockLocation(uiStateBlock),
     {blockId: block.id, renderScopeId},
   )
-}
-
-/** A layout may use its owner as the structural root of a child scope.
- *  The owner's shell is still drawn in the enclosing scope. */
-function rootRenderScope(repo: Repo, scopeRootId: string, renderScopeId: string | undefined): string | undefined {
-  if (renderScopeId !== undefined) {
-    const owner = repo.facetRuntime?.read(surfaceOwnerFacet)({repo, renderScopeId})
-    if (owner?.blockId === scopeRootId) return owner.surface.renderScopeId
-  }
-  return renderScopeId
 }
 
 /** Count drawn rows until the requested distance or the edge of the walk. */
@@ -217,7 +207,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!scopeRootId) return
 
         void focusBlock(uiStateBlock, scopeRootId, {
-          renderScopeId: rootRenderScope(repo, scopeRootId, renderScopeId) ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
+          renderScopeId: scopeRootRenderScope(repo, scopeRootId, renderScopeId) ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
         })
       },
       defaultBinding: {
@@ -239,7 +229,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const {block: lastBlock, surface: destination} = await lastDrawnStep(repo.block(surface.scopeRootId), surface)
 
         const renderScopeId = lastBlock.id === destination.scopeRootId
-          ? rootRenderScope(repo, destination.scopeRootId, destination.renderScopeId)
+          ? scopeRootRenderScope(repo, destination.scopeRootId, destination.renderScopeId)
           : destination.renderScopeId
         void focusBlock(uiStateBlock, lastBlock.id, {
           renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, destination.scopeRootId),

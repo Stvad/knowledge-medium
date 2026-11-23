@@ -81,7 +81,8 @@ export const isNestedSurface = (child: DrawnChild): child is NestedSurface => ty
  *  from any parent, and declares its owner through surfaceOwnerFacet. */
 export interface ChildrenView {
   id: string
-  read(ctx: ChildrenViewContext): LoaderHandle<string[]> | LoaderHandle<DrawnChild[]>
+  /** A query handle, or any loader: only its `load` is read. */
+  read(ctx: ChildrenViewContext): Pick<LoaderHandle<readonly DrawnChild[]>, 'load'>
 }
 
 export type ChildrenViewContribution = (ctx: ChildrenViewContext) => OptionalContributionResult<ChildrenView>

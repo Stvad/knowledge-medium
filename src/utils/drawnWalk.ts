@@ -99,6 +99,12 @@ export function outerRenderScopeId(repo: Repo, renderScopeId: string | undefined
   return owner ? outerRenderScopeId(repo, owner.surface.renderScopeId) : renderScopeId
 }
 
+/** A nested scope whose root is its owner draws the root in the enclosing scope. */
+export const scopeRootRenderScope = (repo: Repo, scopeRootId: string, renderScopeId: string | undefined): string | undefined => {
+  const owner = ownerOf(repo, renderScopeId)
+  return owner?.blockId === scopeRootId ? owner.surface.renderScopeId : renderScopeId
+}
+
 async function declarationOf(repo: Repo, renderScopeId: string | undefined) {
   const owner = ownerOf(repo, renderScopeId)
   if (!owner) return null

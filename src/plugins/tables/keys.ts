@@ -16,7 +16,7 @@ import {
   type BlockShortcutDependencies, type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
 import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
-import { nextDrawnStep, previousVisibleBlock } from '@/utils/selection'
+import { nextDrawnStep, previousDrawnStep } from '@/utils/selection'
 import { showInfo } from '@/utils/toast'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
@@ -194,7 +194,7 @@ const atEditorEdge = (view: EditorView, edge: Edge) => {
  *  block downwards, where the walk reaches another row of this grid or the
  *  end. A destination outside the grid stays the outline's. */
 const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge, grid: GridController): Promise<boolean> => {
-  if (edge === 'top' || edge === 'start') return (await previousVisibleBlock(block, surface))?.id === surface.scopeRootId
+  if (edge === 'top' || edge === 'start') return (await previousDrawnStep(block, surface)).block?.id === surface.scopeRootId
   const next = await nextDrawnStep(block, surface)
   return !next.block || (next.surface.renderScopeId === grid.renderScopeId && grid.isRow(next.block.id))
 }

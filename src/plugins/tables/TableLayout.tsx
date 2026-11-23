@@ -30,7 +30,7 @@ import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, u
 import { useTableQuery, type TableQuery } from './query/source'
 import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
 import { notesAmong } from './childrenViews'
-import { registerGrid, tableNotesScopeId, tableRenderScopeId } from './registry'
+import { registerGrid, tableRenderScopeId } from './registry'
 import { useIsMobile } from '@/utils/react'
 import { GUTTER_VARIABLE, MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, gutterWidth } from './rowGutter'
 
@@ -237,7 +237,7 @@ const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the tabl
  * be drawn as a grid row. Each occurrence must be independently focusable. */
 const RowNotes = ({row}: {row: Block}) => {
   const {controller, rows, hasQuery} = useContext(TableContext)!
-  const renderScopeId = hasQuery ? tableNotesScopeId(controller.renderScopeId, row.id) : controller.renderScopeId
+  const renderScopeId = controller.notesScopeId(row.id, hasQuery)
   const ids = notesAmong(useChildIdsForMode(row, 'none'), id => rows.has(id))
   const overrides = useMemo(() => ({renderScopeId}), [renderScopeId])
   return (

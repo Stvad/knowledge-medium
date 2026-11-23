@@ -20,7 +20,7 @@ import { GridController } from '../controller'
 import { turnIntoTable } from '../convert'
 import { tablesDataExtension } from '../dataExtension'
 import { openQueryValue } from '../query/queryValue'
-import { registerGrid, tableNotesScopeId, tableRenderScopeId } from '../registry'
+import { notesInScope, registerGrid, tableNotesScopeId, tableRenderScopeId } from '../registry'
 import { queryProp } from '../schema'
 
 const workspaceId = 'ws-table-children-views'
@@ -113,6 +113,17 @@ describe('a table host’s drawn members', () => {
     expect(await previousDrawnStep(repo.block('after'), surface())).toMatchObject({block: {id: 'outside-1'}, crossed: false})
     expect(await previousDrawnStep(repo.block('outside-0'), surface())).toMatchObject({block: {id: 'row-1'}, surface: {renderScopeId: TABLE}, crossed: true})
   })
+})
+
+it('releases the notes scope when the grid stops drawing query results', () => {
+  const rowId = 'row-0'
+  const scope = tableNotesScopeId(TABLE, rowId)
+  expect(notesInScope(scope)).toBeUndefined()
+
+  controller.setQuery([])
+  expect(notesInScope(scope)).toEqual({grid: controller, rowId})
+  controller.setQuery(null)
+  expect(notesInScope(scope)).toBeUndefined()
 })
 
 it('walks from an unmounted query note through its declared row owner', async () => {

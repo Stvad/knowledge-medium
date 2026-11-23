@@ -33,6 +33,7 @@ import {
   extendSelection,
   selectionBoundaryOf,
   stepInSelectionBoundary,
+  type DrawnLocation,
   nextDrawnStep,
   previousDrawnStep,
   surfaceForFocus,
@@ -271,7 +272,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // Read in `beforeWrite`, so the target is found after the user has
       // answered rather than before — the tree can move while a dialog is
       // open — and while the subtree it skips is still there to skip.
-      const focus: {next: Awaited<ReturnType<typeof locationAfterSubtreeRemoval>>} = {next: null}
+      const focus: {next: DrawnLocation | null} = {next: null}
       const deleted = await deleteBlockThroughUi(block, {
         animate: true,
         beforeWrite: async () => {
