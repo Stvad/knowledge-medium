@@ -43,7 +43,7 @@ async function main() {
         const {restoreHeadlessSession} = await import('./session')
         const session = await restoreHeadlessSession(supabase.auth)
         const {runHost} = await import('./host')
-        await runHost(config, sessionUserToAppUser(session), controller.signal, option === '--release-stale-queue')
+        await runHost(config, sessionUserToAppUser(session), controller.signal, supabase, option === '--release-stale-queue')
       } finally {
         process.off('SIGTERM', terminate)
         process.off('SIGINT', terminate)

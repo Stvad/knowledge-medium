@@ -4,24 +4,28 @@ import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
 import type {User} from '@/types'
 import type {HeadlessConfig} from '../config'
 import {serveDatabase} from '../host'
+import type {HostMediaRemote} from '../media'
 
 type Execute = (command: KnownAgentCommand) => Promise<unknown>
 
 /** Serves `db` with a stand-in bridge. `connect` runs where the host connects
  *  sync; `upload` drives the uploader the host installed (writable configs). */
 export function startHost(db: PowerSyncDatabase, config: HeadlessConfig, user: User, {
-  connect = async () => {}, release = false,
-}: {connect?: () => Promise<void>, release?: boolean} = {}) {
+  connect = async () => {}, release = false, media,
+}: {connect?: () => Promise<void>, release?: boolean, media?: HostMediaRemote} = {}) {
   const stop = new AbortController()
   let connector: PowerSyncBackendConnector | undefined
   let register!: (execute: Execute) => void
   const registered = new Promise<Execute>(resolve => { register = resolve })
-  const run = serveDatabase(db, config, user, stop.signal,
-    async (_db, production) => { connector = production; await connect() },
-    async (_config, _user, execute) => {
+  const run = serveDatabase(db, config, user, stop.signal, {
+    connect: async (_db, production) => { connector = production; await connect() },
+    register: async (_config, _user, execute) => {
       register(execute)
       return {close: async () => {}, postEvent: async () => {}}
-    }, release)
+    },
+    releaseStaleQueue: release,
+    media,
+  })
   const ready = Promise.race([registered, run.then(() => { throw new Error('Host stopped') })])
   const execute = async (command: KnownAgentCommand) => (await ready)(command)
   return {
