@@ -17,6 +17,7 @@ import {
   type AnyResolvedPropertySchema,
   type AnyValuePresetCore,
   type BlockData,
+  type Tx,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { DefinitionBlockProjector } from '@/data/projectorRuntime'
@@ -348,7 +349,7 @@ export class UserSchemasService {
    *  projector rebuilds each definition's behavior object per tick, and the
    *  boundary admits a plain schema only as the object it currently
    *  publishes. */
-  async addSchema(args: AddSchemaArgs): Promise<AnyResolvedPropertySchema> {
+  async addSchema(args: AddSchemaArgs, onCreate?: (tx: Tx, fieldId: string) => Promise<void>): Promise<AnyResolvedPropertySchema> {
     const name = args.name.trim()
     const rejection = propertySchemaNameRejection(name)
     if (rejection) throw new Error(`[addSchema] ${rejection}`)
@@ -471,6 +472,7 @@ export class UserSchemasService {
         await tx.setProperty(id, propertyNameProp, name)
         await tx.setProperty(id, presetIdProp, args.presetId)
         await tx.setProperty(id, presetConfigProp, persistConfig as Record<string, unknown>)
+        await onCreate?.(tx, id)
         assertGeneration('creation')
         assertNameAvailable()
         return id

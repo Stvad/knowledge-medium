@@ -1,3 +1,7 @@
+import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions'
+import {propertyAutocomplete} from './autocomplete'
+import {propertyReferenceWarning} from './referenceWarning'
+import {valueAutocomplete} from './valueAutocomplete'
 /** Property rows in the outline (issue #1674): on a child-backed workspace a
  *  block's property field rows render in place as name/value rows, filtered by
  *  the property display mode (`@/data/propertyDisplayMode`), with commands and
@@ -32,6 +36,9 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   name: 'Property rows',
   description: 'On a workspace whose properties are blocks, show a block\'s properties in the outline as name/value rows, with workspace and per-block display modes.',
 }).of([
+  codeMirrorExtensionsFacet.of(propertyAutocomplete, {source: SOURCE}),
+  codeMirrorExtensionsFacet.of(propertyReferenceWarning, {source: SOURCE}),
+  codeMirrorExtensionsFacet.of(valueAutocomplete, {source: SOURCE}),
   blockLayoutFacet.of(fieldRowLayoutContribution, {source: SOURCE, precedence: -100}),
   blockReadContentDecoratorsFacet.of(propertyReadContentContribution, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),

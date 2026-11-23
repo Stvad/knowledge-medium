@@ -31,7 +31,13 @@ import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.
  *
  *  The `INDEXED BY` is load-bearing, as on `SUBTREE_SQL` (treeQueries.ts):
  *  without it the workspace equality below leads the planner to scan the
- *  workspace index for every covered row.
+ *  workspace index for every covered row. The anchor step's first `CROSS JOIN`
+ *  is load-bearing the same way: it keeps the edge probe on
+ *  `idx_block_references_target`; without it a large graph's stats build an
+ *  automatic index over the edges instead, and without either `CROSS JOIN`
+ *  the planner drives from `root` through an automatic index over every live
+ *  block, walked per covered row (scopeJoinOrder.test.ts). DEFENCE IN DEPTH:
+ *  the second, which keeps `root` from leading; no current plan needs it.
  *
  *  DEFENCE IN DEPTH: the `workspace_id` equalities. Sync applies parent ids
  *  and rewrites `workspace_id` verbatim, so a covered block's child or
@@ -49,14 +55,14 @@ const COVERED_CTE = `
     UNION
     SELECT root.id, root.id, covered.workspace_id, 1
       FROM covered
-      JOIN block_references edge
+      CROSS JOIN block_references edge
         ON edge.target_id = covered.id AND edge.source_field = '${annotationTargetProp.name}'
-      JOIN blocks root ON root.id = edge.source_id
+      CROSS JOIN blocks root ON root.id = edge.source_id
      WHERE root.deleted = 0 AND root.workspace_id = covered.workspace_id
        AND EXISTS (SELECT 1 FROM block_types t WHERE t.block_id = root.id AND t.type = '${THREAD_TYPE}')
   )`
 
-const THREAD_IDS_IN_SCOPE_SQL = `${COVERED_CTE}
+export const THREAD_IDS_IN_SCOPE_SQL = `${COVERED_CTE}
   SELECT covered.id FROM covered
     JOIN blocks root ON root.id = covered.id
    WHERE covered.thread_id = covered.id

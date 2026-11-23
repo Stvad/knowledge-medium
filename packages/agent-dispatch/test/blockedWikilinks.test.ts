@@ -65,6 +65,14 @@ describe('blocked wikilink helpers', () => {
     expect(findBlockedRefInProperties({title: 'unrelated', count: 3}, guard)).toBeNull()
     expect(findBlockedRefInProperties(undefined, guard)).toBeNull()
   })
+
+  it('does not count attribution, which the watcher never reads as a mention', () => {
+    expect(findBlockedRefInProperties({'attribution:creators': ['page-id-123']}, guard)).toBeNull()
+    expect(findBlockedRefInProperties({'attribution:editors': ['page-id-123']}, guard)).toBeNull()
+    expect(findBlockedRefInProperties(
+      {'attribution:creators': ['page-id-123'], 'some:ref': 'page-id-123'}, guard,
+    )).toBe('page-id-123')
+  })
 })
 
 describe('createBlockedWikilinkWriteGuard', () => {
@@ -108,6 +116,63 @@ describe('createBlockedWikilinkWriteGuard', () => {
       id: 'source-block',
       parentId: 'new-parent',
       position: {kind: 'last'},
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('lets the agent move and delete what it wrote, which credits its own page', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      getBlock: async id => id === 'page-id-123'
+        ? {id, content: 'claude', properties: {alias: ['cc']}}
+        : null,
+      sqlAll: async sql => sql.includes('SELECT content, properties_json')
+        ? [{content: 'a review point', properties_json: JSON.stringify({'attribution:creators': ['page-id-123']})}]
+        : [],
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'move_block', id: 'own-comment', parentId: 'new-thread', position: {kind: 'first'},
+    })).resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'delete_block', id: 'own-comment'})).resolves.toBeUndefined()
+  })
+
+  it('lets the agent move what it wrote where credit is stored as property rows under it', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      getBlock: async id => id === 'page-id-123'
+        ? {id, content: 'claude', properties: {alias: ['cc']}}
+        : null,
+      sqlAll: async (sql, params) => {
+        if (sql.includes('LIMIT 1')) return [{content: 'a review point', properties_json: '{}'}]
+        if (params?.[0] === 'own-comment') {
+          return [{id: 'field', content: '::((attribution-def))', properties_json: '{}', is_field_form: 1}]
+        }
+        if (params?.[0] === 'field') return [{id: 'value', content: '((page-id-123))', properties_json: '{}'}]
+        return []
+      },
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'move_block', id: 'own-comment', parentId: 'new-thread', position: {kind: 'first'},
+    })).resolves.toBeUndefined()
+  })
+
+  it('still blocks a mention written under a property value of a moved block', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      getBlock: async id => id === 'page-id-123'
+        ? {id, content: 'claude', properties: {alias: ['cc']}}
+        : null,
+      sqlAll: async (sql, params) => {
+        if (sql.includes('LIMIT 1')) return [{content: 'a review point', properties_json: '{}'}]
+        if (params?.[0] === 'own-comment') {
+          return [{id: 'field', content: '::((some-def))', properties_json: '{}', is_field_form: 1}]
+        }
+        if (params?.[0] === 'field') return [{id: 'value', content: 'a value', properties_json: '{}'}]
+        if (params?.[0] === 'value') return [{id: 'note', content: 'ask [[claude]]', properties_json: '{}'}]
+        return []
+      },
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'move_block', id: 'own-comment', parentId: 'new-thread', position: {kind: 'first'},
     })).rejects.toThrow('references a blocked page')
   })
 

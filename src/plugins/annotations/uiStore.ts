@@ -12,7 +12,7 @@
 
 import {useSyncExternalStore} from 'react'
 import {CallbackSet} from '@/utils/callbackSet'
-import {surfaceRenderScopeId} from '@/utils/renderScope'
+import {surfaceOfRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope'
 import {createKeyedToggleSet} from '@/utils/toggleStore'
 import type {RangeAnchor} from './anchor.ts'
 
@@ -27,6 +27,14 @@ export type CardSurface = 'comments' | 'margin'
  *  definition: a card renders in it, and a navigation focuses into it. */
 export const cardRenderScopeId = (surface: CardSurface, parentRenderScopeId: string, threadId: string): string =>
   surfaceRenderScopeId(surface, parentRenderScopeId, threadId)
+
+const CARD_SURFACES: ReadonlySet<string> = new Set<CardSurface>(['comments', 'margin'])
+
+/** Is `renderScopeId` a card's, one of `cardRenderScopeId`'s? */
+export const isCardRenderScopeId = (renderScopeId: string | undefined): boolean => {
+  const surface = renderScopeId === undefined ? undefined : surfaceOfRenderScopeId(renderScopeId)
+  return surface !== undefined && CARD_SURFACES.has(surface)
+}
 
 /** An edit suggestion being composed. A comment needs no composer: it is
  *  written at once (`startComment`). */
@@ -103,7 +111,7 @@ export const useComposer = (key: string): ComposerState | undefined =>
 /** Panels whose margin is drawn right now: switched on AND wide enough. Their
  *  pills hand threads to the margin instead of expanding them inline. */
 const marginShowing = new Set<string>()
-/** The thread whose card is pinned to its anchor in each panel's margin. */
+/** The thread whose card each panel's margin keeps in view (`placeCards`). */
 const activeThreads = new Map<string, string>()
 const showingClosed = createKeyedToggleSet('annotations-show-closed')
 
@@ -121,6 +129,11 @@ export const activateThread = (panelId: string, threadId: string): void => {
   if (activeThreads.get(panelId) === threadId) return
   activeThreads.set(panelId, threadId)
   listeners.notify()
+}
+
+/** Release the panel's active card back to its row. */
+export const deactivateThread = (panelId: string): void => {
+  if (activeThreads.delete(panelId)) listeners.notify()
 }
 
 export const peekActiveThread = (panelId: string): string | undefined => activeThreads.get(panelId)

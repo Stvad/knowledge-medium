@@ -54,6 +54,15 @@ const tagsProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+const dateProp = seedProperty({
+  seedKey: 'test/property/date',
+  revision: 1,
+  name: 'demo:date',
+  preset: 'date',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 let sharedDb: TestDb
 let repo: Repo
 
@@ -74,6 +83,7 @@ beforeEach(async () => {
     definitionSeedsFacet.of(noteProp, {source: 'test'}),
     definitionSeedsFacet.of(extraProp, {source: 'test'}),
     definitionSeedsFacet.of(tagsProp, {source: 'test'}),
+    definitionSeedsFacet.of(dateProp, {source: 'test'}),
   ], {repo, workspaceId: WS, safeMode: false}))
 })
 
@@ -247,6 +257,23 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // The cell is untouched — this pass ADDS the child representation, it does
     // not move the value; the cell stays the synchronous read surface.
     expect((await repo.load('b1'))?.properties['demo:note']).toBe('hello')
+  })
+
+  it('leaves the owner\'s edit time alone when the projection re-encodes its cell', async () => {
+    // A date-only cell projects back as a full ISO timestamp, so the owner's
+    // cell is rewritten. That rewrite is the pass's, not an edit of the owner.
+    await create('dated', {})
+    await rawCell('dated', {'demo:date': '2020-01-02'})
+    await sharedDb.db.execute('UPDATE blocks SET user_updated_at = 1000 WHERE id = ?', ['dated'])
+    await flip()
+
+    expect((await run()).outcome).toBe('ran')
+
+    expect(await fieldRowsOf('dated')).toHaveLength(1)
+    const owner = await repo.db.get<{properties_json: string; user_updated_at: number}>(
+      'SELECT properties_json, user_updated_at FROM blocks WHERE id = ?', ['dated'])
+    expect(JSON.parse(owner.properties_json)['demo:date']).not.toBe('2020-01-02')
+    expect(owner.user_updated_at).toBe(1000)
   })
 
   it('leaves an unregistered key in the cell rather than inventing a definition', async () => {

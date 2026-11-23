@@ -455,8 +455,9 @@ export const BlockFrame = ({
             <Collapsible
               {...collapsibleProps}
               {...frameProps}
+              data-block-selected={isSelected ? 'true' : undefined}
               open={!isCollapsed || forcesOpen}
-              className={`tm-block${className ? ` ${className}` : ''} group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+              className={`tm-block${className ? ` ${className}` : ''} group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>
               {children}

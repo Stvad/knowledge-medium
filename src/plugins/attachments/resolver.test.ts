@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createAssetResolver, type AssetResolverDeps } from './resolver.js'
-import { NO_REMOTE_BLOB_STORE } from './assetResolver.js'
+import { NO_REMOTE_BLOB_STORE } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
 import type { BlobStore } from './blobStore.js'
 import { encodeBytes } from '@/sync/byteTransform.js'

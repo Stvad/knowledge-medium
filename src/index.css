@@ -396,6 +396,44 @@
     text-decoration-color: hsl(var(--muted-foreground) / 0.78);
   }
 
+  /* Markdown syntax while EDITING. `markdownHighlightStyle` (codemirror.ts)
+     marks each construct with one of these classes instead of CodeMirror's
+     generated ones, so the editor paints from the same tokens as the read
+     view and a theme or extension stylesheet can reach every rule. A
+     `[[wikilink]]` parses as a shortcut-reference link, so `km-md-link` is
+     deliberately left unpainted: it would underline every wikilink in the
+     external-link hue. */
+  .cm-content .km-md-url {
+    color: hsl(var(--link));
+  }
+
+  .cm-content .km-md-heading {
+    font-weight: 700;
+  }
+
+  .cm-content .km-md-emphasis {
+    font-style: italic;
+  }
+
+  .cm-content .km-md-strong {
+    font-weight: 700;
+  }
+
+  .cm-content .km-md-strikethrough {
+    text-decoration-line: line-through;
+  }
+
+  .cm-content .km-md-code {
+    @apply font-mono;
+  }
+
+  /* Marks and apparatus are subordinate to the text they shape, like the
+     list markers inside a rendered block. */
+  .cm-content .km-md-mark,
+  .cm-content .km-md-meta {
+    color: hsl(var(--muted-foreground));
+  }
+
   /* Not a link: its target is missing, so it must not read as one. */
   .blockref.blockref--missing,
   .blockref.blockref--missing:hover {
@@ -411,6 +449,12 @@
 }
 
 @layer components {
+  /* A block of the page that the comment under the pointer links
+     (annotations' `commentLinks.ts` sets the attribute). */
+  [data-comment-linked] {
+    @apply rounded-sm bg-yellow-400/15 ring-2 ring-yellow-500/60;
+  }
+
   /* Active-panel indicator. Marks which panel currently owns
      keystrokes (driven by `activePanelIdProp` on the layout
      session) by fading the inactive panels. The :has() guard
@@ -439,16 +483,17 @@
     word-break: normal;
   }
 
-  /* Soft background fade for selection (multi-select) and keyboard
-     focus. Without this, `bg-accent/80` (toggled on `.tm-block` by
-     `useIsSelected`) and `bg-accent/40` (toggled on the focused block's
-     content row by `BlockFocusShellDecorator`) snap on/off the moment
-     the user moves selection or focus — visually noisy on rapid j/k
-     stepping. The same selectors that receive those classes are the
-     only ones that animate, so unrelated background changes elsewhere
-     in the block aren't affected. */
-  .tm-block,
-  .tm-block > .block-body > div:first-child {
+  /* Layouts with custom highlights paint their own focus and selection targets. */
+  [data-block-focused]:not([data-block-highlight="custom"]) > .block-body > div:first-child {
+    @apply bg-accent/40;
+  }
+
+  .tm-block[data-block-selected]:not([data-block-highlight="custom"]) {
+    @apply bg-accent/80;
+  }
+
+  .tm-block:not([data-block-highlight="custom"]),
+  .tm-block:not([data-block-highlight="custom"]) > .block-body > div:first-child {
     transition: background-color 150ms ease;
   }
 

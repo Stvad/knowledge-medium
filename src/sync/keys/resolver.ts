@@ -108,7 +108,8 @@ export const createSyncResolver = (
     // consume it and strand a plaintext row nothing else re-reads.
     if (pin === 'plaintext') return (await serverSaysE2ee(workspaceId)) ? 'defer' : 'copy'
     if (pin === 'e2ee') {
-      // No key defers: the row stays staged until the gate's unlock drains it.
+      // No readable key defers: the row stays staged until a drain re-reads it,
+      // as the gate's unlock does.
       // Thrown, it would abort the whole observer drain, every workspace's rows
       // with it, since this runs outside the per-row decode try/catch.
       return (await orNullWhenKeyUnavailable(getCek(workspaceId))) ? 'decrypt' : 'defer'

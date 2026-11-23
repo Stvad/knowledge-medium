@@ -3,6 +3,7 @@ import { useRepo } from '@/context/repo.js'
 import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
 import { HOVER_CARD_ATTRIBUTE } from '@/components/ui/hover-card.js'
 import { BLOCK_BULLET_ATTRIBUTE } from '@/extensions/blockInteraction.js'
+import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures.js'
 import {
   createBlockDragController,
   DRAG_ACTIVE_ATTRIBUTE,
@@ -27,10 +28,13 @@ html[${DRAG_ACTIVE_ATTRIBUTE}] [${HOVER_CARD_ATTRIBUTE}] { display: none !import
 
 /** On whenever a drag can start, not only during one: the browser reads
  *  `touch-action` when a touch starts, so a bullet must refuse to pan
- *  before the hold that may pick it up — a touch that starts there never
- *  scrolls the page. Nor does a hold on it select the text beside it. */
+ *  before the hold that may pick it up. Nor does a hold on it select the
+ *  text beside it. Bullets on a surface that reserves its gestures keep
+ *  native panning. */
 const BULLET_STYLES = `
-[${BLOCK_BULLET_ATTRIBUTE}] { touch-action: none; -webkit-user-select: none; user-select: none; }
+[${BLOCK_BULLET_ATTRIBUTE}]:not([${NO_BLOCK_GESTURES_ATTRIBUTE}], [${NO_BLOCK_GESTURES_ATTRIBUTE}] *) {
+  touch-action: none; -webkit-user-select: none; user-select: none;
+}
 `
 
 /** App mount for block drag-and-drop: installs the document-level start

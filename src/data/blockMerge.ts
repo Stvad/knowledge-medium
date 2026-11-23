@@ -150,7 +150,7 @@ export const foldBlocksInTx = async (
       if (perFieldRow === null) continue
       const projected = childContentsToEncodedPropertyValue(
         schema,
-        unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content),
+        unionValuesAcrossFieldRows(schema, perFieldRow),
       )
       // `undefined` = nothing under the rows parses. Leave the merged bag's own
       // answer alone rather than unsetting: §9's unset is PROJECT's call to

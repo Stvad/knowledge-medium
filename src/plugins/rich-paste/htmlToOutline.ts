@@ -14,18 +14,20 @@ export type ClipboardHtmlConversion =
    *  HTML carries nothing it lacks — paste the text as usual. Never chosen
    *  when there is no plain text to paste. */
   | {kind: 'plain'}
-  /** A single line of paragraph text, as inline markdown, for the ordinary
-   *  single-line paste path. A lone heading or list item is an outline: the
-   *  browser only puts the element on the clipboard when the whole block was
-   *  copied (a partial selection arrives as a styled span). */
+  /** A single line ready to insert at the caret, with any inline markdown. */
   | {kind: 'inline'; markdown: string}
   | {kind: 'outline'; blocks: OutlineNode[]}
 
 /** Convert clipboard `text/html` into an outline: one block per heading,
  *  paragraph, list item, table, code block or quote, nested by the shared
  *  paste structuring rules (`outlineFromTokens`), each block's content written
- *  as markdown. `plainText` is the same clipboard's `text/plain`. */
-export const convertClipboardHtml = (html: string, plainText: string): ClipboardHtmlConversion => {
+ *  as markdown. `plainText` is the same clipboard's `text/plain`. At an
+ *  inline insertion point, a standalone heading becomes a text insert. */
+export const convertClipboardHtml = (
+  html: string,
+  plainText: string,
+  placement: 'block' | 'inline' = 'block',
+): ClipboardHtmlConversion => {
   const body = new DOMParser().parseFromString(html, 'text/html').body
   if (hasOutlinerReferences(plainText, body)) return {kind: 'plain'}
   normalizeClipboardDom(body)
@@ -39,18 +41,29 @@ export const convertClipboardHtml = (html: string, plainText: string): Clipboard
   walkFlow(mdast.children, 0, tokens)
   if (tokens.length === 0) return {kind: 'plain'}
   const [only] = tokens
+  if (placement === 'inline' && tokens.length === 1 && only.kind === 'heading') {
+    // Clipboard line breaks around a heading delimit it as a block. Breaks
+    // within its text become spaces so the heading can fit into a sentence.
+    const text = plainText.replace(/^[\r\n]+|[\r\n]+$/g, '').replace(/\r\n?|\n/g, ' ')
+    if (!text.trim()) return {kind: 'inline', markdown: only.content.slice(only.level + 1)}
+    const literal = markdown({type: 'text', value: text.replace(/^[ \t]+|[ \t]+$/g, '')})
+    return {kind: 'inline', markdown: restoreInlineEdgeSpaces(literal, text)}
+  }
   if (tokens.length === 1 && only.kind === 'paragraph' && !only.content.includes('\n')) {
     // The plain text's lines are ones the html failed to mark (CSS-drawn
     // breaks); a one-line insert would run them together.
     if (plainText.trim().includes('\n')) return {kind: 'plain'}
-    // Whitespace minification drops the selection's edge spaces (a
-    // double-clicked word's trailing one); restore them from the plain text
-    // so a caret paste doesn't glue words together.
-    const lead = /^[ \t]*/.exec(plainText)?.[0] ?? ''
-    const trail = /[ \t]*$/.exec(plainText)?.[0] ?? ''
-    return {kind: 'inline', markdown: `${lead}${only.content}${trail}`}
+    return {kind: 'inline', markdown: restoreInlineEdgeSpaces(only.content, plainText)}
   }
   return {kind: 'outline', blocks: outlineFromTokens(tokens)}
+}
+
+/** Keep the selection's edge spaces, such as a double-clicked word's
+ *  trailing space, so a caret paste doesn't glue words together. */
+const restoreInlineEdgeSpaces = (markdown: string, plainText: string): string => {
+  const lead = /^[ \t]*/.exec(plainText)?.[0] ?? ''
+  const trail = /[ \t]*$/.exec(plainText)?.[0] ?? ''
+  return `${lead}${markdown}${trail}`
 }
 
 /** Roam's 9-character block uids, which this app's own grammar (UUIDs) doesn't read. */
@@ -166,11 +179,6 @@ const MARKDOWN_OPTIONS: ToMarkdownOptions = {
   // break — the same thing Shift+Enter types — where markdown's `\` hard
   // break would show its backslash in the editor.
   handlers: {break: () => '\n'},
-  // The serializer spells the character beside emphasis or strikethrough as
-  // a reference when it must (the `A` of `A**!**`), but only after escaping
-  // the text, so a backslash before it would escape the `&` instead (an
-  // upstream bug). The class is every attention marker it writes.
-  unsafe: [{character: '\\', after: '.[*_~]', unicode: true}],
 }
 
 const markdown = (node: Nodes): string =>

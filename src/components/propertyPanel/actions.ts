@@ -1,3 +1,4 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 import {
   ChangeScope,
   type AnyPropertyEditorOverride,
@@ -45,23 +46,12 @@ export const addProperty = async (
     return undefined
   }
 
-  if (args.adopted) {
-    return args.adopted
-  }
-
-  // Existing registered schema with the same name → adopt it instead
-  // of creating a duplicate (the form should have offered it as a
-  // suggestion; this is the fallback for non-autocomplete submits).
-  const existing = schemas.get(name)
-  if (existing) {
-    return existing
-  }
-
   try {
-    return await block.repo.userSchemas.addSchema({
+    return (await adoptOrCreatePropertySchema(block.repo, {
+      ...args,
+      adopted: args.adopted ?? schemas.get(name),
       name,
-      presetId: args.presetId,
-    })
+    })).schema
   } catch (err) {
     console.error(`[addProperty] failed to register schema for "${name}":`, err)
     return undefined

@@ -1,21 +1,24 @@
 /** A property field arranges ordinary block content and children in columns. */
-import type { BlockLayout, BlockLayoutContribution } from '@/extensions/blockInteraction'
+import {useFocusWithin} from '@/hooks/focusedChild'
+import {useBlockContext} from '@/context/block'
+import type { BlockLayout, BlockLayoutContribution, BlockLayoutSlots } from '@/extensions/blockInteraction'
 import { BlockFrame, DefaultBlockLayout } from '@/components/renderer/DefaultBlockRenderer'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { useHandle, usePropertyDisplayMode, usePropertyValue } from '@/hooks/block'
 import { useContext } from 'react'
 import { isCollapsedProp } from '@/data/properties'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
-import { drawsPropertyRows, useFieldRowDefinition, useIsChildOf } from './fieldRow'
+import { drawsPropertyRows, useFieldRowDefinition, useIsChildOf, type FieldRowDefinition } from './fieldRow'
 import './FieldRowRenderer.css'
 
-const PropertyFieldLayout: BlockLayout = ({
+const PropertyFieldLayout = ({
   block,
   Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
-  Shell,
-}) => {
+  Shell, definition,
+}: BlockLayoutSlots & {definition: FieldRowDefinition}) => {
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const focused = useFocusWithin(block, useBlockContext().renderScopeId) === true
   const mode = usePropertyDisplayMode(block)
   const soleChildId = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
     selector: children => children?.length === 1 ? children[0] : null,
@@ -33,17 +36,18 @@ const PropertyFieldLayout: BlockLayout = ({
       className="tm-property-field-row"
       frameProps={{
         'data-property-field-row': 'true',
+        'data-block-highlight': 'custom',
         // Keep the control on collapsed rows so keyboard users can reopen them.
-        'data-expanded-single-leaf': String(!isCollapsed && soleChildIsLeaf),
+        'data-expanded-single-leaf': String((!isCollapsed || focused) && soleChildIsLeaf),
       }}
     >
       <div className="block-body relative min-w-0 flex-grow">
         <div data-property-row-layout="true" className="grid min-w-0 grid-cols-[minmax(6rem,11rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent hover:border-border/50">
-          <div className="min-w-0" data-property-name-cell="true">
+          <div className="min-w-0 rounded-sm" data-property-name-cell="true">
             <Content/>
           </div>
-          <CollapsibleContent className="min-w-0" data-property-value-cell="true">
-            <PropertyFieldRowContext value={block.id}>
+          <CollapsibleContent forceMount={focused || undefined} hidden={isCollapsed && !focused} className="min-w-0" data-property-value-cell="true">
+            <PropertyFieldRowContext value={{id: block.id, schema: definition.schema}}>
               <Children/>
             </PropertyFieldRowContext>
           </CollapsibleContent>
@@ -59,9 +63,9 @@ const PropertyFieldLayout: BlockLayout = ({
 const FieldRowLayout: BlockLayout = props => {
   const definition = useFieldRowDefinition(props.block)
   const isListed = useIsChildOf(props.block, useContext(PropertyRowListingContext))
-  const Layout = isListed && definition
-    ? PropertyFieldLayout : DefaultBlockLayout
-  return <Layout {...props}/>
+  return isListed && definition
+    ? <PropertyFieldLayout {...props} definition={definition}/>
+    : <DefaultBlockLayout {...props}/>
 }
 
 export const fieldRowLayoutContribution: BlockLayoutContribution = context =>

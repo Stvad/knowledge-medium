@@ -8,12 +8,7 @@
  * the absent ones to the resolver's backlog lane. The WHOLE pass — the lock name,
  * the one-shot OPFS presence enumeration, AND the resolver's own materializability /
  * keys / byte-store reads — is bound to the ONE user read at the boundary
- * (`repo.user.id`) via {@link getAssetResolverForUser}, like the up-lane's
- * per-user session binding (assetUpload.ts's `laneKeyDeps`/`captureDepsFor`): a
- * pass that's still in flight when the active account switches must keep resolving
- * against the user it started for, not silently start mixing scope with whoever
- * is active NOW (review #424 P2 — a stale `present` entry could otherwise read as
- * "already there" for the new user's absent asset and skip storing it).
+ * (`repo.user.id`). The up-lane and down-lane share this user's cached lanes.
  *
  * Durable storage (§8 "so the byte store isn't best-effort evicted") is NOT requested
  * here: `navigator.storage.persist()` is origin-wide and already requested once at boot
@@ -91,8 +86,7 @@ export const runDownLaneReconcile = async (repo: Repo, workspaceId: string): Pro
     } catch (err) {
       console.warn(`[media] down-lane presence scan failed for ${workspaceId}; probing per-block`, err)
     }
-    // Bound to `userId`, NOT `getAssetResolver()`'s ambient singleton — see the
-    // file header + assetResolver.ts's `getAssetResolverForUser` doc (review #424 P2).
+    // The presence set and resolver must use the same account.
     await reconcileDownLane(requests, { resolver: getAssetResolverForUser(userId), present })
   })
 }

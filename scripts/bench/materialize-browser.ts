@@ -7,17 +7,28 @@ import {staticDataExtensions} from '@/extensions/staticDataExtensions'
 import {IndexedDbWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {createSyncResolver} from '@/sync/keys/resolver'
 import {makeMaterializeFixture, MATERIALIZE_USER_ID, MATERIALIZE_WORKSPACE_ID} from './materialize-fixture'
+import {runVariantSamples, validateVariantOptions, variantInfoOf, type VariantOptions} from './materialize-variants'
+import type {MaterializeMode} from './materialize-benchmark-core'
 import type {PowerSyncDb} from '@/data/internals/commitPipeline'
 
-export async function openBrowserTestDb() {
+export type BrowserVfs = 'coop-sync' | 'write-ahead'
+
+/** Mirrors production: the write-ahead VFS opens one writer plus ADDITIONAL_READERS (1) reader
+ *  connections and the total page cache is split across them (src/data/repoProvider.ts). */
+const READERS_WRITE_AHEAD = 1
+
+export async function openBrowserTestDb(vfs: BrowserVfs = 'coop-sync', totalCacheKb = 262144) {
+  const writeAhead = vfs === 'write-ahead'
+  const connections = writeAhead ? 1 + READERS_WRITE_AHEAD : 1
   const schema = new Schema({})
   schema.withRawTables({blocks_synced: blockSchema.BLOCKS_SYNCED_RAW_TABLE})
   const db = new PowerSyncDatabase({
     schema,
     database: {
       dbFilename: 'synthetic-materialize-benchmark.db',
-      vfs: WASQLiteVFS.OPFSCoopSyncVFS,
-      cacheSizeKb: 262144,
+      vfs: writeAhead ? WASQLiteVFS.OPFSWriteAheadVFS : WASQLiteVFS.OPFSCoopSyncVFS,
+      ...(writeAhead ? {additionalReaders: READERS_WRITE_AHEAD} : {}),
+      cacheSizeKb: Math.floor(totalCacheKb / connections),
       enableMultiTabs: false,
     },
   })
@@ -45,7 +56,25 @@ export async function openBrowserTestDb() {
   return db
 }
 
-export async function runBrowserMaterializeBench(count = 1000, repetitions = 3) {
+export type BrowserBenchOptions = Partial<VariantOptions> & {records?: number; reps?: number; vfs?: BrowserVfs}
+
+export async function runBrowserMaterializeBench(
+  countOrOptions: number | BrowserBenchOptions = 1000, repetitions = 3,
+) {
+  const o: BrowserBenchOptions = typeof countOrOptions === 'number'
+    ? {records: countOrOptions, reps: repetitions} : countOrOptions
+  const count = o.records ?? 1000
+  const reps = o.reps ?? 3
+  const vfs = o.vfs ?? 'coop-sync'
+  const options: VariantOptions = {
+    window: o.window ?? 1000,
+    modes: o.modes ?? ['none', 'e2ee'],
+    scenarios: o.scenarios ?? ['initial', 'echo-repass'],
+    dropTriggers: o.dropTriggers ?? [], dropIndexes: o.dropIndexes ?? false,
+    rebuildDerived: o.rebuildDerived ?? false, randomIds: o.randomIds ?? false, cacheKb: o.cacheKb,
+    bulkLoad: o.bulkLoad ?? false, perRowFts: o.perRowFts ?? false,
+  }
+  validateVariantOptions({...options, records: count, reps})
   console.info('loading benchmark core')
   const core = await import('./materialize-benchmark-core')
   console.info('creating synthetic keys')
@@ -55,38 +84,41 @@ export async function runBrowserMaterializeBench(count = 1000, repetitions = 3) 
   await store.put(MATERIALIZE_USER_ID, MATERIALIZE_WORKSPACE_ID, {wk: key, contentKeyHmac})
   console.info('synthetic keys stored; opening SQLite')
   const resolver = createSyncResolver(() => MATERIALIZE_USER_ID, store, async () => 'e2ee')
-  const fixture = makeMaterializeFixture(count)
-  const db = await openBrowserTestDb()
+  const fixture = makeMaterializeFixture(count, {randomIds: options.randomIds})
+  const db = await openBrowserTestDb(vfs, options.cacheKb)
   const testDb = db as unknown as PowerSyncDb
   console.info('SQLite ready')
-  const samples = []
+  const samples: Record<string, unknown>[] = []
   try {
-    for (const mode of ['none', 'e2ee'] as const) {
-      const rows = await core.makeMaterializeWireRows(fixture, mode, key)
-      for (const scenario of ['initial', 'echo-repass'] as const) {
-        for (let repetition = -1; repetition < repetitions; repetition++) {
-          await db.writeTransaction(async tx => {
-            await tx.execute('DELETE FROM blocks')
-            await tx.execute('DELETE FROM blocks_synced')
-            await tx.execute('DELETE FROM blocks_synced_changes')
-            await tx.execute('DELETE FROM row_events')
-          })
-          await core.stageMaterializeRows(testDb, fixture, rows)
-          if (scenario === 'echo-repass') {
-            await core.runMaterializePass(testDb, fixture, mode, key)
-            await core.resetMaterializeNeedsApply(testDb)
-          }
-          const result = await core.runMaterializePass(testDb, fixture, mode, key, {getCek: resolver.getCek})
-          const validation = await core.validateMaterializeDb(testDb, fixture)
-          if (repetition >= 0) {
-            const sample = {mode, scenario, repetition, ...result, metrics: {...result.metrics, sql: [...result.metrics.sql]}, validation}
-            samples.push(sample)
-            console.info('sample', JSON.stringify({mode, scenario, repetition, wallMs: result.wallMs, phase1Ms: result.metrics.phase1ElapsedMs, txMs: result.metrics.txElapsedMs, keyCalls: result.metrics.keyCalls, keyMs: result.metrics.keyElapsedMs, sql: result.metrics.calls, validation}))
-          }
-        }
-      }
+    const prepared = new Map<MaterializeMode, Awaited<ReturnType<typeof core.makeMaterializeWireRows>>>()
+    for (const mode of options.modes) prepared.set(mode, await core.makeMaterializeWireRows(fixture, mode, key))
+    await runVariantSamples({
+      db: testDb, fixture, key, prepared, options, getCek: resolver.getCek,
+      connections: vfs === 'write-ahead' ? 2 : 1,
+      resetDb: () => db.writeTransaction(async tx => {
+        await tx.execute('DELETE FROM blocks')
+        await tx.execute('DELETE FROM blocks_synced')
+        await tx.execute('DELETE FROM blocks_synced_changes')
+        await tx.execute('DELETE FROM row_events')
+        // Not left to the delete triggers: a variant may have dropped them.
+        const derived = ['block_aliases', 'block_references', 'block_types', 'blocks_fts', 'blocks_fts_rowids', 'blocks_fts_owed']
+        const present = await tx.getAll<{name: string}>(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${derived.map(() => '?').join(', ')})`, derived,
+        )
+        for (const {name} of present) await tx.execute(`DELETE FROM ${name}`)
+      }),
+      onSample: ({mode, scenario, sample, result, validation, extra}) => {
+        if (sample < 0) return
+        const record = {mode, scenario, repetition: sample, ...result, metrics: {...result.metrics, sql: [...result.metrics.sql]}, validation, extra}
+        samples.push(record)
+        console.info('sample', JSON.stringify({mode, scenario, repetition: sample, wallMs: result.wallMs, phase1Ms: result.metrics.phase1ElapsedMs, deferredIndexMs: result.metrics.deferredIndexMs, txMs: result.metrics.txElapsedMs, keyCalls: result.metrics.keyCalls, keyMs: result.metrics.keyElapsedMs, sql: result.metrics.calls, validation, extra}))
+      },
+    }, reps)
+    return {
+      count, repetitions: reps, userAgent: navigator.userAgent,
+      vfs: vfs === 'write-ahead' ? 'OPFSWriteAheadVFS' : 'OPFSCoopSyncVFS',
+      window: options.window, variant: variantInfoOf(options), samples,
     }
-    return {count, repetitions, userAgent: navigator.userAgent, vfs: 'OPFSCoopSyncVFS', samples}
   } finally {
     await store.delete(MATERIALIZE_USER_ID, MATERIALIZE_WORKSPACE_ID)
     await db.close()

@@ -7,7 +7,7 @@ import { history, historyKeymap, insertNewline } from '@codemirror/commands'
 import { useRepo } from '@/context/repo.js'
 import type { Repo } from '@/data/repo.js'
 import type { FacetRuntime } from '@/facets/facet.js'
-import { readClipboardContent, type ClipboardContent } from '@/paste/clipboard.js'
+import { readClipboardContent, readPasteCaret, type ClipboardContent } from '@/paste/clipboard.js'
 import {
   pasteChordIntent,
   planSingleBlockPaste,
@@ -44,13 +44,11 @@ const pasteIntoDraft = async (
   intent: PasteChordIntent,
   {runtime, repo}: {runtime: FacetRuntime; repo: Repo},
 ): Promise<void> => {
-  const {from, to} = view.state.selection.main
-  const {doc} = view.state
   const resolved = await resolvePasteWithMediaCapture(runtime, {
     ...content,
     intent,
     surface: 'editor',
-    caret: {line: doc.lineAt(from).number, lineCount: doc.lines, from, to},
+    caret: readPasteCaret(view.state),
   }, {repo, workspaceId: repo.activeWorkspaceId ?? ''})
   // The capture awaits; the composer may have closed meanwhile.
   if (!resolved || !view.dom.isConnected) return

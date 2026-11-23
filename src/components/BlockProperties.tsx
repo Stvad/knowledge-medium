@@ -1,3 +1,4 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 /**
  * Property panel shell. The lookup chain/model lives in
  * `propertyPanel/model.ts`; row actions live in `propertyPanel/actions.ts`;
@@ -18,12 +19,11 @@ import { useTypes } from '@/hooks/typeRegistry.js'
 import { propertyEditorOverridesFacet } from '../data/facets.ts'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import {
-  editorSelection,
   requestEditorFocus,
   focusBlock,
 } from '@/data/properties.js'
 import { Button } from './ui/button'
-import { nextVisibleBlock } from '@/utils/selection.js'
+import { nextDrawnStep } from '@/utils/selection.js'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
@@ -152,36 +152,25 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const focusBlockEditor = async (
     target: Block,
     selection: { start?: number; line?: 'first' | 'last'; x?: number },
+    targetRenderScopeId: string | undefined,
   ) => {
-    await uiStateBlock.set(editorSelection, {
-      blockId: target.id,
-      ...selection,
-    })
-    // Keep focus in the current render scope. In a nested surface
-    // (backlink/embed) the navigation target (next visible block, etc.)
-    // is resolved within that surface's scope, so focusing without the
-    // scope id would fall back to the panel-outline copy and the editor
-    // would appear not to move.
-    await focusBlock(uiStateBlock, target.id, {
-      edit: true,
-      ...(typeof renderScopeId === 'string' ? {renderScopeId} : {}),
-    })
+    await focusBlock(uiStateBlock, target.id, {edit: true, selection, renderScopeId: targetRenderScopeId})
     requestEditorFocus(uiStateBlock)
   }
 
   const focusThisBlockContentEnd = async () => {
     const data = block.peek() ?? await block.load()
-    await focusBlockEditor(block, {start: data?.content.length ?? 0})
+    await focusBlockEditor(block, {start: data?.content.length ?? 0}, renderScopeId)
   }
 
   const focusAfterProperties = async () => {
-    const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay})
+    const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay, renderScopeId})
     if (!surface) return
 
-    const next = await nextVisibleBlock(block, surface)
+    const {block: next, surface: destination} = await nextDrawnStep(block, surface)
     if (!next) return
     await next.load()
-    await focusBlockEditor(next, {start: 0})
+    await focusBlockEditor(next, {start: 0}, destination.renderScopeId)
   }
 
   const handlePropertyRowKeyDown = (
@@ -194,7 +183,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     event.stopPropagation()
 
     const row = event.currentTarget
-    if (focusAdjacentPropertyRow(block.id, row, direction)) return
+    if (focusAdjacentPropertyRow(block.id, row, direction, renderScopeId)) return
 
     if (direction < 0) {
       void focusThisBlockContentEnd()
@@ -318,23 +307,14 @@ export function BlockProperties({block}: BlockPropertiesProps) {
               openSchemaPanel(existingId)
               return schemas.get(trimmed)
             }
-            // If a kernel/plugin schema already owns this name, adopt
-            // it instead of creating a shadowing user schema. A synthesized
-            // seed may not have materialized its definition row yet, so there
-            // is no panel to open; the form can still adopt its behavior.
-            const kernelSchema = schemas.get(trimmed)
-            if (kernelSchema) return kernelSchema
             try {
-              const schema = await block.repo.userSchemas.addSchema({
-                name: trimmed,
-                presetId,
-              })
+              const result = await adoptOrCreatePropertySchema(block.repo, {name: trimmed, presetId})
               const newId = block.repo.userSchemas.getSchemaBlockId(trimmed)
-              if (newId) {
+              if (result.kind === 'created' && newId) {
                 flashRecent(trimmed)
                 openSchemaPanel(newId)
               }
-              return schema
+              return result.schema
             } catch (err) {
               console.error(`[BlockProperties] failed to register schema for "${trimmed}":`, err)
               return undefined

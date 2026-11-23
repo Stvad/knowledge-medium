@@ -3,6 +3,7 @@ import { isEqual } from 'lodash-es'
 import {
   defineQuery,
   backlinksFilterSchema,
+  predicateHasConstraints,
   type BlockPredicate,
   type Query,
   type Schema,
@@ -30,17 +31,10 @@ const stringArraySchema: Schema<string[]> = {
   parse: (input) => input as string[],
 }
 
-const isPredicateMeaningful = (p: BlockPredicate): boolean => {
-  const hasWhere = p.where !== undefined && Object.keys(p.where).length > 0
-  const hasRef = p.referencedBy !== undefined
-  const hasId = p.id !== undefined
-  return hasWhere || hasRef || hasId
-}
-
 const stripEmpty = (
   predicates: readonly BlockPredicate[] | undefined,
 ): BlockPredicate[] =>
-  (predicates ?? []).filter(isPredicateMeaningful)
+  (predicates ?? []).filter(predicateHasConstraints)
 
 export const normalizeBacklinksFilter = (
   filter: BacklinksFilter | undefined,
@@ -100,7 +94,8 @@ export const backlinksForBlockQuery: Query<
     workspaceId: z.string(),
     id: z.string(),
     filter: backlinksFilterSchema.optional(),
-    // Default (false): exclude edges another surface owns (`edgeExclusions.ts`).
+    // Default (false): exclude edges another surface owns (`edgeExclusions.ts`)
+    // and canonical property-value copies already represented by their owner.
     // `true` returns EVERY source in `block_references`, for inspection / debugging.
     // Reference maintenance never goes through this query — it reads
     // `block_references` directly.

@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const grabSoftKeyboard = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/softKeyboardGrab.js', () => ({ grabSoftKeyboard }))
 import { waitFor } from '@testing-library/react'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import {
   ChangeScope,
@@ -13,6 +16,7 @@ import {
   type User,
 } from '@/data/api'
 import { sameTxProcessorsFacet } from '@/data/facets'
+import { childrenViewFacet } from '@/data/childrenView'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
@@ -96,14 +100,15 @@ const codeMirrorEditorView = (
   content: string,
   cursor: number,
 ): EditorView => {
-  let text = content
+  let doc = Text.of(content.split('\n'))
   let selection = makeSelection(cursor)
 
   const view = {
     dom: document.createElement('div'),
     dispatch: vi.fn((spec: FakeEditorDispatchSpec) => {
       if (spec.changes) {
-        text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
+        const {from, to, insert} = spec.changes
+        doc = doc.replace(from, to, Text.of(insert.split('\n')))
       }
 
       const nextSelection = spec.selection
@@ -123,11 +128,7 @@ const codeMirrorEditorView = (
   Object.defineProperty(view, 'state', {
     get: () => ({
       selection,
-      doc: {
-        length: text.length,
-        toString: () => text,
-        sliceString: (from: number, to = text.length) => text.slice(from, to),
-      },
+      doc,
     }),
   })
 
@@ -523,6 +524,28 @@ describe('default CodeMirror shortcuts', () => {
     const action = findGlobalAction(env.repo, RELOAD_IN_SAFE_MODE_ACTION_ID)
 
     expect(action.description).toBe('Reload in safe mode')
+  })
+
+  it('grabs the soft keyboard inside the gesture, before any await, unless the workspace is read-only', async () => {
+    // The assertion is made synchronously after the call: the grab must run
+    // before the handler's first await, or it is outside the tap's gesture.
+    grabSoftKeyboard.mockClear()
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const action = findGlobalAction(env.repo, CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID)
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    const run = action.handler({uiStateBlock: rootUiState}, trigger)
+    expect(grabSoftKeyboard).toHaveBeenCalledOnce()
+    await run
+
+    grabSoftKeyboard.mockClear()
+    env.repo.setReadOnly(true)
+    try {
+      await action.handler({uiStateBlock: rootUiState}, trigger)
+      expect(grabSoftKeyboard).not.toHaveBeenCalled()
+    } finally {
+      env.repo.setReadOnly(false)
+    }
   })
 
   it('creates a new editable child in the active panel from the global action', async () => {
@@ -1715,6 +1738,80 @@ describe('default CodeMirror shortcuts', () => {
       blockId: 'current',
       start: 0,
     })
+  })
+
+  it.each(['anchor moves', 'caret moves', 'editor text changes'] as const)('keeps the editor whole if the %s while a split resolves', async change => {
+    const {repo} = env
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'other', workspaceId: WS, parentId: 'root', orderKey: 'a1'})
+      await tx.create({id: 'source', workspaceId: WS, parentId: 'root', orderKey: 'a2', content: 'left right'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    let announce!: () => void
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { announce = resolve })
+    const resolveInsert = new Promise<void>(resolve => { release = resolve })
+    repo.setRuntimeContributions(childrenViewFacet, 'test.delayed-insert', [({parent}) => parent.id === 'root' && {
+      id: 'test.delayed-insert',
+      read: () => ({load: async () => ['other', 'source']}),
+      insert: async () => {
+        announce()
+        await resolveInsert
+        return undefined
+      },
+    }])
+    const uiStateBlock = repo.block('ui')
+    await focusBlock(uiStateBlock, 'source')
+    const view = codeMirrorEditorView('left right', 5)
+    const action = findEditModeAction(repo, 'split_block_cm')
+    const pending = action.handler({block: repo.block('source'), editorView: view, uiStateBlock, scopeRootId: 'root'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger)
+    await ready
+    if (change === 'anchor moves') await repo.mutate.move({id: 'source', parentId: 'other', position: {kind: 'first'}})
+    if (change === 'caret moves') view.dispatch({selection: {anchor: 7}})
+    if (change === 'editor text changes') view.dispatch({changes: {from: 10, to: 10, insert: '!'}})
+    release()
+    await pending
+
+    expect(view.state.doc.toString()).toBe(change === 'editor text changes' ? 'left right!' : 'left right')
+    expect(view.state.selection.main.head).toBe(change === 'caret moves' ? 7 : 5)
+    expect(await childIds('root')).toEqual(change === 'anchor moves' ? ['other'] : ['other', 'source'])
+    expect(await childIds('other')).toEqual(change === 'anchor moves' ? ['source'] : [])
+  })
+
+  it.each([
+    {gesture: 'Enter at the end', content: 'a'},
+    {gesture: 'empty Enter', content: ''},
+  ])('creates a sibling when typing follows $gesture before its write', async ({content}) => {
+    const {repo} = env
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'source', workspaceId: WS, parentId: 'root', orderKey: 'a0', content})
+      await tx.create({id: 'next', workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'next'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const uiStateBlock = repo.block('ui')
+    const editorView = new EditorView({doc: content, selection: {anchor: content.length}})
+    try {
+      const pending = findEditModeAction(repo, 'split_block_cm').handler({
+        block: repo.block('source'), editorView, uiStateBlock, scopeRootId: 'root',
+      }, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      editorView.dispatch({changes: {from: content.length, insert: 'x'}, selection: {anchor: content.length + 1}})
+      await pending
+
+      const children = await childIds('root')
+      const insertedId = children[1]
+      expect(children).toEqual(['source', insertedId, 'next'])
+      expect(await repo.load(insertedId)).toMatchObject({parentId: 'root', content: ''})
+      expect((await repo.load('source'))?.content).toBe(content)
+      expect(editorView.state.doc.toString()).toBe(content + 'x')
+      expect(editorView.state.selection.main.head).toBe(content.length + 1)
+      expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe(insertedId)
+    } finally {
+      editorView.destroy()
+    }
   })
 
   // Scope-root behaviour: when the focused block is the root of the

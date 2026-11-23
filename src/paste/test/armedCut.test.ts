@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { armCut, disarmCut, getArmedCut, matchArmedCut, subscribeArmedCut } from '../armedCut'
+import { armCut, disarmCut, getArmedCut, markCutPasted, matchArmedCut, subscribeArmedCut } from '../armedCut'
 
 const cut = {workspaceId: 'ws-1', rootIds: ['a', 'b']}
 
@@ -33,10 +33,13 @@ describe('armed cut', () => {
   })
 
   it('a later cut replaces the earlier one', async () => {
-    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a']})
-    await armCut('- b', {workspaceId: 'ws-1', rootIds: ['b']})
+    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], foreignRootId: 'first-result'})
+    markCutPasted(getArmedCut()!.cutId)
+    await armCut('- b', {workspaceId: 'ws-1', rootIds: ['b'], foreignRootId: 'second-result'})
     expect((await matchArmedCut('- a', 'ws-1'))?.kind).toBe('mismatch')
-    expect(await matchArmedCut('- b', 'ws-1')).toMatchObject({kind: 'match', cut: {rootIds: ['b']}})
+    expect(await matchArmedCut('- b', 'ws-1')).toMatchObject({
+      kind: 'match', cut: {rootIds: ['b'], foreignRootId: 'second-result', pasted: false},
+    })
   })
 
   it('disarming by id leaves a newer cut armed', async () => {
@@ -62,6 +65,7 @@ describe('armed cut', () => {
 })
 
 describe('armed cut across tabs (shared localStorage)', () => {
+  const storageKey = 'knowledge-medium:armed-cut'
   const store = new Map<string, string>()
   beforeEach(() => {
     store.clear()
@@ -73,18 +77,26 @@ describe('armed cut across tabs (shared localStorage)', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  it('a cut armed by another tab is visible here', async () => {
-    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a']})
-    const written = [...store.entries()]
+  it.each([undefined, 'result'])('a cut armed by another tab retains its boundary (%s)', async foreignRootId => {
+    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], foreignRootId})
+    const written = store.get(storageKey)!
+    expect(JSON.parse(written).foreignRootId).toBe(foreignRootId)
     disarmCut()
-    // Another tab arming = another writer putting the same record in storage.
-    for (const [key, value] of written) store.set(key, value)
-    expect((await matchArmedCut('- a', 'ws-1'))?.kind).toBe('match')
+    store.set(storageKey, written)
+    const match = await matchArmedCut('- a', 'ws-1')
+    expect(match?.kind).toBe('match')
+    expect(match?.cut.foreignRootId).toBe(foreignRootId)
+
+    markCutPasted(match!.cut.cutId)
+    const pasted = JSON.parse(store.get(storageKey)!)
+    expect(pasted.pasted).toBe(true)
+    expect(pasted.foreignRootId).toBe(foreignRootId)
+    expect(getArmedCut()?.foreignRootId).toBe(foreignRootId)
   })
 
   it('keeps the cut in memory when storage reads work but writes fail', async () => {
     // A full quota: reads still return whatever was stored before.
-    store.set('knowledge-medium:armed-cut', 'stale')
+    store.set(storageKey, 'stale')
     vi.stubGlobal('localStorage', {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: () => { throw new Error('QuotaExceededError') },
@@ -95,6 +107,12 @@ describe('armed cut across tabs (shared localStorage)', () => {
 
     expect((await matchArmedCut('- a', 'ws-1'))?.kind).toBe('match')
     expect(getArmedCut()?.rootIds).toEqual(['a'])
+  })
+
+  it.each([['an empty', ''], ['a non-string', 7]])('refuses a cut with %s result boundary', async (_, foreignRootId) => {
+    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], foreignRootId: 'result'})
+    for (const [key, raw] of store) store.set(key, JSON.stringify({...JSON.parse(raw), foreignRootId}))
+    expect(await matchArmedCut('- a', 'ws-1')).toBeNull()
   })
 
   it('ignores a malformed record rather than acting on it', async () => {

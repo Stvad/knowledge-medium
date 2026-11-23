@@ -20,9 +20,7 @@
  *   - `compileTypedBlockQuery` with each projection (`rows` / `ids` /
  *     `count`), executed directly;
  *   - the Repo resolvers (`repo.query.typedBlocks` / `typedBlockIds` /
- *     `typedBlockCount`), which add the single-type fast path
- *     (`SELECT_BLOCKS_BY_TYPE_SQL`), normalization, and the ancestor-dep
- *     walk (`declareAncestorDeps`) that runs its own SQL before the query.
+ *     `typedBlockCount`), which add normalization and ancestor dependency discovery.
  * Ordering is compared exactly (the spec defines `created_at` then `id`);
  * `count` against the model's cardinality.
  *
@@ -852,7 +850,7 @@ const runAllPaths = async (
   query: ResolvedTypedBlockQuery,
 ): Promise<Record<string, Outcome>> => {
   const direct = (projection: TypedBlockQueryProjection) => async () => {
-    const compiled = compileTypedBlockQuery(query, repo.propertySchemas, {projection})
+    const compiled = compileTypedBlockQuery(query, {properties: repo.propertySchemas}, {projection})
     if (projection === 'count') {
       const row = await sharedDb.db.get<{count: number}>(compiled.sql, [...compiled.params])
       return row.count

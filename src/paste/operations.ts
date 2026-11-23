@@ -3,9 +3,9 @@ import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
 import { decodeRowProperty } from '@/data/rowProperty'
-import { deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget } from '@/data/mutators'
-import { displayScopeOf, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
-import { visibleChildrenOf } from '@/data/visibleChildren'
+import { captureOccurrenceEdge, deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget, type OccurrenceEdge } from '@/data/mutators'
+import { listingSurfaceOf, type ListingSurface } from '@/data/childrenView'
+import { drawnChildrenOf, visibleChildrenOf } from '@/data/visibleChildren'
 import { pluralize } from '@/utils/pluralize.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
@@ -18,6 +18,7 @@ import {
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
+import { nestedWriteLocation } from '@/utils/drawnWalk'
 import { captureMediaVerb } from './captureMediaVerb.js'
 import { isBlankContent, shellPasteRequest } from './clipboard.js'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
@@ -25,16 +26,8 @@ import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './deci
 type PastePosition = 'before' | 'after'
 type PastePlacement = 'visible' | 'sibling'
 
-interface PasteOptions {
+interface PasteOptions extends Partial<ListingSurface> {
   position?: PastePosition
-  /** Root of the surface's visible subtree (see
-   *  `BlockContextType.scopeRootId`). Paste uses this to avoid creating
-   *  siblings outside the visible scope. */
-  scopeRootId?: string
-  /** The property display scope of the surface pasted into, beside
-   *  `scopeRootId`: whether the target "has children" to paste among is
-   *  decided on the list that surface draws. */
-  propertyDisplay?: PropertyDisplayScopeLevels
   /** Only consulted for `position: 'after'`. `visible` (the default) follows
    *  outline navigation — "after" an expanded block IS its first-child slot.
    *  `sibling` keeps a range paste beside the selected range rather than
@@ -67,6 +60,7 @@ export interface EditModePasteSelection {
 export interface EditModeMultilinePastePlan {
   parsed: ParsedBlock[]
   absorbedRoot: ParsedBlock
+  sourceContent: string
   targetContent: string
   focusOffsetInTarget: number
   suffix: string
@@ -104,6 +98,8 @@ export interface SingleBlockPastePlan {
   cursor: number
 }
 
+const normalizeEditorLineEndings = (text: string): string => text.replace(/\r\n?/g, '\n')
+
 /** Plan a verbatim paste into the current block: replace the selected
  *  range with the pasted text, keeping its newlines. CRLF/CR are
  *  normalized to LF to match CodeMirror's own line-ending normalization,
@@ -112,7 +108,7 @@ export const planSingleBlockPaste = (
   pastedText: string,
   selection: { from: number; to: number },
 ): SingleBlockPastePlan => {
-  const insert = pastedText.replace(/\r\n?/g, '\n')
+  const insert = normalizeEditorLineEndings(pastedText)
   return {
     insert,
     from: selection.from,
@@ -171,14 +167,38 @@ const insertionForSiblingRun = (
 const hasNoSiblingSlot = (target: BlockData, scopeRootId: string | undefined): boolean =>
   scopeRootId === target.id || target.parentId === null
 
-/** {@link PasteOptions} as the placement rule reads them: every field
- *  decided. The public entry points resolve the caller's display scope
- *  (`displayScopeOf`), so nothing below them can drop it. */
+interface PasteSurface extends ListingSurface {
+  occurrence?: OccurrenceEdge & {hasDrawnChildren: boolean}
+}
+
+/** Read the occurrence before taking the write lock. Its list determines the
+ *  placement branch. The transaction computes order keys from its own rows. */
+const pasteSurfaceFor = async (
+  block: Block, data: BlockData, options: Partial<ListingSurface>,
+): Promise<PasteSurface | null> => {
+  const surface = listingSurfaceOf(options)
+  const {renderScopeId} = surface
+  if (renderScopeId === undefined) return surface
+
+  const location = await nestedWriteLocation(block, renderScopeId)
+  if (location === null) return null
+  const occurrence = captureOccurrenceEdge(block.id, data.parentId, location)
+  const scoped = occurrence.boundaryId === block.id ? {...surface, scopeRootId: block.id} : surface
+  const drawn = await drawnChildrenOf(block, scoped)
+  return {...scoped, occurrence: {...occurrence, hasDrawnChildren: drawn.length > 0}}
+}
+
+const currentPasteTarget = async (tx: Tx, id: string, surface: PasteSurface): Promise<BlockData | null> => {
+  const {occurrence} = surface
+  if (occurrence) return occurrence.currentRow(tx)
+  const target = await tx.get(id)
+  return target?.deleted ? null : target
+}
+
 interface PlacementOptions {
   position: PastePosition
   placement: PastePlacement
-  scopeRootId: string | undefined
-  propertyDisplay: PropertyDisplayScopeLevels
+  surface: PasteSurface
 }
 
 /** THE placement rule for a run of pasted roots: whether they land in
@@ -188,14 +208,14 @@ interface PlacementOptions {
 const rootsLandAsChildren = async (
   tx: Tx,
   target: BlockData,
-  {position, placement, scopeRootId, propertyDisplay}: PlacementOptions,
+  {position, placement, surface}: PlacementOptions,
 ): Promise<{asChildren: boolean; visibleChildren: BlockData[]}> => {
-  const visibleChildren = await visibleChildrenOf(tx, target.id, target.workspaceId, propertyDisplay)
-  const hasVisibleChildren = visibleChildren.length > 0 && !isCollapsed(target.properties)
+  const visibleChildren = await visibleChildrenOf(tx, target.id, target.workspaceId, surface.propertyDisplay)
+  const hasDrawnChildren = surface.occurrence?.hasDrawnChildren ?? visibleChildren.length > 0
   // With no sibling slot, roots land in the target's child list whatever
   // `placement` says.
-  const asChildren = hasNoSiblingSlot(target, scopeRootId) ||
-    (placement === 'visible' && position === 'after' && hasVisibleChildren)
+  const asChildren = hasNoSiblingSlot(target, surface.scopeRootId) ||
+    (placement === 'visible' && position === 'after' && hasDrawnChildren && !isCollapsed(target.properties))
   return {asChildren, visibleChildren}
 }
 
@@ -222,8 +242,7 @@ const resolveRootDestination = async (
   target: BlockData,
   {
     position,
-    scopeRootId,
-    propertyDisplay,
+    surface,
     placement,
     parsed,
     absorbedRootId,
@@ -249,8 +268,7 @@ const resolveRootDestination = async (
   const {asChildren: rootsAsChildren, visibleChildren: targetChildren} = await rootsLandAsChildren(tx, target, {
     position,
     placement: effectivePlacement,
-    scopeRootId,
-    propertyDisplay,
+    surface,
   })
   // Type guard, not a live check: a parentless target always takes the branch
   // above, so the sibling branch always has a parent.
@@ -363,6 +381,7 @@ export const planEditModeMultilinePaste = (
   return {
     parsed,
     absorbedRoot,
+    sourceContent: currentContent,
     targetContent: createsAdditionalBlocks
       ? contentBeforeStructuralBreak
       : `${contentBeforeStructuralBreak}${suffix}`,
@@ -421,30 +440,30 @@ async function pasteParsedBlocks(
   repo: Repo,
   {
     position = 'after',
-    scopeRootId,
-    propertyDisplay,
     placement = 'visible',
+    ...listing
   }: PasteOptions,
 ): Promise<Block[]> {
   if (parsed.length === 0) return []
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return []
+  const surface = await pasteSurfaceFor(pasteTarget, targetData, listing)
+  if (!surface) return []
 
   const parsedRoots = parsed.filter(block => !block.parentId)
 
   const rootBlocks: Block[] = []
   await repo.tx(async tx => {
-    const target = await tx.get(pasteTarget.id)
+    const target = await currentPasteTarget(tx, pasteTarget.id, surface)
     if (!target) return
 
     // Decide absorption BEFORE resolving the destination — it is an input to
     // the placement rule there, not an independent step.
-    const absorbedRoot = absorbedRootFor(target, parsedRoots, position, scopeRootId)
+    const absorbedRoot = absorbedRootFor(target, parsedRoots, position, surface.scopeRootId)
 
     const destination = await resolveRootDestination(tx, target, {
       position,
-      scopeRootId,
-      propertyDisplay: displayScopeOf({propertyDisplay}),
+      surface,
       placement,
       parsed,
       absorbedRootId: absorbedRoot?.id,
@@ -485,15 +504,23 @@ export async function pasteEditModeMultilineText(
   plan: EditModeMultilinePastePlan,
   pasteTarget: Block,
   repo: Repo,
-  options: Pick<PasteOptions, 'scopeRootId' | 'propertyDisplay'> = {},
+  options: Partial<ListingSurface> = {},
+  acceptEditorEdit?: () => boolean,
 ): Promise<EditModeMultilinePasteResult | null> {
+  const targetData = pasteTarget.peek() ?? await pasteTarget.load()
+  if (!targetData) return null
+  const surface = await pasteSurfaceFor(pasteTarget, targetData, options)
+  if (!surface) return null
+
   const rootBlocks: Block[] = []
   let focusBlock = pasteTarget
   let focusOffset = plan.focusOffsetInTarget
+  const expectedContent = normalizeEditorLineEndings(plan.sourceContent)
 
   await repo.tx(async tx => {
-    const target = await tx.get(pasteTarget.id)
-    if (!target) return
+    const target = await currentPasteTarget(tx, pasteTarget.id, surface)
+    if (!target || normalizeEditorLineEndings(target.content) !== expectedContent) return
+    if (acceptEditorEdit && !acceptEditorEdit()) return
 
     // `visible`: the slot right after the edited line is its first-child slot
     // once the block has children, so a paste stays contiguous with the line it
@@ -501,8 +528,7 @@ export async function pasteEditModeMultilineText(
     // root's own children already claim that slot.
     const destination = await resolveRootDestination(tx, target, {
       position: 'after',
-      scopeRootId: options.scopeRootId,
-      propertyDisplay: displayScopeOf(options),
+      surface,
       placement: 'visible',
       parsed: plan.parsed,
       absorbedRootId: plan.absorbedRoot.id,
@@ -534,7 +560,7 @@ export async function pasteEditModeMultilineText(
     }
   }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text at editor selection'})
 
-  return {pasted: rootBlocks, focusBlock, focusOffset}
+  return rootBlocks.length > 0 ? {pasted: rootBlocks, focusBlock, focusOffset} : null
 }
 
 // ──── a paste that completes a cut ────
@@ -555,6 +581,9 @@ type CutMoveResult =
    *  duplicate, so the text pastes as usual. */
   | {kind: 'cut-gone'}
   | {kind: 'refused'; message: string}
+
+const PASTE_DESTINATION_UNAVAILABLE = 'The paste destination is no longer available'
+const CUT_OUTSIDE_RESULT = {kind: 'refused', message: 'Cut blocks can only move within this result'} as const
 
 /** Is `id` strictly inside one of `rootIds`' subtrees? Walks `parentId`
  *  through the tx, with a `seen` guard against a corrupt cycle. */
@@ -579,11 +608,11 @@ const cutDestination = async (
   target: BlockData,
   options: PlacementOptions,
 ): Promise<{move: MoveTarget; replacesTarget: boolean}> => {
-  const children = await tx.childrenOf(target.id, target.workspaceId)
   // A referenced target is never replaced: deleting it would rewrite every
   // `((ref))` to it into its (empty) text.
-  const replaceable = isBlankContent(target.content) && children.length === 0 &&
-    Object.keys(target.properties).length === 0 && !hasNoSiblingSlot(target, options.scopeRootId) &&
+  const replaceable = isBlankContent(target.content) &&
+    Object.keys(target.properties).length === 0 && !hasNoSiblingSlot(target, options.surface.scopeRootId) &&
+    !options.surface.occurrence?.hasDrawnChildren && !await tx.hasChildren(target.id) &&
     !await tx.hasLiveReferrer(target.id, target.workspaceId)
   if (replaceable) {
     return {move: {parentId: target.parentId, position: {kind: 'before', siblingId: target.id}}, replacesTarget: true}
@@ -623,7 +652,7 @@ export async function pasteArmedCut(
   text: string,
   pasteTarget: Block,
   repo: Repo,
-  {position = 'after', placement = 'visible', scopeRootId, propertyDisplay}: PasteOptions = {},
+  {position = 'after', placement = 'visible', ...listing}: PasteOptions = {},
 ): Promise<CutPasteOutcome | null> {
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return null
@@ -643,10 +672,15 @@ export async function pasteArmedCut(
 
   let result: CutMoveResult
   try {
+    const surface = await pasteSurfaceFor(pasteTarget, targetData, listing)
+    if (!surface) {
+      showError(PASTE_DESTINATION_UNAVAILABLE)
+      return {kind: 'refused'}
+    }
     result = await repo.tx(async (tx): Promise<CutMoveResult> => {
-      const target = await tx.get(pasteTarget.id)
-      if (!target || target.deleted) {
-        return {kind: 'refused', message: 'The block you pasted at no longer exists'}
+      const target = await currentPasteTarget(tx, pasteTarget.id, surface)
+      if (!target) {
+        return {kind: 'refused', message: PASTE_DESTINATION_UNAVAILABLE}
       }
       const live: string[] = []
       for (const id of cut.rootIds) {
@@ -664,9 +698,17 @@ export async function pasteArmedCut(
         if (!await isInsideAny(tx, id, liveSet)) roots.push(id)
       }
 
-      const destination = await cutDestination(tx, target, {
-        position, placement, scopeRootId, propertyDisplay: displayScopeOf({propertyDisplay}),
-      })
+      const destination = await cutDestination(tx, target, {position, placement, surface})
+      for (const boundaryId of new Set([cut.foreignRootId, surface.occurrence?.foreignRootId])) {
+        if (boundaryId === undefined) continue
+        const parentId = destination.move.parentId
+        if (parentId === null || !await tx.isDescendantOf(parentId, boundaryId)) {
+          return CUT_OUTSIDE_RESULT
+        }
+        for (const id of roots) {
+          if (!await tx.isDescendantOf(id, boundaryId)) return CUT_OUTSIDE_RESULT
+        }
+      }
       await moveBlocksInTx(tx, roots, destination.move)
       if (destination.move.parentId === target.id) await revealChildren(tx, target.id)
       if (destination.replacesTarget) await tx.run(deleteBlock, {id: target.id})

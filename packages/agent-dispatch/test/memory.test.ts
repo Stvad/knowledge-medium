@@ -44,6 +44,18 @@ describe('renderMemoryChanges', () => {
     expect(line).toContain('(((d)))')
   })
 
+  it('names a reference by what it is rather than by a bare id', () => {
+    const line = renderMemoryChanges({
+      saved: [{id: 'd', content: '!((3f2a-1))'}, {id: 'e', content: 'see ![[Shared notes]]'}],
+      edited: [{id: 'b', content: 'per [the style guide](((3f2a-2))) and ((3f2a-3))'}],
+      removed: [],
+    })
+    expect(line).toBe(
+      'Memory changed during this run: saved [embedded block](((d))), [see embedded Shared notes](((e))); '
+      + 'edited [per the style guide and block ref](((b)))',
+    )
+  })
+
   it('shortens long entries', () => {
     const line = renderMemoryChanges({saved: [{id: 'd', content: 'x'.repeat(500)}], edited: [], removed: []})
     expect(line!.length).toBeLessThan(150)

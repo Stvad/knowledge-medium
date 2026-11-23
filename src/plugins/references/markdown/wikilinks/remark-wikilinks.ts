@@ -3,6 +3,7 @@ import { visit, SKIP } from 'unist-util-visit'
 import { Link, Literal, Parent, RootContent } from 'mdast'
 import {
   MAX_ALIAS_LENGTH,
+  isPageEmbed,
   linkFormWrapperAround,
   parseOutermostReferences,
 } from '../../referenceParser.ts'
@@ -236,7 +237,7 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
       // `![[alias]]` is a page-embed (Obsidian-style transclusion). When the
       // wikilink is preceded by `!` we consume it together with the bang and
       // emit a pageembed node instead of an inline wikilink.
-      const isEmbed = ref.startIndex > 0 && src[ref.startIndex - 1] === '!'
+      const isEmbed = isPageEmbed(src, ref)
       const spanStart = isEmbed ? ref.startIndex - 1 : ref.startIndex
       if (spanStart > last) {
         out.push({type: 'text', value: src.slice(last, spanStart)})
@@ -335,7 +336,7 @@ const reassembleOneCrossNodeRef = (
     : OPAQUE_SENTINEL.repeat(piece.length)).join('')
   for (const ref of refs) {
     const wrapper = linkFormWrapperAround(wrapperSource, ref)
-    const isEmbed = ref.startIndex > 0 && joined[ref.startIndex - 1] === '!'
+    const isEmbed = isPageEmbed(joined, ref)
     const spanStart = isEmbed ? ref.startIndex - 1 : ref.startIndex
     const aliasNodes = sliceChildren(kids, pieces, starts, spanStart, ref.endIndex)
     if (aliasNodes === null || aliasNodes.length < 2) continue

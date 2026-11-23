@@ -20,7 +20,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import type { Repo } from './repo'
+import { REFERENCE_TARGET_STAMP_CHUNK, type Repo } from './repo'
 
 const WS = 'ws-derive-pass'
 /** A real fieldId is the definition block's UUID. No assertion here turns on
@@ -65,8 +65,7 @@ const INSERT_SQL =
 
 /** Raw-seed a pre-upgrade row: column NULL regardless of content, no
  *  processor involvement (the seed bypasses repo.tx entirely). */
-const seedRow = (overrides: Partial<BlockData> & {id: string}): Promise<unknown> =>
-  sharedDb.db.execute(INSERT_SQL, blockToRowParams({
+const seededBlock = (overrides: Partial<BlockData> & {id: string}): BlockData => ({
     workspaceId: WS,
     parentId: null,
     orderKey: `k-${overrides.id}`,
@@ -81,7 +80,10 @@ const seedRow = (overrides: Partial<BlockData> & {id: string}): Promise<unknown>
     deleted: false,
     referenceTargetId: null,
     ...overrides,
-  }))
+  })
+
+const seedRow = (overrides: Partial<BlockData> & {id: string}): Promise<unknown> =>
+  sharedDb.db.execute(INSERT_SQL, blockToRowParams(seededBlock(overrides)))
 
 const setup = (workspaceId = WS): Repo => {
   const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
@@ -377,6 +379,199 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
       expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
     })
   }
+
+  /** A user-declared refList definition, `named-refs`, keyed `named-ref-field`. */
+  const registerNamedRefs = (repo: Repo) => {
+    const schema = defineProperty('named-refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-named-refs', [{
+      metadata: {fieldId: 'named-ref-field', workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const}, schema,
+    }], {workspaceId: WS})
+    return schema
+  }
+
+  it('leaves an old named-value projection alone on open, then refreshes on content edit', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    const schema = registerNamedRefs(repo)
+    await seedRow({id: 'named-owner', properties: {[schema.name]: [], unrelated: 'keep'}})
+    await seedRow({id: 'named-field', parentId: 'named-owner', content: '::((named-ref-field))',
+      referenceTargetId: 'named-ref-field', isFieldForm: true})
+    await seedRow({id: 'named-value', parentId: 'named-field', content: '[[Existing name]]', referenceTargetId: 'existing-target'})
+    await seedRow({id: 'existing-target', properties: {[aliasesProp.name]: ['Existing name']}})
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    await runPass(repo)
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    await repo.tx(tx => tx.update('named-value', {content: '[[Existing name]] '}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    expect(await cellOf('named-owner', schema.name)).toEqual(['existing-target'])
+    expect(await cellOf('named-owner', 'unrelated')).toBe('keep')
+    expect(await repo.load('named-value')).toMatchObject({content: '[[Existing name]] '})
+  })
+
+  it('projects a refList member when its previously missing name resolves', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    const schema = registerNamedRefs(repo)
+    await runPass(repo)
+    await repo.tx(async tx => {
+      await tx.create({id: 'named-owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'owner'})
+      await tx.create({id: 'late-target', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target'})
+      await tx.create({id: 'named-field', workspaceId: WS, parentId: 'named-owner', orderKey: 'a0', content: '::((named-ref-field))'})
+      await tx.create({id: 'named-value', workspaceId: WS, parentId: 'named-field', orderKey: 'a0', content: '[[Late name]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await readColumn('named-value')).toBeNull()
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    const before = await repo.load('named-value')
+    await repo.tx(tx => tx.setProperty('late-target', aliasesProp, ['Late name']), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    await vi.waitFor(async () => {
+      await repo.awaitReferenceTargetDerive()
+      expect(await readColumn('named-value')).toBe('late-target')
+      expect(await cellOf('named-owner', schema.name)).toEqual(['late-target'])
+    })
+    expect(await repo.load('named-value')).toMatchObject({content: '[[Late name]]', updatedAt: before!.updatedAt})
+  })
+
+  /** A synced owner whose refList cell another device projected from
+   *  `[[name]]` value rows that this device has not stamped yet — the state a
+   *  fresh device's first open finds. `names` are the value rows' names, in
+   *  sibling order; `cell` is the stored value. */
+  const seedSyncedNamedRefList = async (
+    repo: Repo, names: readonly string[], cell: readonly string[],
+  ) => {
+    const schema = registerNamedRefs(repo)
+    // `references` as the owner's own parse derives them from that cell, so
+    // the only write a pass could owe this row is a property one.
+    await seedRow({id: 'named-owner', properties: {[schema.name]: [...cell]},
+      references: cell.map(id => ({id, alias: id, sourceField: schema.name}))})
+    await seedRow({id: 'named-field', parentId: 'named-owner', content: '::((named-ref-field))',
+      referenceTargetId: 'named-ref-field', isFieldForm: true})
+    for (const [i, name] of names.entries()) {
+      await seedRow({id: `named-value-${i}`, parentId: 'named-field', orderKey: `a${i}`, content: `[[${name}]]`})
+    }
+    return schema
+  }
+
+  const ownerWrites = async (): Promise<unknown[]> =>
+    sharedDb.db.getAll(`SELECT id FROM ps_crud WHERE data LIKE '%named-owner%'`)
+
+  it('the sweep never drops a list member whose name this device cannot resolve yet', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    // "Name C"'s page has not reached this device, so its row stays unstamped.
+    const schema = await seedSyncedNamedRefList(repo, ['Name A', 'Name C'], ['target-a', 'target-c'])
+
+    await runPass(repo)
+    await repo.awaitProcessors()
+
+    // Precondition: the sweep did stamp the sibling, so the resolved-values
+    // projection ran over this owner.
+    expect(await readColumn('named-value-0')).toBe('target-a')
+    expect(await readColumn('named-value-1')).toBeNull()
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-c'])
+    expect(await ownerWrites()).toEqual([])
+  })
+
+  it('still adds a member that resolves while a sibling never will', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    const schema = registerNamedRefs(repo)
+    await runPass(repo)
+    // Typed before either page exists; "Never name" never gets one here.
+    await repo.tx(async tx => {
+      await tx.create({id: 'named-owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'owner'})
+      await tx.create({id: 'late-target', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target'})
+      await tx.create({id: 'named-field', workspaceId: WS, parentId: 'named-owner', orderKey: 'a0', content: '::((named-ref-field))'})
+      await tx.create({id: 'named-value', workspaceId: WS, parentId: 'named-field', orderKey: 'a0', content: '[[Late name]]'})
+      await tx.create({id: 'never-value', workspaceId: WS, parentId: 'named-field', orderKey: 'a1', content: '[[Never name]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+
+    await repo.tx(tx => tx.setProperty('late-target', aliasesProp, ['Late name']), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    await vi.waitFor(async () => {
+      await repo.awaitReferenceTargetDerive()
+      expect(await readColumn('named-value')).toBe('late-target')
+      expect(await cellOf('named-owner', schema.name)).toEqual(['late-target'])
+    })
+    expect(await readColumn('never-value')).toBeNull()
+
+    // A write made from the cell must not take the resolved member's row with it.
+    await repo.tx(tx => tx.setProperty('named-owner', schema, ['late-target', 'other']),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    expect(await repo.load('named-value')).toMatchObject({content: '[[Late name]]', deleted: false})
+  })
+
+  it('writes nothing when two members of one list resolve in different stamp chunks', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    await seedRow({id: 'target-b', properties: {[aliasesProp.name]: ['Name B']}})
+    const schema = await seedSyncedNamedRefList(repo, ['Name A'], ['target-a', 'target-b'])
+    // A full chunk of other resolvable rows between the two members puts the
+    // second one in the sweep's next chunk.
+    await sharedDb.db.writeTransaction(async tx => {
+      for (let i = 0; i < REFERENCE_TARGET_STAMP_CHUNK; i += 1) {
+        for (const filler of [
+          {id: `filler-target-${i}`, properties: {[aliasesProp.name]: [`Filler ${i}`]}},
+          {id: `filler-${i}`, content: `[[Filler ${i}]]`},
+        ]) await tx.execute(INSERT_SQL, blockToRowParams(seededBlock(filler)))
+      }
+    })
+    await seedRow({id: 'named-value-1', parentId: 'named-field', orderKey: 'a1', content: '[[Name B]]'})
+    // Precondition: every candidate stamps, so its position in the scan is its
+    // position in the stamp list.
+    const scan = (await sharedDb.db.getAll<{id: string}>(REFERENCE_TARGET_SWEEP_CANDIDATES_SQL, [WS]))
+      .map(row => row.id)
+    const chunkOf = (id: string) => Math.floor(scan.indexOf(id) / REFERENCE_TARGET_STAMP_CHUNK)
+    expect(chunkOf('named-value-0')).toBe(0)
+    expect(chunkOf('named-value-1')).toBe(1)
+
+    await runPass(repo)
+    await repo.awaitProcessors()
+
+    expect(await readColumn('named-value-0')).toBe('target-a')
+    expect(await readColumn('named-value-1')).toBe('target-b')
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-b'])
+    // The flap's first write dropped `target-b` and its second restored it;
+    // both uploaded.
+    expect(await ownerWrites()).toEqual([])
+    // Measured at 1.4–3.8s under a loaded machine: two stamp chunks.
+  }, 20_000)
+
+  // The user-edit projection is outside this rule; whether it should hold a
+  // pending sibling is #1852. What it must keep doing either way is shown here.
+  it('a user removing a member still removes it while a sibling is pending', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    const schema = await seedSyncedNamedRefList(repo, ['Name A', 'Name C'], ['target-a', 'target-c'])
+    await runPass(repo)
+    await repo.awaitProcessors()
+    expect(await readColumn('named-value-1')).toBeNull()
+
+    await repo.tx(tx => tx.delete('named-value-0'), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    expect(await cellOf('named-owner', schema.name)).not.toContain('target-a')
+  })
+
+  it('with nothing left pending, a stamp still repairs a stale member', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'new-target', properties: {[aliasesProp.name]: ['New name']}})
+    const schema = await seedSyncedNamedRefList(repo, ['New name'], ['old-target'])
+
+    await runPass(repo)
+    await repo.awaitProcessors()
+
+    expect(await readColumn('named-value-0')).toBe('new-target')
+    expect(await cellOf('named-owner', schema.name)).toEqual(['new-target'])
+  })
 
   it('projects the owner cell when the claim turns a marked row into a field row', async () => {
     await flipWorkspace()

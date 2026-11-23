@@ -158,6 +158,42 @@ describe('PropertyPicker', () => {
     })
   })
 
+  it('suggests preferred names first, even past the visible cap', async () => {
+    // More matches than the list shows, with the preferred one last by name.
+    const names = Array.from({length: 12}, (_, i) => `ap${String(i).padStart(2, '0')}`)
+    store.schemas = new Map(names.map(name => [name, schema(name)]))
+    const onAdd = vi.fn().mockResolvedValue(undefined)
+    render(
+      <PropertyPicker
+        onAdd={onAdd}
+        onConfigureNewSchema={vi.fn().mockResolvedValue(undefined)}
+        block={pickerBlock()}
+        preferredNames={['ap11', 'ap10']}
+      />,
+    )
+    const input = screen.getByPlaceholderText('Field')
+    fireEvent.change(input, {target: {value: 'ap'}})
+    await act(async () => { fireEvent.keyDown(input, {key: 'Enter'}) })
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({name: 'ap11'}))
+  })
+
+  it('puts the name typed exactly ahead of a preferred one', async () => {
+    store.schemas = new Map([['date', schema('date')], ['updated-date', schema('updated-date')]])
+    const onAdd = vi.fn().mockResolvedValue(undefined)
+    render(
+      <PropertyPicker
+        onAdd={onAdd}
+        onConfigureNewSchema={vi.fn().mockResolvedValue(undefined)}
+        block={pickerBlock()}
+        preferredNames={['updated-date']}
+      />,
+    )
+    const input = screen.getByPlaceholderText('Field')
+    fireEvent.change(input, {target: {value: 'Date'}})
+    await act(async () => { fireEvent.keyDown(input, {key: 'Enter'}) })
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({name: 'date'}))
+  })
+
   it('does not suggest, submit, or configure a hidden seed when bound or at stage 0', async () => {
     const hidden = seedProperty({
       seedKey: 'plugin:test/property/secret',

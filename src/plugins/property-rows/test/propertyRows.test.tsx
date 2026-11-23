@@ -7,7 +7,7 @@
 import { Suspense, useEffect } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, codecs, definePresetCore, definePropertyEditorOverride, seedProperty, type PropertyEditorProps, type User } from '@/data/api'
+import { ChangeScope, codecs, definePresetCore, definePropertyEditorOverride, seedProperty, type AnyPropertySchema, type PropertyEditorProps, type User } from '@/data/api'
 import { Block } from '@/data/block'
 import { materializePropertySeeds } from '@/data/definitionSeeds'
 import { definitionSeedsFacet, propertyEditorOverridesFacet, valuePresetCoresFacet, valuePresetPresentationsFacet } from '@/data/facets'
@@ -33,7 +33,7 @@ import { __resetLazyMountCachesForTesting } from '@/components/util/LazyViewport
 import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountRegistry'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
-import { propertyRowsPlugin } from '../index'
+import * as propertyRows from '../index'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { referencesPlugin } from '@/plugins/references'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
@@ -43,6 +43,7 @@ import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import {
+  aliasesProp,
   focusBlock,
   isCollapsedProp,
   isEditingProp,
@@ -74,6 +75,10 @@ const tagsProp = seedProperty({
   seedKey: 'test/property/rows-tags', revision: 1, name: 'rows:tags',
   preset: 'string-list', defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
+const jsonListProp = seedProperty({
+  seedKey: 'test/property/rows-json-list', revision: 1, name: 'rows:json-list',
+  preset: 'list', defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
 
 const ratingProp = seedProperty({
   seedKey: 'test/property/rows-rating', revision: 1, name: 'rows:rating',
@@ -95,7 +100,17 @@ const requiredSourceProp = seedProperty({
   preset: 'ref', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const rowSeeds = [statusProp, secretProp, tagsProp, ratingProp, sourceProp, requiredSourceProp, readyProp]
+const relatedSourcesProp = seedProperty({
+  seedKey: 'test/property/rows-related-sources', revision: 1, name: 'rows:related-sources',
+  preset: 'refList', defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
+
+const constrainedRefs = seedProperty({
+  seedKey: 'test/property/constrained-refs', revision: 1, name: 'rows:constrained-refs',
+  preset: 'refList', config: {targetTypes: ['person']}, defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
+
+const rowSeeds = [constrainedRefs, statusProp, secretProp, tagsProp, jsonListProp, ratingProp, sourceProp, requiredSourceProp, relatedSourcesProp, readyProp]
 
 let sharedDb: TestDb
 let repo: Repo
@@ -154,7 +169,7 @@ const testExtensions = (): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   defaultEditorInteractionExtension,
-  propertyRowsPlugin,
+  propertyRows.propertyRowsPlugin,
   referencesPlugin,
   plainOutlinerPlugin,
   defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
@@ -364,6 +379,10 @@ describe('ordinary property value content', () => {
 })
 
 describe('editing through a property row', () => {
+  it('keeps inline editor selection internal to ordinary value-row rendering', () => {
+    expect(propertyRows).not.toHaveProperty('resolvePropertyValueInlinePresentation')
+  })
+
   it.each(['click', 'keyboard'])('opens the same block editor by %s and projects its edit to the property', async entry => {
     if (entry === 'keyboard') {
       addExtensions(vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo}))
@@ -574,6 +593,21 @@ describe('a field row whose definition registers after it renders', () => {
   })
 })
 
+it('keeps the same ordinary editor when a value changes validity', async () => {
+  await repo.block(OWNER).set(ratingProp, 5)
+  const field = await fieldRow(ratingProp.name)
+  const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+  mount({workspace: 'non-hidden'})
+  await act(async () => { await focusBlock(repo.block(PANEL), value.id, {edit: true}) })
+  const view = await editorFor(value.id)
+  writeInEditor(view, 'not a number')
+  await waitFor(async () => expect(await repo.block(OWNER).get(ratingProp)).toBeUndefined())
+  expect(await editorFor(value.id)).toBe(view)
+  writeInEditor(view, '7')
+  await waitFor(async () => expect(await repo.block(OWNER).get(ratingProp)).toBe(7))
+  expect(await editorFor(value.id)).toBe(view)
+})
+
 describe('a field row shown by id, not as a listed child', () => {
   beforeEach(async () => { await repo.block(OWNER).set(readyProp, true) })
 
@@ -634,6 +668,8 @@ describe('a list property', () => {
     expect(alpha).not.toBe(beta)
     expect(alpha.querySelector('input, textarea')).toBeNull()
     expect(beta.querySelector('input, textarea')).toBeNull()
+    expect(alpha.querySelector('[data-invalid-property-value]')).toBeNull()
+    expect(beta.querySelector('[data-invalid-property-value]')).toBeNull()
     // The scalar beside it still gets its editor (the positive control).
     expect(await screen.findByRole('checkbox', {name: 'Toggle rows:ready'})).toBeChecked()
   })
@@ -678,6 +714,64 @@ describe('a reference value', () => {
     expect(cell.querySelector('.blockembed, input')).toBeNull()
     expect(within(cell).queryByRole('button', {name: 'Remove block reference'})).toBeNull()
   })
+
+  it.each([
+    {prop: sourceProp, list: false},
+    {prop: requiredSourceProp, list: false},
+    {prop: relatedSourcesProp, list: true},
+  ] as {prop: AnyPropertySchema; list: boolean}[])('reads a named link value child for $prop.name and projects its target id', async ({prop, list}) => {
+    const cited = '33333333-3333-4333-8333-333333333333'
+    await repo.tx(tx => tx.create({id: cited, workspaceId: WS, parentId: null, orderKey: 'a5', content: 'the cited block',
+      properties: {[aliasesProp.name]: aliasesProp.codec.encode(['the cited block'])}}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.block(OWNER).set(prop, list ? [cited] : cited)
+    const field = await fieldRow(prop.name)
+    const values = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    const value = values.find(row => row?.isFieldForm !== true)
+    expect(value).toBeDefined()
+    await repo.block(value!.id).setContent('[[the cited block]]')
+
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toContain(prop.name))
+    const link = await screen.findByRole('link', {name: 'the cited block'})
+    expect(link).toHaveClass('wikilink')
+    expect(blockRow(link).querySelector('[data-invalid-property-value]')).toBeNull()
+    expect(repo.block(OWNER).peekProperty(prop)).toEqual(list ? [cited] : cited)
+  })
+
+  it('projects a new named reference after its alias target is created', async () => {
+    await repo.whenPropertyDefinitionsReady(WS)
+    vi.useFakeTimers()
+    repo.scheduleReferenceTargetDerivePass(WS)
+    await vi.runAllTimersAsync()
+    await repo.awaitReferenceTargetDerive()
+    vi.useRealTimers()
+    const original = '44444444-4444-4444-8444-444444444444'
+    await repo.tx(tx => tx.create({id: original, workspaceId: WS, parentId: null, orderKey: 'a5', content: 'original target'}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.block(OWNER).set(sourceProp, original)
+    const field = await fieldRow(sourceProp.name)
+    const values = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    const value = values.find(row => row?.isFieldForm !== true)
+    expect(value).toBeDefined()
+    const existingAlias = await sharedDb.db.get<{count: number}>(
+      'SELECT count(*) AS count FROM block_aliases WHERE workspace_id = ? AND alias_lower = ?', [WS, 'new referenced page'])
+    expect(existingAlias.count).toBe(0)
+
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toContain(sourceProp.name))
+    await act(() => repo.block(value!.id).setContent('[[new referenced page]]'))
+    const link = await screen.findByRole('link', {name: 'new referenced page'})
+    expect(link).toHaveClass('wikilink')
+    await waitFor(async () => {
+      const current = await repo.load(value!.id)
+      expect(current?.referenceTargetId).toBeTruthy()
+      expect(repo.block(OWNER).peekProperty(sourceProp)).toBe(current?.referenceTargetId)
+      expect(blockRow(screen.getByRole('link', {name: 'new referenced page'}))
+        .querySelector('[data-invalid-property-value]')).toBeNull()
+    })
+    expect(repo.block(OWNER).peekProperty(sourceProp)).not.toBe(original)
+  })
 })
 
 describe('a read-only workspace', () => {
@@ -714,6 +808,10 @@ describe('a scalar whose first value child its codec cannot read', () => {
 
     mount({workspace: 'non-hidden'})
     await waitFor(() => expect(shownRows()).toContain('rows:rating'))
+    await screen.findByText('call Bob about this')
+    await waitFor(() => expect(document.querySelector('[data-block-id="unreadable"]')).not.toBeNull())
+    const marker = document.querySelector<HTMLElement>('[data-block-id="unreadable"] [data-invalid-property-value="true"]')
+    expect(marker?.title).toMatch(/finite number content/)
     expect(blockRow(await screen.findByText('call Bob about this'))).toHaveAttribute('data-block-id', 'unreadable')
     const valueId = blockRow(await screen.findByText('5')).dataset.blockId!
     await act(() => focusBlock(repo.block(PANEL), valueId, {edit: true}))
@@ -724,6 +822,32 @@ describe('a scalar whose first value child its codec cannot read', () => {
     expect((await repo.load(valueId))?.content).toBe('7')
     const unreadable = await sharedDb.db.get<{content: string}>("SELECT content FROM blocks WHERE id = 'unreadable'")
     expect(unreadable.content).toBe('call Bob about this')
+  })
+
+  it.each([
+    ['a reference', sourceProp, 'not a reference'],
+    ['a list member', jsonListProp, 'not json'],
+  ] as const)('marks undecodable %s without replacing its text', async (_label, schema, content) => {
+    if (schema === sourceProp) await repo.block(OWNER).set(sourceProp, NOTE)
+    else await repo.block(OWNER).set(jsonListProp, [1])
+    const fields = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()
+    const field = fields.find(row => {
+      if (!row?.isFieldForm || !row.referenceTargetId) return false
+      const resolution = repo.propertySchemaResolverFor(WS).resolveField(row.referenceTargetId)
+      return resolution.status === 'resolved' && resolution.schema.name === schema.name
+    })
+    expect(field).toBeDefined()
+    const values = await repo.query.children({id: field!.id, propertyChildren: 'all'}).load()
+    const valueRow = values.find(row => row?.isFieldForm !== true)
+    expect(valueRow).toBeDefined()
+    await sharedDb.db.writeTransaction(tx => tx.execute('UPDATE blocks SET content = ? WHERE id = ?', [content, valueRow!.id]))
+    repo.cache.deleteSnapshot(valueRow!.id)
+
+    mount({workspace: 'non-hidden'})
+    const row = await screen.findByText(content)
+    const marker = row.closest('[data-block-id]')?.querySelector<HTMLElement>('[data-invalid-property-value="true"]')
+    expect(marker?.title).toBeTruthy()
+    expect(row.textContent).toBe(content)
   })
 })
 
@@ -800,6 +924,7 @@ describe('a child the user turns into a field row', () => {
     await outlineSettled()
     expect(typedRow()).not.toBeNull()
     expect(typedRow()!.querySelector('.cm-content')?.textContent).toBe('::((def-plain))')
+    expect(typedRow()!.querySelector('[data-property-row-layout="true"]')).toBeTruthy()
     expect(followsTheFirst(typedRow()!)).toBe(true)
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
@@ -816,14 +941,37 @@ describe('a child the user turns into a field row', () => {
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
 
-  it('lets the mode hide the row once the user moves on', async () => {
+  it('retains the focused field through its owner and siblings, then hides it after focus leaves the owner', async () => {
     await typeIntoChild('none', '::((def-plain))')
     await outlineSettled()
+    await repo.tx(tx => tx.create({id: 'nested-in-field', workspaceId: WS, parentId: TYPED, orderKey: 'a0', content: 'nested'}),
+      {scope: ChangeScope.BlockDefault})
+    await act(async () => { await focusBlock(repo.block(PANEL), 'nested-in-field', {edit: true}) })
+    await waitFor(() => expect(typedRow()?.querySelector('[data-property-row-layout="true"]')).toBeTruthy())
+    await act(async () => { await focusBlock(repo.block(PANEL), OWNER, {edit: true}) })
     expect(typedRow()).not.toBeNull()
     await act(async () => { await focusBlock(repo.block(PANEL), NOTE, {edit: true}) })
+    expect(typedRow()).not.toBeNull()
+    await act(async () => { await focusBlock(repo.block(PANEL), PANEL, {edit: true}) })
     await waitFor(() => expect(typedRow()).toBeNull())
     // A focused child the mode shows anyway is listed once, not twice.
     expect(document.querySelectorAll(`[data-block-id="${NOTE}"]`)).toHaveLength(1)
+  })
+
+  it('retains each field focused under the same owner', async () => {
+    await typeIntoChild('none', '::((def-plain))')
+    await outlineSettled()
+    await repo.tx(tx => tx.create({id: 'typed-second', workspaceId: WS, parentId: OWNER, orderKey: 'z0', content: '::((def-plain))'}),
+      {scope: ChangeScope.BlockDefault})
+    await waitFor(() => expect(repo.block('typed-second').peek()?.isFieldForm).toBe(true))
+    await act(async () => { await focusBlock(repo.block(PANEL), TYPED, {edit: true}) })
+    await waitFor(() => expect(typedRow()).not.toBeNull())
+    await act(async () => { await focusBlock(repo.block(PANEL), 'typed-second', {edit: true}) })
+    await waitFor(() => expect(document.querySelector('[data-block-id="typed-second"]')).not.toBeNull())
+    expect(typedRow()).not.toBeNull()
+    await act(async () => { await focusBlock(repo.block(PANEL), OWNER, {edit: true}) })
+    expect(typedRow()).not.toBeNull()
+    expect(document.querySelector('[data-block-id="typed-second"]')).not.toBeNull()
   })
 
   it('follows the row into the parent it is indented under', async () => {
@@ -969,4 +1117,23 @@ describe('field row expansion affordance', () => {
     await act(() => repo.block(OWNER).set(tagsProp, ['alpha']))
     await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('true'))
   })
+})
+
+
+it('warns for a wrong-type list member in read and edit mode while retaining the value', async () => {
+  await repo.tx(tx => tx.create({id: 'target', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Target', properties: {types: ['place']}}), {scope: ChangeScope.BlockDefault})
+  await repo.block(OWNER).set(constrainedRefs, ['target'])
+  const field = await fieldRow(constrainedRefs.name)
+  const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+  mount({workspace: 'non-hidden'})
+  const row = () => document.querySelector<HTMLElement>(`[data-block-id="${value.id}"]`)!
+  await waitFor(() => expect(row()?.querySelector('[data-reference-type-warning]')?.getAttribute('title')).toContain('rows:constrained-refs expects person'))
+  expect((await repo.load(value.id))?.content).toBe('((target))')
+  await act(() => focusBlock(repo.block(PANEL), value.id, {edit: true}))
+  const view = await editorFor(value.id)
+  await waitFor(() => expect(view.dom.querySelector('[data-reference-type-warning]')).not.toBeNull())
+  writeInEditor(view, 'partial')
+  expect(view.dom.querySelector('[data-reference-type-warning]')).toBeNull()
+  expect(view.state.doc.toString()).toBe('partial')
+  expect(EditorView.findFromDOM(view.dom)).toBe(view)
 })

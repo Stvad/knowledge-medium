@@ -15,7 +15,6 @@ import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import {
-  editorSelection,
   focusBlock,
   requestEditorFocus,
 } from '@/data/properties.js'
@@ -282,6 +281,7 @@ export interface BlockShellProps {
   'data-block-id': string
   'data-render-scope-id'?: string
   'data-editing': 'true' | 'false'
+  'data-block-focused'?: 'true'
   className?: string
   tabIndex: number
   ref?: Ref<HTMLDivElement>
@@ -813,9 +813,7 @@ export const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE
  * affected — and why testing this needs one of them.
  */
 export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return true
-  const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
-  const boundary = start?.closest(BLOCK_BOUNDARY_SELECTOR)
+  const boundary = elementOf(target)?.closest(BLOCK_BOUNDARY_SELECTOR)
   return !boundary || boundary === element
 }
 
@@ -841,15 +839,7 @@ export const enterEditModeForBlock = async (
   }
 
   await resetBlockSelection(uiStateBlock)
-  // Before focusBlock: BlockEditor places the cursor in the commit that mounts
-  // it, so a selection written after edit mode moves misses that placement.
-  if (selection) {
-    await uiStateBlock.set(editorSelection, {
-      blockId: block.id,
-      ...selection,
-    })
-  }
-  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
+  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId, selection})
 
   requestEditorFocus(uiStateBlock)
 }

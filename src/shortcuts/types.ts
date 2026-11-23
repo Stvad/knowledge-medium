@@ -169,6 +169,7 @@ export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
 
 export interface CodeMirrorEditModeDependencies extends BlockShortcutDependencies {
   editorView: EditorView;
+  disableBlockSplit?: boolean;
 }
 
 /** The focused field element of a property editor. A union rather than

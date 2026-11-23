@@ -13,6 +13,9 @@ import {
   completionTypeHint,
   searchAliasLabels,
   searchBlocksAcrossSources,
+  searchTypedReferenceCandidates,
+  searchTypedAliasCandidates,
+  readTypeIds,
 } from '@/utils/linkTargetAutocomplete.js'
 import { loadRecentBlockIds } from '@/plugins/quick-find/recents.js'
 import { canRenderAsWikilink } from './referenceParser.ts'
@@ -141,13 +144,29 @@ export const aliasCompletions = (
       detail: completionTypeHint(match.typeIds, typeRegistry),
     }))
 
-const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
+export const buildWikilinkSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource =>
   backlinkCompletionSource({
-    getAliases: async (filter: string) => {
-      const workspaceId = repo.activeWorkspaceId
+    getAliases: async (filter, targetTypes) => {
+      const workspaceId = targetTypes.length && block ? block.peek()?.workspaceId : repo.activeWorkspaceId
       if (!workspaceId) {
         console.warn('No active workspace for alias search')
         return []
+      }
+
+      if (targetTypes.length > 0) {
+        const [aliases, dates] = await Promise.all([
+          searchTypedAliasCandidates(repo, {workspaceId, query: filter, targetTypes, limit: 50}),
+          Promise.all(relativeDateCandidates(filter).map(async candidate => {
+            const label = formatRoamDate(candidate.date)
+            const block = await repo.query.aliasLookup({workspaceId, alias: label}).load()
+            return block && readTypeIds(block).some(type => targetTypes.includes(type))
+              ? {label, detail: candidate.phrase}
+              : null
+          })),
+        ])
+        const dateCandidates = dates.filter((date): date is {label: string; detail: string} => date !== null)
+        const dateLabels = new Set(dateCandidates.map(date => date.label))
+        return [...dateCandidates, ...aliasCompletions(aliases, repo.types).filter(alias => !dateLabels.has(alias.label))]
       }
 
       // MRU loads through the memoized ui-state helper, so this is
@@ -186,13 +205,17 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
     },
   })
 
-const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
+export const buildBlockrefSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource =>
   blockrefCompletionSource({
-    searchBlocks: async (filter: string) => {
-      const workspaceId = repo.activeWorkspaceId
+    searchBlocks: async (filter, targetTypes) => {
+      const workspaceId = targetTypes.length && block ? block.peek()?.workspaceId : repo.activeWorkspaceId
       if (!workspaceId) return []
 
       const query = filter.trim()
+      if (targetTypes.length > 0) {
+        const candidates = await searchTypedReferenceCandidates(repo, {workspaceId, query, targetTypes, limit: 12})
+        return candidates.map(candidate => ({id: candidate.id, content: candidate.label}))
+      }
       // Shared merge point (searchSourcesFacet), not a direct
       // `searchByContent` call, so a contributed search source (e.g.
       // semantic search) is reachable from block-ref completion too.

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { getPropertyRows } from '@/utils/propertyNavigation.js'
+import { focusAdjacentPropertyRow, focusPropertyRow, getPropertyRows } from '@/utils/propertyNavigation.js'
 
 const makeRow = (blockId: string): HTMLElement => {
   const row = document.createElement('div')
@@ -11,6 +11,27 @@ const makeRow = (blockId: string): HTMLElement => {
 
 afterEach(() => {
   document.body.innerHTML = ''
+})
+
+it('keeps property-row keyboard focus on the rendered block occurrence', () => {
+  const addScope = (scope: string) => {
+    const shell = document.createElement('div')
+    shell.setAttribute('data-block-shell', 'true')
+    shell.dataset.renderScopeId = scope
+    const row = makeRow('b1')
+    const input = document.createElement('input')
+    row.append(input)
+    shell.append(row)
+    document.body.append(shell)
+    return {row, input}
+  }
+
+  const outline = addScope('outline')
+  const grid = addScope('grid')
+
+  expect(focusPropertyRow('b1', 'first', 'grid')).toBe(true)
+  expect(document.activeElement).toBe(grid.input)
+  expect(focusAdjacentPropertyRow('b1', outline.row, 1, 'outline')).toBe(false)
 })
 
 describe('getPropertyRows visibility', () => {

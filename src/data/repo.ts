@@ -21,7 +21,6 @@ import type {
   Query,
   QueryCtx,
   QueryRegistry,
-  ResolvedTypedBlockQuery,
   RepoTxOptions,
   TypedBlockQuery,
   TypeContribution,
@@ -95,6 +94,7 @@ import {
   type RematerializeProgressListener,
   type RematerializeReport,
   type RematerializeScope,
+  type SyncDrainStats,
 } from '@/data/internals/syncObserver/observer'
 import {
   readSyncDivergence,
@@ -107,13 +107,13 @@ import {
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
 import {
-  CLEAR_REPROJECT_REF_MARKER_SQL,
-  RECORD_REPROJECT_REF_MARKER_SQL,
+  DELETE_KEYED_MARKER_SQL,
+  RECORD_KEYED_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
   SELECT_REPROJECT_REF_MARKERS_SQL,
+  RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX,
   RECONCILE_RESCAN_MARKER_PREFIX,
-  SELECT_RECONCILE_RESCAN_MARKER_SQL,
-  RECORD_RECONCILE_RESCAN_MARKER_SQL,
+  SELECT_KEYED_MARKER_SQL,
 } from './internals/clientSchema'
 import {
   deriveReferenceColumns,
@@ -124,6 +124,7 @@ import {referenceTargetLookupsVia} from './internals/referenceTargetLookups'
 import type { BlockIdPolicy } from './blockId'
 import {
   reprojectOwnersForRowStates,
+  PROPERTY_VALUES_RESOLVED_EVENT,
   type ProjectableRow,
   type ProjectionLookups,
 } from './internals/propertyChildrenProcessor'
@@ -139,7 +140,7 @@ import { awaitWriteAheadHeadroom } from './writeAheadLog'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
-import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
+import { ClientContext, type ClientContextReader, type LayoutSessionRouter, type PreferencesPage } from './clientContext'
 import type { TxDb, TxImpl } from './internals/txEngine'
 import { CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import { ancestorWalk } from './internals/ancestorBatch'
@@ -151,6 +152,9 @@ import {
   KERNEL_FIELD_RECOGNITION_CHANNEL,
   KERNEL_FIELD_OUTLINE_SKIP_KEY,
   KERNEL_FIELD_RECOGNITION_KEY,
+  QUERY_SCHEMA_CHANNEL,
+  QUERY_PROPERTY_SCHEMAS_KEY,
+  QUERY_VIRTUAL_FIELDS_KEY,
   type InvalidationRule,
 } from './invalidation'
 import { KERNEL_PROPERTY_SEEDS } from './properties'
@@ -385,10 +389,15 @@ const registryForWorkspace = (
       ? previous
       : null
 
+const canUseAmbientSchemas = (activeWorkspaceId: string | null, workspaceId: string): boolean =>
+  activeWorkspaceId === null || workspaceId === activeWorkspaceId
+
 export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
   user: User
+  /** See {@link PreferencesPage}. Unset: preferences read from `user`'s own page. */
+  preferencesPage?: PreferencesPage
   /** Read-only mode rejects `BlockDefault` / `References` writes
    *  (`ReadOnlyError`). `UiState` and `UserPrefs` writes still proceed
    *  and upload like any other write — any server-side RLS / FK
@@ -464,6 +473,9 @@ export type SyncObserverOptions = Pick<
   BlocksSyncedObserverArgs,
   'onCycleDetected' | 'throttleMs' | 'onError'
 >
+
+/** Rows `stampReferenceTargets` stamps per write transaction. */
+export const REFERENCE_TARGET_STAMP_CHUNK = 200
 
 /** One CAS-guarded local-columns write for `stampReferenceTargets` —
  *  `reference_target_id` plus the `is_field_form` bit (§7 grammar box), both
@@ -666,6 +678,10 @@ export interface RunOptions {
   description?: string
 }
 
+/** Bound on {@link Repo.onSyncDrainStats}'s held drains, for a session in which
+ *  nothing ever subscribes. */
+const MAX_HELD_SYNC_DRAIN_STATS = 50
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -741,6 +757,9 @@ export class Repo {
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
   private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
   private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
+  private readonly syncDrainStatsListeners = new CallbackSet<[SyncDrainStats]>('Repo.syncDrainStats')
+  /** Drains that ended with nobody subscribed — see {@link onSyncDrainStats}. */
+  private readonly heldSyncDrainStats: SyncDrainStats[] = []
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -907,12 +926,9 @@ export class Repo {
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
    *  (a durable once-ever marker permanently missed definitions/aliases
-   *  that arrived while the app was closed or
-   *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
-   *  the first run, but the LIKE prefilter itself is an O(table) scan on
-   *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
-   *  deep idle, once per workspace open; a partial expression index on the
-   *  content-shape predicate is the escape hatch if it ever matters. */
+   *  that arrived while the app was closed or the workspace inactive).
+   *  Candidates are unresolved reference rows selected through the partial
+   *  reference-candidate index; the sweep runs once per workspace per session. */
   private readonly referenceTargetSweepDone = new Set<string>()
   /** Accumulated `[[name]]`/alias re-derive requests per workspace, drained
    *  in ONE batched scan per drain (never one scan per name). Names only
@@ -1010,6 +1026,17 @@ export class Repo {
     return this._propertyDefinitionRegistry
   }
 
+  /** Active or immediately previous workspace snapshot. An unloaded workspace has no registry. */
+  propertyDefinitionsFor(workspaceId: string): PropertyDefinitionRegistrySnapshot | null {
+    return registryForWorkspace(this._propertyDefinitionRegistry, this._previousPropertyDefinitionRegistry, workspaceId)
+  }
+
+  /** Null for an unloaded workspace. The active workspace can query code schemas while its registry boots. */
+  propertySchemasFor(workspaceId: string): ReadonlyMap<string, AnyPropertySchema> | null {
+    return this.propertyDefinitionsFor(workspaceId)?.schemas ??
+      (canUseAmbientSchemas(this.activeWorkspaceId, workspaceId) ? this.propertySchemas : null)
+  }
+
   /** Active-workspace type-definition registry snapshot (kernel/plugin code
    *  types are NOT in it — those live only in `types`; this is the block-built +
    *  seed side that `getTypeBlockId` and the seed read-only gates read). Null
@@ -1028,16 +1055,12 @@ export class Repo {
     // for a workspace whose definitions aren't loaded (which could resolve a
     // shadowed seed as a winner). The stage-0/active boot window (null snapshot +
     // allow-plain) still uses the transitional resolver.
-    const snapshot = registryForWorkspace(
-      this._propertyDefinitionRegistry,
-      this._previousPropertyDefinitionRegistry,
-      workspaceId,
-    )
+    const snapshot = this.propertyDefinitionsFor(workspaceId)
     return propertySchemaResolverForWorkspace(
       snapshot,
       workspaceId,
       this._propertySeedNameCounts,
-      this.client.activeWorkspaceId === null || workspaceId === this.client.activeWorkspaceId,
+      canUseAmbientSchemas(this.activeWorkspaceId, workspaceId),
     )
   }
 
@@ -1150,15 +1173,15 @@ export class Repo {
       this.db,
       REPROJECT_REF_MARKER_PREFIX,
       SELECT_REPROJECT_REF_MARKERS_SQL,
-      RECORD_REPROJECT_REF_MARKER_SQL,
-      CLEAR_REPROJECT_REF_MARKER_SQL,
+      RECORD_KEYED_MARKER_SQL,
+      DELETE_KEYED_MARKER_SQL,
     )
     this.backfillCompletionClaim = opts.backfillCompletionClaim
     this.backfillSyncGate = opts.backfillSyncGate
       ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
-    this._client = new ClientContext({user: opts.user})
+    this._client = new ClientContext({user: opts.user, preferencesPage: opts.preferencesPage})
     this.isReadOnly = opts.isReadOnly ?? false
     this.now = opts.now ?? Date.now
     this.newId = opts.newId ?? uuidv4
@@ -1209,6 +1232,7 @@ export class Repo {
         propertySeedNameCounts,
         typeDefinitions,
       ) => {
+        const codecsChanged = !sameKeyedMap(this._propertySchemas, propertySchemas, (a, b) => a.codec === b.codec)
         this._types = types
         this._propertySchemas = propertySchemas
         // Retain the outgoing workspace's faithful snapshot when pinning a
@@ -1258,11 +1282,12 @@ export class Repo {
           ...(recognitionChanged ? [KERNEL_FIELD_RECOGNITION_KEY] : []),
           ...(outlineSkipsChanged ? [KERNEL_FIELD_OUTLINE_SKIP_KEY] : []),
         ]
-        if (recognitionKeys.length > 0) {
-          this.handleStore.invalidate({plugin: new Map([
-            [KERNEL_FIELD_RECOGNITION_CHANNEL, recognitionKeys],
-          ])})
+        const registryChanges = new Map<string, string[]>()
+        if (recognitionKeys.length) registryChanges.set(KERNEL_FIELD_RECOGNITION_CHANNEL, recognitionKeys)
+        if (codecsChanged || incomingWorkspaceId !== currentWorkspaceId) {
+          registryChanges.set(QUERY_SCHEMA_CHANNEL, [QUERY_PROPERTY_SCHEMAS_KEY])
         }
+        if (registryChanges.size) this.handleStore.invalidate({plugin: registryChanges})
         if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this.client.activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
@@ -1280,6 +1305,9 @@ export class Repo {
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
+      invalidateQueryableFields: () => {
+        this.handleStore.invalidate({plugin: new Map([[QUERY_SCHEMA_CHANNEL, [QUERY_VIRTUAL_FIELDS_KEY]]])})
+      },
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
     })
@@ -1338,6 +1366,7 @@ export class Repo {
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
       onError: options?.onError,
+      onDrainStats: stats => this.reportSyncDrainStats(stats),
     })
     return this.syncObserver
   }
@@ -1359,6 +1388,39 @@ export class Repo {
     }
   }
 
+  /** Hear what each sync drain did and where its time went. Fires for every
+   *  drain that ran a window — per arrival in steady state — so a listener
+   *  that persists anything picks which ones are worth it.
+   *
+   *  The first subscriber is also handed the drains that ended before anyone
+   *  subscribed: an encrypted workspace's unlock drain, the largest a device
+   *  ever runs, finishes before the app runtime that hosts listeners mounts. */
+  onSyncDrainStats(cb: (stats: SyncDrainStats) => void): () => void {
+    const unsubscribe = this.syncDrainStatsListeners.add(cb)
+    for (const stats of this.heldSyncDrainStats.splice(0)) this.syncDrainStatsListeners.notify(stats)
+    return unsubscribe
+  }
+
+  private reportSyncDrainStats(stats: SyncDrainStats): void {
+    if (this.syncDrainStatsListeners.size > 0) {
+      this.syncDrainStatsListeners.notify(stats)
+      return
+    }
+    const held = this.heldSyncDrainStats
+    held.push(stats)
+    if (held.length > MAX_HELD_SYNC_DRAIN_STATS) {
+      // Over the bound, the smallest drain is the one least worth keeping.
+      held.splice(held.reduce((min, s, i) => (s.rows < held[min]!.rows ? i : min), 0), 1)
+    }
+  }
+
+  /** Treat a workspace's sync deliveries as a bulk load until the returned
+   *  release is called — see `BlocksSyncedObserver.holdBulkLoad` for what that changes
+   *  and who may. */
+  holdBulkSyncLoad(workspaceId: string): () => void {
+    return this.syncObserver?.holdBulkLoad(workspaceId) ?? (() => {})
+  }
+
   /** Manually flush the sync observer — drains any pending `blocks_synced`
    *  changes into `blocks` and walks `handleStore.invalidate(...)`. Tests
    *  use this instead of waiting on the throttle window; it's a real settle
@@ -1369,16 +1431,25 @@ export class Repo {
 
   /** Re-materialize all staged rows after workspace unlock/verification.
    *  Read every row: legacy shadows can incorrectly have `needs_apply = 0`.
-   *  A pass with no deferred/quarantined rows also satisfies one-time recovery.
    *  Returns the pass's report, or null when no observer is running. */
   async drainSyncWorkspace(
     workspaceId: string,
     onProgress?: RematerializeProgressListener,
   ): Promise<RematerializeReport | null> {
+    return this.drainForRecovery(workspaceId, 'all', onProgress)
+  }
+
+  /** A pass with no deferred or quarantined rows also retires the one-time
+   *  reconcile rescan. */
+  private async drainForRecovery(
+    workspaceId: string,
+    scope: RematerializeScope,
+    onProgress?: RematerializeProgressListener,
+  ): Promise<RematerializeReport | null> {
     if (!this.syncObserver) return null
-    const report = await this.syncObserver.drainWorkspace(workspaceId, 'all', onProgress)
+    const report = await this.syncObserver.drainWorkspace(workspaceId, scope, onProgress)
     if (report.deferred === 0 && report.quarantined === 0) {
-      await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
+      await this.db.execute(RECORD_KEYED_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
     }
     return report
   }
@@ -2162,10 +2233,13 @@ export class Repo {
       typeDefinitions: {value: runtime.typeDefinitions},
       valuePresetCores: {value: runtime.valuePresets},
     })
+    facade.propertyDefinitionsFor = runtime.propertyDefinitionRegistryForWorkspace
+    facade.propertySchemasFor = workspaceId => facade.propertyDefinitionsFor(workspaceId)?.schemas ??
+      (canUseAmbientSchemas(runtime.propertySchemaWorkspaceId, workspaceId) ? runtime.propertySchemas : null)
     facade.propertySchemaResolverFor = workspaceId => propertySchemaResolverForWorkspace(
       runtime.propertyDefinitionRegistryForWorkspace(workspaceId), workspaceId,
       runtime.propertySeedNameCounts,
-      runtime.propertySchemaWorkspaceId === null || workspaceId === runtime.propertySchemaWorkspaceId,
+      canUseAmbientSchemas(runtime.propertySchemaWorkspaceId, workspaceId),
     )
     facade.snapshotTypeRegistries = () => ({types: runtime.types, propertySchemas: runtime.propertySchemas})
     return facade
@@ -2538,25 +2612,13 @@ export class Repo {
     return this.dispatchQuery(name)(args).load() as Promise<R>
   }
 
-  private resolveTypedBlockQuery(query: TypedBlockQuery): ResolvedTypedBlockQuery {
-    return normalizeTypedBlockQuery({
-      workspaceId: query.workspaceId,
-      types: query.types,
-      where: query.where,
-      referencedBy: query.referencedBy,
-      match: query.match,
-      exclude: query.exclude,
-      order: query.order,
-    })
-  }
-
   /** Run a typed block query once. `workspaceId` is required: callers
    *  that want the user's currently-active workspace use
    *  `queryActiveWorkspace` instead — making the workspace explicit at
    *  the call site prevents background flows / import runs from silently
    *  mis-scoping on a workspace switch. */
   async queryBlocks(query: TypedBlockQuery): Promise<BlockData[]> {
-    return this.query.typedBlocks(this.resolveTypedBlockQuery(query)).load()
+    return this.query.typedBlocks(normalizeTypedBlockQuery(query)).load()
   }
 
   /** Subscribe to a typed block query. `workspaceId` is required: callers
@@ -2572,8 +2634,11 @@ export class Repo {
       onInitialError?: (error: unknown) => void
     },
   ): Unsubscribe {
-    const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
+    const handle = this.query.typedBlocks(normalizeTypedBlockQuery(query))
     if (options?.freshInitial) {
+      // A projector's registries are what a local transaction encodes with,
+      // so its rows may not wait out a sync backlog's held invalidations.
+      handle.rerunOnStaleMark()
       let initialPending = true
       const unsubscribe = handle.subscribe(rows => {
         if (!initialPending) listener(rows)
@@ -2626,7 +2691,7 @@ export class Repo {
    *  the rows are unchanged. For `ProjectorLifecycle.upsert`, its only caller;
    *  `LoaderHandle.forgetNotifiedValue` carries the reasoning. */
   requireNextBlockDelivery(query: TypedBlockQuery): void {
-    this.query.typedBlocks(this.resolveTypedBlockQuery(query)).forgetNotifiedValue()
+    this.query.typedBlocks(normalizeTypedBlockQuery(query)).forgetNotifiedValue()
   }
 
   /** Active-workspace shorthand for `subscribeBlocks`. Same caveat as
@@ -3385,11 +3450,7 @@ export class Repo {
    *  locally and red on CI. Pinning it wants a Repo whose priming is
    *  injectable, which does not exist yet. */
   private propertyRegistryReadyFor(workspaceId: string): boolean {
-    return registryForWorkspace(
-      this._propertyDefinitionRegistry,
-      this._previousPropertyDefinitionRegistry,
-      workspaceId,
-    ) !== null
+    return this.propertyDefinitionsFor(workspaceId) !== null
   }
 
   /** Is this device caught up right now? Same predicate the scheduler gates
@@ -4263,6 +4324,10 @@ export class Repo {
           // inside, at both ends, where it costs no connection.
           await assertBatchMayWrite()
           const value = await this.tx(async t => {
+            // A backfill writes for the user, not as their edit: none of its
+            // writes is a user write (`SameTxCtx.hasUserWrite`), so no owner
+            // the pass re-projects takes its time as an edit time.
+            ;(t as TxImpl).finishUserWrites()
             this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
             // The claim can change while waiting for this lock, even without
             // an observed sync gap. Check every batch on this transaction's view.
@@ -4484,7 +4549,6 @@ export class Repo {
     }
 
     await this.stampReferenceTargets(updates, stampContext)
-
     this.referenceTargetSweepDone.add(workspaceId)
     // Defense only — pre-sweep scheduling never accumulates. Note the
     // narrow accepted window: an alias/definition arriving between this
@@ -4500,9 +4564,9 @@ export class Repo {
     return referenceTargetLookupsVia(reader)
   }
 
-  /** Chunked raw column stamps, materializer-style: source-NULL (upload
-   *  triggers skip; row_events tags 'sync'), no repo.tx — a tx would advance
-   *  `updated_at` (the LWW row-version) for a purely local derivation.
+  /** Chunked raw column stamps without advancing `updated_at`.
+   * Field rows receive additive repair; named values dispatch settled
+   * projection so derived cell writes cannot materialize over source rows.
    *
    *  Compare-and-set per row (adversarial-review fix): callers scan/derive
    *  outside the write lock, so a concurrent local edit or sync arrival can
@@ -4515,9 +4579,8 @@ export class Repo {
     updates: readonly ReferenceTargetStamp[],
     context: ReferenceTargetStampContext,
   ): Promise<void> {
-    const CHUNK = 200
-    for (let i = 0; i < updates.length; i += CHUNK) {
-      const chunk = updates.slice(i, i + CHUNK)
+    for (let i = 0; i < updates.length; i += REFERENCE_TARGET_STAMP_CHUNK) {
+      const chunk = updates.slice(i, i + REFERENCE_TARGET_STAMP_CHUNK)
       // BOTH gates are re-read per chunk, and the symmetry is the point.
       // `properties_migration` is server-driven (a synced `workspaces` row,
       // no local writer) and `isReadOnly` is mutable and resolved
@@ -4590,6 +4653,10 @@ export class Repo {
       this.handleStore.invalidate(
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
+      if (reproject) {
+        const valueIds = [...snapshots.values()].filter(({after}) => !after.isFieldForm).map(({after}) => after.id)
+        await this.reprojectResolvedPropertyValues(valueIds, context.workspaceId)
+      }
       if (newlyRecognized.length === 0) continue
       try {
         await this.reprojectOwnersOfStampedFieldRows(newlyRecognized, context)
@@ -4606,6 +4673,14 @@ export class Repo {
         )
       }
     }
+  }
+
+  private async reprojectResolvedPropertyValues(valueIds: readonly string[], workspaceId: string): Promise<void> {
+    if (valueIds.length === 0) return
+    await this.tx(async tx => {
+      if (this.isReadOnly || !(await tx.isPropertyChildBackedWorkspace(workspaceId))) return
+      tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId, valueIds}, workspaceId)
+    }, {scope: ChangeScope.References, description: 'project resolved named reference values'})
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into
@@ -4710,12 +4785,8 @@ export class Repo {
       // yet — a generic alias minted mid-session (referencesProcessor enqueues
       // the name when it creates the seat) repairs `[[Foo]]` rows written
       // before page Foo existed. Re-pointing an ALREADY-stamped row is
-      // deliberately NOT done: `reference_target_id`'s only consumers are
-      // property field-row recognition (is-target-a-definition), and
-      // definitions aren't name-resolvable yet, so a non-NULL re-point would
-      // change nothing any reader observes. That reclaim (with the cell
-      // reprojection a raw stamp currently skips) belongs to the auto-claim
-      // work that makes definitions name-resolvable.
+      // deliberately NOT done here: existing bindings are maintained by
+      // the ordinary rename/merge paths; this drain only fills missing targets.
       // Alias forms only (`REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL`): this
       // drain discards anything that isn't `kind === 'alias'` two lines below.
       const candidates = await this.db.getAll<{id: string; content: string}>(
@@ -4759,9 +4830,10 @@ export class Repo {
    * that skip-staled the server's authoritative row under an *old* reconcile
    * gate consumed its `blocks_synced_changes` entry, so a normal queue-driven
    * drain never re-evaluates it — the shadow persists across reloads. This
-   * re-runs the materialization for the workspace via `drainSyncWorkspace`,
-   * which re-reads `blocks_synced` DIRECTLY (bypassing the consumed queue) and
-   * re-applies the gate, un-shadowing the server's value on disk.
+   * re-runs the materialization for the workspace straight from
+   * `blocks_synced` (bypassing the consumed queue) and re-applies the gate,
+   * un-shadowing the server's value on disk. It reads every staged row, or only
+   * the flagged ones under {@link RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}.
    *
    * No special mode is needed anymore: with server-enforced `updated_at`
    * monotonicity, the sole gate already lets the server win on any
@@ -4787,10 +4859,13 @@ export class Repo {
 
   private async runReconcileRescan(workspaceId: string): Promise<void> {
     const key = `${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`
-    const done = await this.db.getOptional<{key: string}>(SELECT_RECONCILE_RESCAN_MARKER_SQL, [key])
+    const done = await this.db.getOptional<{key: string}>(SELECT_KEYED_MARKER_SQL, [key])
     if (done) return
+    const flagsTrusted = await this.db.getOptional<{key: string}>(
+      SELECT_KEYED_MARKER_SQL, [`${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}${workspaceId}`],
+    )
     try {
-      await this.drainSyncWorkspace(workspaceId)
+      await this.drainForRecovery(workspaceId, flagsTrusted ? 'unapplied' : 'all')
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[reconcileRescan] workspace ${workspaceId} failed (will retry next open): ${reason}`)

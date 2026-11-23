@@ -24,7 +24,7 @@ import type { Block } from '@/data/block'
 import { BLOCK_BULLET_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 // A touch must rest on the bullet TOUCH_HOLD_MS within TOUCH_SLOP_PX to pick
 // its block up; the same slop then separates a lifted block from a drag.
-import { suppressNextClick, TOUCH_HOLD_MS, TOUCH_SLOP_PX } from '@/extensions/continuousGestures.js'
+import { allowsBlockGestures, suppressNextClick, TOUCH_HOLD_MS, TOUCH_SLOP_PX } from '@/extensions/continuousGestures.js'
 import { focusBlock } from '@/data/properties.js'
 import { getSelectionStateSnapshot, getUIStateBlock } from '@/data/stateBlocks.js'
 import { activeLayoutSessionElement } from '@/utils/layoutSessionDom.js'
@@ -119,6 +119,7 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     if (event.button !== 0) return
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
     if (repo.isReadOnly) return
+    if (!allowsBlockGestures(event.target)) return
     const bullet = (event.target as Element | null)?.closest?.(`[${BLOCK_BULLET_ATTRIBUTE}]`)
     const row = bullet?.closest<HTMLElement>(ROW_SELECTOR)
     const blockId = row?.dataset.blockId

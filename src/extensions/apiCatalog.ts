@@ -270,7 +270,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: [
       'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUIStateBlock',
       'getUserBlock', 'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
-      'readPluginPref',
+      'preferencesRootId', 'readPluginPref',
     ],
     types: [],
   },
@@ -317,9 +317,16 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/facets.js',
-    description: 'Data-layer facets — definition seeds, property-editor overrides, block-type seeds, and the kernel-page registry.',
-    exports: ['definitionSeedsFacet', 'propertyEditorOverridesFacet', 'systemPagesFacet', 'typeSeedsFacet'],
-    types: ['SystemPage'],
+    description: 'Data-layer facets — definition seeds, property-editor overrides, block-type seeds, the kernel-page registry and queryableFieldsFacet. A QueryableField supplies name, value(alias) returning {sql, params}, encode(operand), optional bounding, and nonempty dependencies. Its value supports comparisons, presence and ordering.',
+    exports: ['definitionSeedsFacet', 'propertyEditorOverridesFacet', 'queryableFieldsFacet', 'systemPagesFacet', 'typeSeedsFacet'],
+    types: ['QueryableField', 'SystemPage'],
+  },
+  {
+    category: 'data',
+    importPath: '@/data/childrenView.js',
+    description: 'childrenViewFacet — a layout that draws a block\'s children its own way declares that list, and the walkers, edit policy and Backspace-merge walk it. Outline-order edits filter stored siblings by published membership. Sorted indents use the drawn neighbour at keypress. Move requires outline order, and insert hooks use request.stillCurrent(tx) before writing.',
+    exports: ['childrenViewFacet', 'propertyDisplayChildrenView', 'surfaceOwnerFacet'],
+    types: ['ChildrenView', 'ChildrenViewContext', 'ChildrenInsertRequest', 'ChildrenInsertDecision', 'ChildrenOrder', 'DrawnChild', 'ListingSurface', 'NestedSurface', 'SurfaceOwner'],
   },
   {
     category: 'data',

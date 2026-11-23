@@ -22,6 +22,7 @@ import {createContributor} from '@/plugins/contributors/profiles'
 import {attributionCreatorsProp} from '@/plugins/contributors/schema'
 import {computeContentHash} from '@/sync/crypto/contentHash'
 import type {Materializability} from '@/sync/transform'
+import {attachmentsDataExtension} from '@/plugins/attachments/dataExtension'
 import {executeCommand} from '../commands'
 import {createTestAgentContext} from './createTestAgentContext'
 import type {AgentRuntimeContext} from '../protocol'
@@ -58,10 +59,11 @@ let context: AgentRuntimeContext
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 
+// The plugin carries its own data extension, as it does in the app runtime.
 const contextWith = (extensions: AppExtension[]) => createTestAgentContext(
   createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}}).repo,
   WS,
-  [staticDataExtensions, ...extensions],
+  [staticDataExtensions.filter(extension => extension !== attachmentsDataExtension), ...extensions],
 )
 
 beforeEach(async () => {

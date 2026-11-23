@@ -1,5 +1,19 @@
+@reference "../../index.css";
+
 .tm-property-field-row {
   container: property-field-row / inline-size;
+}
+
+.tm-property-field-row > .block-body > [data-property-row-layout] > [data-property-name-cell] {
+  transition: background-color 150ms ease;
+}
+
+.tm-property-field-row[data-block-focused] > .block-body > [data-property-row-layout] > [data-property-name-cell] {
+  @apply bg-accent/40;
+}
+
+.tm-property-field-row[data-block-selected] > .block-body > [data-property-row-layout] > [data-property-name-cell] {
+  @apply bg-accent/80;
 }
 
 @container property-field-row (width < 28rem) {

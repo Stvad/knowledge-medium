@@ -12,8 +12,7 @@
  * keystroke from doing something pointless, not an immortality bit — but don't
  * read the guards as a subtree-wide protection when adding one.
  *
- * The CONFIRMATION is scoped the other way round, to everything that will be
- * tombstoned — see {@link confirmBulkDeleteThroughUi}.
+ * The confirmation looks through the entire subtree to count deleted content.
  *
  * Why this is a UI affordance rather than a data-layer guard, and what IS
  * unbypassable instead, is on `BlockDeletionGuard` in `@/extensions/core` —
@@ -22,8 +21,11 @@
  * A bare `block.delete()` in handler code is an ESLint error pointing here —
  * discipline that's checked beats discipline that's remembered.
  */
-import type { SubtreeRow } from '@/data/api'
+import { ChangeScope, type SubtreeRow } from '@/data/api'
+import { deleteBlock, type OccurrenceEdge } from '@/data/mutators'
 import type { Block } from '@/data/block.js'
+import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
+import { isPropertyFieldInstance } from '@/data/propertyChildren'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { resolveDeletionRefusal } from '@/extensions/core.js'
@@ -36,14 +38,7 @@ import { withMoveTransition } from '@/utils/viewTransition.js'
  *  by id). */
 const REFUSAL_TOAST_ID = 'block-deletion-refused'
 
-/** How many blocks one gesture may remove before it has to ask. Counted over
- *  the whole affected set, so the number means the same thing whether the user
- *  selected 30 blocks or pressed Delete on one collapsed page holding 30.
- *
- *  Sized for a confirmation that stays worth reading: one met often enough to
- *  click through without looking is worse than none. If it starts asking about
- *  deletes that look small, read `countBlocksRemovedBy` before changing this
- *  number — what it counts is the likelier cause. */
+/** Ask at this count of affected blocks, as measured by `countBlocksRemovedBy`. */
 export const BULK_DELETE_CONFIRM_THRESHOLD = 20
 
 export interface DeleteThroughUiOptions {
@@ -72,8 +67,21 @@ export interface DeleteThroughUiOptions {
 export const deleteBlockThroughUi = async (
   block: Block,
   options?: DeleteThroughUiOptions,
-): Promise<boolean> =>
-  deleteBlocksThroughUi([block], options)
+): Promise<boolean> => deleteBlocksThroughUi([block], options)
+
+/** Empty Backspace may wait for confirmation; the captured occurrence must survive until deletion. */
+export async function deleteAtOccurrenceThroughUi(
+  block: Block,
+  expected: OccurrenceEdge & {isCurrent: () => boolean},
+  beforeWrite: () => Promise<void>,
+): Promise<boolean> {
+  if (!await confirmTargets([block], beforeWrite)) return false
+  return block.repo.tx(async tx => {
+    if (!await expected.currentRow(tx) || !expected.isCurrent()) return false
+    await tx.run(deleteBlock, {id: block.id})
+    return true
+  }, {scope: ChangeScope.BlockDefault, description: 'remove empty block'})
+}
 
 /** Batch form: refuses the WHOLE call if any block is protected, rather than
  *  half-deleting the set. One toast, and the user's selection is intact so they
@@ -97,6 +105,19 @@ export const deleteBlocksThroughUi = async (
   // without this the dialog says "25 selected blocks" over a 20-block total
   // and the write repeats itself.
   const targets = [...new Map(blocks.map(block => [block.id, block])).values()]
+  if (!await confirmTargets(targets, beforeWrite)) return false
+  const write = async (): Promise<void> => {
+    // Leaf-first so each removal can't disturb the next. Owned here, with the
+    // ancestor-first order `countBlocksRemovedBy` wants, so callers pass one
+    // list in outline order and neither ordering can be got wrong at a site.
+    // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
+    for (const block of targets.toReversed()) await block.delete()
+  }
+  await (animate ? withMoveTransition(write) : write())
+  return true
+}
+
+async function confirmTargets(targets: readonly Block[], beforeWrite?: DeleteThroughUiOptions['beforeWrite']): Promise<boolean> {
   if (!await ensureDeletableThroughUi(targets)) return false
   if (!await confirmBulkDeleteThroughUi(targets)) return false
   if (beforeWrite) {
@@ -106,14 +127,6 @@ export const deleteBlocksThroughUi = async (
     // being such work: without it this is the pass above.
     if (!await ensureDeletableThroughUi(targets)) return false
   }
-  const write = async (): Promise<void> => {
-    // Leaf-first so each removal can't disturb the next. Owned here, with the
-    // ancestor-first order `countBlocksRemovedBy` wants, so callers pass one
-    // list in outline order and neither ordering can be got wrong at a site.
-    // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
-    for (const block of targets.toReversed()) await block.delete()
-  }
-  await (animate ? withMoveTransition(write) : write())
   return true
 }
 
@@ -136,9 +149,7 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
 
 /**
  * User consent for a delete big enough to be worth a second look — true,
- * without asking, for the small deletes that are nearly every gesture. Measured
- * over what the delete REMOVES (`countBlocksRemovedBy`), not over the blocks
- * the gesture names.
+ * without asking, when `countBlocksRemovedBy` is below the threshold.
  *
  * Deliberately not folded into `ensureDeletableThroughUi`: merge runs those
  * guards to veto destroying its source block, but REPARENTS the children, so
@@ -169,34 +180,30 @@ const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Promise<boo
   return ensureDeletableThroughUi(blocks)
 }
 
-/** Live blocks the delete would tombstone — the single owner of what "how many
- *  blocks" means here; `BULK_DELETE_CONFIRM_THRESHOLD` and
- *  `confirmBulkDeleteThroughUi` both defer to it.
- *
- *  The FULL subtree, matching `deleteSubtreeInTx`'s walk, NOT the visible view.
- *  The visible view prunes at a recognized field row and takes that row's whole
- *  branch, including any authored comment thread under a property value — which
- *  the delete removes regardless. Undercounting is the one direction of error
- *  that matters: it can drop the total under the threshold and skip the
- *  question entirely. The price is that machinery rows count too, so a
- *  property-heavy block reads higher than what is on screen; if that starts
- *  asking about deletes that look small, the fix is a data-layer count that
- *  drops machinery without pruning its authored descendants, never a field-row
- *  classifier restated here (issue #738).
- *
- *  Deduping is a saving, not a correctness condition — the count is the same
- *  either way, but a page selected with its 200 children costs 1 query instead
- *  of 201. It only pays when targets arrive ancestor-first, so callers pass
- *  selection order and leave the leaf-first ordering to the delete. */
+/** Recognized field rows count only when directly targeted. Read the structural
+ *  subtree so values and their descendants still count under omitted fields.
+ *  Long chains of field rows can push counted blocks beyond the query's depth limit.
+ *  Deduplication also skips redundant queries for an ancestor-first selection. */
 const countBlocksRemovedBy = async (blocks: readonly Block[]): Promise<number> => {
-  const ids = new Set<string>()
+  const targets = new Set(blocks.map(block => block.id))
+  const seen = new Set<string>()
+  let count = 0
   for (const block of blocks) {
-    if (ids.has(block.id)) continue
+    if (seen.has(block.id)) continue
     const rows = await block.repo.runQuery<SubtreeRow[]>(
       'core.subtree',
       {id: block.id},
     )
-    for (const row of rows) ids.add(row.id)
+    const [root] = rows
+    if (!root) continue
+    const isFieldDefinition = repoFieldDefinitionTest(block.repo, root.workspaceId)
+    for (const row of rows) {
+      if (seen.has(row.id)) continue
+      seen.add(row.id)
+      if (targets.has(row.id) || !isPropertyFieldInstance(row, isFieldDefinition)) {
+        count++
+      }
+    }
   }
-  return ids.size
+  return count
 }

@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog.js'
+import { retryRejectedUpload } from '@/data/rejectedUploads.js'
 import { extractBlockDetails, parseRejectionError, shortenId, summarizeOp } from './rejectedHelpers.ts'
 
 interface RejectedRow {
@@ -49,21 +50,17 @@ export function RejectionDialog({open, onOpenChange}: Props) {
   const workspaceLabel = (workspaceId: string): string =>
     workspaceNameById.get(workspaceId) ?? shortenId(workspaceId)
   const [copiedId, setCopiedId] = useState<number | null>(null)
+  const [retryError, setRetryError] = useState<{txId: number, message: string} | null>(null)
 
+  // The server refused the transaction, so it goes back as one. If the cause
+  // persists (a parent still missing server-side) it is quarantined again.
   const handleRetry = async (row: RejectedRow) => {
-    // Re-queue the rejected op for upload. If the underlying issue
-    // hasn't been fixed (e.g. parent still missing server-side), the
-    // upload handler will quarantine it again on the next pass.
-    await db.writeTransaction(async tx => {
-      await tx.execute(
-        'INSERT INTO ps_crud (tx_id, data) VALUES (?, ?)',
-        [row.tx_id, row.data],
-      )
-      await tx.execute(
-        'DELETE FROM ps_crud_rejected WHERE id = ?',
-        [row.id],
-      )
-    })
+    setRetryError(null)
+    try {
+      await retryRejectedUpload(db, row.tx_id)
+    } catch (error) {
+      setRetryError({txId: row.tx_id, message: error instanceof Error ? error.message : String(error)})
+    }
   }
 
   const handleDismiss = async (row: RejectedRow) => {
@@ -142,13 +139,16 @@ export function RejectionDialog({open, onOpenChange}: Props) {
                     <div className="mt-1 text-xs text-muted-foreground">
                       {new Date(row.rejected_at).toLocaleString()}
                     </div>
+                    {retryError?.txId === row.tx_id && (
+                      <div className="mt-1 text-xs text-destructive">{retryError.message}</div>
+                    )}
                   </div>
                   <div className="flex shrink-0 flex-col gap-1">
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => handleRetry(row)}
-                      title="Re-queue this change for upload"
+                      title="Re-queue this change, with the rest of its transaction, for upload"
                     >
                       <RotateCcw className="mr-1 h-3.5 w-3.5"/>
                       Retry
