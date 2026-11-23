@@ -1,1 +1,1 @@
-export{Hc as propertiesMigrationPlugin}from"../../../chunks/app-SsbO_flp.js";
+export{Hc as propertiesMigrationPlugin}from"../../../chunks/app-CMicRqj9.js";

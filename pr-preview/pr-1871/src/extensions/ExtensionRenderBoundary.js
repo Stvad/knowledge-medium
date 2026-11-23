@@ -1,1 +1,1 @@
-export{rU as ExtensionRenderBoundary}from"../../chunks/app-SsbO_flp.js";
+export{aU as ExtensionRenderBoundary}from"../../chunks/app-CMicRqj9.js";

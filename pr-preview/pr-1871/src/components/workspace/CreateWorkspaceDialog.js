@@ -1,1 +1,1 @@
-export{Vk as CreateWorkspaceDialog}from"../../../chunks/app-SsbO_flp.js";
+export{Vk as CreateWorkspaceDialog}from"../../../chunks/app-CMicRqj9.js";

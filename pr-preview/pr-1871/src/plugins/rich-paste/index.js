@@ -1,1 +1,1 @@
-export{XC as richPastePlugin}from"../../../chunks/app-SsbO_flp.js";
+export{XC as richPastePlugin}from"../../../chunks/app-CMicRqj9.js";

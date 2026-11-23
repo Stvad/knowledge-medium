@@ -1,1 +1,1 @@
-export{ip as blockTagsConfigUi}from"../../../chunks/app-SsbO_flp.js";
+export{ip as blockTagsConfigUi}from"../../../chunks/app-CMicRqj9.js";

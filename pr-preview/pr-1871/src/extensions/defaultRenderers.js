@@ -1,1 +1,1 @@
-export{gz as defaultRegistry,_z as defaultRendererContributions,vz as defaultRenderersExtension}from"../../chunks/app-SsbO_flp.js";
+export{_z as defaultRegistry,vz as defaultRendererContributions,yz as defaultRenderersExtension}from"../../chunks/app-CMicRqj9.js";

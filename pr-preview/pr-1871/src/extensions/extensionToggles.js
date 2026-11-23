@@ -1,1 +1,1 @@
-export{AR as extensionDisplayName,jR as extensionName,MR as userExtensionShellToggle,NR as userExtensionToggle}from"../../chunks/app-SsbO_flp.js";
+export{jR as extensionDisplayName,MR as extensionName,NR as userExtensionShellToggle,PR as userExtensionToggle}from"../../chunks/app-CMicRqj9.js";

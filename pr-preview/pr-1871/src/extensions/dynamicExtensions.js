@@ -1,1 +1,1 @@
-export{wR as dynamicExtensionsExtension}from"../../chunks/app-SsbO_flp.js";
+export{TR as dynamicExtensionsExtension}from"../../chunks/app-CMicRqj9.js";

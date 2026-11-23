@@ -1,1 +1,1 @@
-export{j6 as agentDispatchCompanionDataExtension}from"../../../chunks/app-SsbO_flp.js";
+export{j6 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CMicRqj9.js";

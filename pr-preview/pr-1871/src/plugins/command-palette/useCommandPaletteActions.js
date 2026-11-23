@@ -1,1 +1,1 @@
-export{GP as useCommandPaletteActions}from"../../../chunks/app-SsbO_flp.js";
+export{GP as useCommandPaletteActions}from"../../../chunks/app-CMicRqj9.js";

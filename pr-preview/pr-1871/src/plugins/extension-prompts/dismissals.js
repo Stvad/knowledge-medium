@@ -1,1 +1,1 @@
-export{jL as ExtensionPromptDismissalStore,ML as extensionPromptDismissals,NL as useExtensionPromptDismissals}from"../../../chunks/app-SsbO_flp.js";
+export{ML as ExtensionPromptDismissalStore,NL as extensionPromptDismissals,PL as useExtensionPromptDismissals}from"../../../chunks/app-CMicRqj9.js";

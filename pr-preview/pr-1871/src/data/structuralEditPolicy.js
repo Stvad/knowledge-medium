@@ -1,1 +1,1 @@
-export{YI as indentDrawnBlock,XI as memberMergePlacement,ZI as moveDrawnBlock,QI as outdentDrawnBlock,$I as resolveStructuralEditPolicy,eL as structuralEditPolicyForBlock}from"../../chunks/app-SsbO_flp.js";
+export{$I as indentDrawnBlock,eL as isSameScopeQueryMember,tL as memberMergePlacement,nL as moveDrawnBlock,rL as outdentDrawnBlock,iL as resolveStructuralEditPolicy,aL as structuralEditPolicyForBlock}from"../../chunks/app-CMicRqj9.js";

@@ -1,1 +1,1 @@
-export{JI as insertDrawnBlock}from"../../chunks/app-SsbO_flp.js";
+export{JI as insertDrawnBlock}from"../../chunks/app-CMicRqj9.js";
