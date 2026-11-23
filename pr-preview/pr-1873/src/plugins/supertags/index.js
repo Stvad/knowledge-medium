@@ -1,0 +1,1 @@
+export{rn as supertagsPlugin}from"../../../chunks/app-CeoayB1P.js";

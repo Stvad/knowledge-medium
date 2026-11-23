@@ -1,0 +1,1 @@
+export{Fu as requestPersistenceActionContribution}from"../../../chunks/app-CeoayB1P.js";

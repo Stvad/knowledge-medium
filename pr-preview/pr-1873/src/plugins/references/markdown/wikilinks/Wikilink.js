@@ -1,0 +1,1 @@
+export{PS as Wikilink}from"../../../../../chunks/app-CeoayB1P.js";

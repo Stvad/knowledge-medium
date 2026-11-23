@@ -1,0 +1,1 @@
+export{vY as adoptOrCreatePropertySchema}from"../../chunks/app-CeoayB1P.js";

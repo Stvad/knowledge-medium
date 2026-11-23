@@ -1,0 +1,1 @@
+export{Qr as perfMonitorPlugin}from"../../../chunks/app-CeoayB1P.js";

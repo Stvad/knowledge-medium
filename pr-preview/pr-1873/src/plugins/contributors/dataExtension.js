@@ -1,0 +1,1 @@
+export{G2 as contributorsDataExtension}from"../../../chunks/app-CeoayB1P.js";

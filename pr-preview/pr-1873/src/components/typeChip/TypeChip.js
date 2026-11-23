@@ -1,0 +1,1 @@
+export{_I as TypeChip}from"../../../chunks/app-CeoayB1P.js";

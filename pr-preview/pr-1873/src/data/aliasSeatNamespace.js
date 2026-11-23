@@ -1,0 +1,1 @@
+export{Bdt as aliasSeatNamespacesInTx,Vdt as resolveAliasSeatNamespaces}from"../../chunks/app-CeoayB1P.js";

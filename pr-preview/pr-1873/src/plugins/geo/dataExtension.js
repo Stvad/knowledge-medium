@@ -1,0 +1,1 @@
+export{f$ as geoDataExtension}from"../../../chunks/app-CeoayB1P.js";

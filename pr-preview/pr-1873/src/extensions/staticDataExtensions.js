@@ -1,0 +1,1 @@
+export{QX as staticDataExtensions}from"../../chunks/app-CeoayB1P.js";

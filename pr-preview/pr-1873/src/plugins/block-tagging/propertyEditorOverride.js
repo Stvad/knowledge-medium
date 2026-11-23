@@ -1,0 +1,1 @@
+export{rp as blockTagsConfigUi}from"../../../chunks/app-CeoayB1P.js";

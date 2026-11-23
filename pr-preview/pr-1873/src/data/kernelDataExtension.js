@@ -1,0 +1,1 @@
+export{Eet as kernelDataExtension}from"../../chunks/app-CeoayB1P.js";

@@ -1,0 +1,1 @@
+export{kP as openKeybindingsSettingsAction}from"../../../chunks/app-CeoayB1P.js";

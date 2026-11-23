@@ -1,0 +1,1 @@
+export{lc as propertyReadContentContribution}from"../../../chunks/app-CeoayB1P.js";

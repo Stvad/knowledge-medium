@@ -1,0 +1,1 @@
+export{Hc as MigrationGate}from"../../../chunks/app-CeoayB1P.js";

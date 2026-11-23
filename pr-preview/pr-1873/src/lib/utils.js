@@ -1,0 +1,1 @@
+export{g5 as cn}from"../../chunks/app-CeoayB1P.js";
