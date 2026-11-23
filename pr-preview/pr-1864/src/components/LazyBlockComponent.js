@@ -1,0 +1,1 @@
+export{oz as LazyBlockComponent}from"../../chunks/app-DGbU54eU.js";

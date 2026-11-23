@@ -1,0 +1,1 @@
+export{NS as geoContentDecoratorContribution}from"../../../chunks/app-DGbU54eU.js";

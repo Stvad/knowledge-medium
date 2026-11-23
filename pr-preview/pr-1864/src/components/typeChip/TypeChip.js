@@ -1,0 +1,1 @@
+export{TI as TypeChip}from"../../../chunks/app-DGbU54eU.js";

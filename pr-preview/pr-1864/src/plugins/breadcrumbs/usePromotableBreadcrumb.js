@@ -1,0 +1,1 @@
+export{ZO as usePromotableBreadcrumb}from"../../../chunks/app-DGbU54eU.js";

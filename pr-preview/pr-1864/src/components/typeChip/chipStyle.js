@@ -1,0 +1,1 @@
+export{EI as chipStyle}from"../../../chunks/app-DGbU54eU.js";

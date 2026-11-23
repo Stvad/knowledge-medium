@@ -1,0 +1,1 @@
+export{pp as blockTagsConfigUi}from"../../../chunks/app-DGbU54eU.js";

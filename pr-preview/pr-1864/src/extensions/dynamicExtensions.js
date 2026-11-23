@@ -1,0 +1,1 @@
+export{TR as dynamicExtensionsExtension}from"../../chunks/app-DGbU54eU.js";
