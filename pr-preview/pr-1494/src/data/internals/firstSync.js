@@ -1,1 +1,1 @@
-export{Bet as onFirstSync,Vet as onSyncSettled}from"../../../chunks/app-DA-dge-H.js";
+export{att as onFirstSync,ott as onSyncSettled}from"../../../chunks/app-D0ruc82j.js";

@@ -1,1 +1,1 @@
-export{MW as typePropertyGroups}from"../../chunks/app-DA-dge-H.js";
+export{XW as typePropertyGroups}from"../../chunks/app-D0ruc82j.js";

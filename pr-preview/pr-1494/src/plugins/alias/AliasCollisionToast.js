@@ -1,1 +1,1 @@
-export{WC as AliasCollisionToast}from"../../../chunks/app-DA-dge-H.js";
+export{tw as AliasCollisionToast}from"../../../chunks/app-D0ruc82j.js";

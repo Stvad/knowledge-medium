@@ -1,1 +1,1 @@
-export{NI as exampleExtensions,PI as insertExampleExtensionsUnder}from"../../chunks/app-DA-dge-H.js";
+export{ZI as exampleExtensions,QI as insertExampleExtensionsUnder}from"../../chunks/app-D0ruc82j.js";
