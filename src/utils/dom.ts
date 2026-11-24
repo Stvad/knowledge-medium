@@ -36,7 +36,7 @@ const CLIPPING_OVERFLOW: ReadonlySet<string> = new Set(['auto', 'scroll', 'overl
 
 /** Where `element` can actually be seen: the window, clipped by EVERY ancestor
  *  between it and the root that clips its overflow, a scrollport or a box that
- *  clips without scrolling (the comments margin's column).
+ *  clips without scrolling.
  *
  *  All of them, not just the nearest: panes nest. A note row inside the
  *  video-notes aside sits in that aside's scrollport, and the whole pane is

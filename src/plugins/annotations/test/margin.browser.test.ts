@@ -1,0 +1,300 @@
+import {mkdtemp, rm} from 'node:fs/promises'
+import {resolve} from 'node:path'
+import {chromium, type Browser, type Locator, type Page} from 'playwright'
+import {createServer, type ViteDevServer} from 'vite'
+import {afterAll, afterEach, beforeAll, beforeEach, expect, it} from 'vitest'
+import type {createMarginFixtureOutline, seedMarginFixture} from './marginFixture'
+
+let server: ViteDevServer | undefined
+let browser: Browser | undefined
+let cacheDir: string | undefined
+let origin: string
+let fixtureUrl: string
+let page: Page
+let fixture: Awaited<ReturnType<typeof seedMarginFixture>>
+
+beforeAll(async () => {
+  cacheDir = await mkdtemp(resolve('node_modules/.vite-margin-browser-'))
+  server = await createServer({
+    cacheDir,
+    envFile: false,
+    logLevel: 'error',
+    server: {host: '127.0.0.1', port: 0, watch: null, forwardConsole: false},
+  })
+  await server.listen()
+  const localUrl = server.resolvedUrls?.local[0]
+  if (!localUrl) throw new Error('The browser fixture server has no local URL')
+  origin = localUrl
+
+  browser = await chromium.launch({
+    headless: true,
+    channel: 'chromium',
+    // Apply each native wheel delta in one step for the geometry assertions.
+    args: ['--disable-smooth-scrolling'],
+  })
+})
+
+beforeEach(async () => {
+  if (!browser) throw new Error('Chromium did not start')
+  page = await browser.newPage({viewport: {width: 1440, height: 780}})
+  const pageErrors: string[] = []
+  page.on('pageerror', error => pageErrors.push(error.message))
+  page.on('console', message => {
+    if (message.type() === 'error') pageErrors.push(message.text())
+  })
+  await page.addInitScript(() => {
+    localStorage.setItem('ftm.localOnly', 'true')
+    localStorage.setItem('ftm.user', JSON.stringify({id: 'margin-fixture', name: 'Fixture Reviewer'}))
+  })
+  await page.goto(origin, {waitUntil: 'commit', timeout: 15_000})
+  try {
+    await page.waitForFunction(() => !!window.__omniliner?.repo?.activeWorkspaceId &&
+      !!document.querySelector('[data-panel-active="true"]'), null, {timeout: 75_000})
+  } catch (cause) {
+    const text = await page.locator('body').innerText()
+    throw new Error(`Local app did not open its panel. ${text}\n${pageErrors.join('\n')}`, {cause})
+  }
+  fixtureUrl = new URL('/src/plugins/annotations/test/marginFixture.ts', origin).href
+  const prepared = await page.evaluate<Awaited<ReturnType<typeof createMarginFixtureOutline>>>(
+    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.createMarginFixtureOutline())`,
+  )
+  await page.goto(new URL(prepared.hash, origin).href, {waitUntil: 'commit', timeout: 15_000})
+  const root = outline().locator(`[data-block-shell][data-block-id="${prepared.outlineId}"]`)
+  await root.waitFor({timeout: 10_000})
+  const {firstSource} = prepared
+  await row({targetId: firstSource.id}).getByText(firstSource.content, {exact: true}).waitFor({timeout: 10_000})
+  fixture = await page.evaluate<Awaited<ReturnType<typeof seedMarginFixture>>>(
+    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture(${JSON.stringify(prepared)}))`,
+  )
+  await root.waitFor({timeout: 10_000})
+  await card(fixture.first).waitFor({timeout: 10_000})
+  await margin().and(page.locator('[aria-busy="false"]')).waitFor({timeout: 10_000})
+})
+
+afterEach(async () => {
+  await page?.close()
+})
+
+afterAll(async () => {
+  await browser?.close()
+  await server?.close()
+  if (cacheDir) await rm(cacheDir, {recursive: true, force: true})
+})
+
+const margin = () => page.getByRole('complementary', {name: 'Comments margin'})
+const outline = () => page.locator('[data-panel-active="true"] [data-panel-scrollport]')
+const card = (thread: {threadId: string}) => margin().locator(`[data-margin-card="${thread.threadId}"]`)
+const row = (thread: {targetId: string}) => outline().locator(`[data-block-shell][data-block-id="${thread.targetId}"]`)
+const scrollTop = () => outline().evaluate(port => port.scrollTop)
+const box = async (locator: Locator) => {
+  const bounds = await locator.boundingBox({timeout: 5_000})
+  if (!bounds) throw new Error('The element has no bounding box')
+  return bounds
+}
+
+const renderFrames = () => page.evaluate(() => new Promise<void>(resolve =>
+  requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+
+const positionCard = async (locator: Locator, fromTop: number) => {
+  await expect.poll(async () => {
+    const [port, current] = await Promise.all([box(outline()), box(locator)])
+    const delta = current.y - port.y - fromTop
+    if (Math.abs(delta) >= 3) {
+      await outline().evaluate((element, delta) => { element.scrollTop += delta }, delta)
+    }
+    return Math.abs(delta)
+  }, {timeout: 5_000}).toBeLessThan(3)
+}
+
+const wheelOutline = async (delta: number) => {
+  const before = await scrollTop()
+  await page.mouse.wheel(0, delta)
+  await expect.poll(async () => Math.abs(await scrollTop() - before - delta), {timeout: 3_000})
+    .toBeLessThanOrEqual(2)
+    .catch(async error => {
+      throw new Error(`Wheel ${delta} px moved the outline by ${(await scrollTop()) - before} px`, {cause: error})
+    })
+}
+
+it('scrolls by each wheel delta over an active card and the blank margin', async () => {
+  const first = card(fixture.first)
+  const textFrame = outline().locator('[data-panel-text-frame]')
+  const outlineRowText = (index: number) => textFrame.getByText(`Outline row ${index} with alpha, beta, and gamma.`, {exact: true})
+  // Traverse the lazy rows once so wheel deltas compare measured geometry.
+  await outlineRowText(35).waitFor({timeout: 5_000})
+  await outline().evaluate(port => { port.scrollTop = (port.scrollHeight - port.clientHeight) / 2 })
+  await outlineRowText(55).waitFor({timeout: 5_000})
+  await outline().evaluate(port => { port.scrollTop = port.scrollHeight })
+  await expect.poll(() => textFrame.getByText(/^Outline row \d+ with alpha, beta, and gamma\.$/).count(), {timeout: 5_000})
+    .toBe(fixture.rowCount)
+  await positionCard(first, 94)
+  const firstPill = row(fixture.first).getByRole('button', {name: '3 open comment threads'})
+  const offsetAtSelection = await scrollTop()
+  await firstPill.click({timeout: 5_000})
+  await expect.poll(() => firstPill.getAttribute('aria-expanded')).toBe('true')
+  await renderFrames()
+  expect(await first.evaluate(element => element.contains(document.activeElement))).toBe(false)
+  expect(await scrollTop()).toBe(offsetAtSelection)
+  const start = await box(first)
+  await page.mouse.move(start.x + start.width / 2, start.y + 14)
+  for (const delta of [18, 18, -12, 18, -10]) await wheelOutline(delta)
+  const end = await box(first)
+  expect(Math.abs(end.y - start.y + 32)).toBeLessThan(2)
+
+  const sparse = card(fixture.sparse)
+  await positionCard(sparse, 380)
+  const gap = await box(sparse)
+  const x = gap.x + gap.width / 2
+  const y = gap.y - 120
+  expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('[data-margin-card]'), [x, y] as const))
+    .toBe(false)
+  await page.mouse.move(x, y)
+  for (const delta of [16, -12, 16]) await wheelOutline(delta)
+  expect(Math.abs((await box(sparse)).y - gap.y + 20)).toBeLessThan(2)
+
+  for (const control of [
+    page.getByRole('separator', {name: 'Resize comments margin'}),
+    page.getByRole('button', {name: 'Close comments margin'}),
+  ]) {
+    const before = await box(control)
+    await control.hover({timeout: 5_000})
+    await wheelOutline(18)
+    expect((await box(control)).y).toBeCloseTo(before.y, 0)
+  }
+})
+
+it('keeps tall card bodies scrollable and moves the outline at both ends', async () => {
+  const tall = card(fixture.tall)
+  await row(fixture.tall).getByRole('button', {name: '1 open comment thread', exact: true}).click({timeout: 5_000})
+  await tall.getByText('Review paragraph 48.', {exact: false}).waitFor({state: 'attached', timeout: 5_000})
+  await positionCard(tall, 50)
+  const body = tall.locator('[data-margin-card-body]')
+  const bodyOffset = () => body.evaluate(element => element.scrollTop)
+  const remainingInBody = () => body.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)
+  expect(await remainingInBody()).toBeGreaterThan(200)
+
+  const bounds = await box(body)
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + 100)
+  const before = await scrollTop()
+  const beforeBody = await bodyOffset()
+  await page.mouse.wheel(0, 36)
+  await expect.poll(async () => (await bodyOffset()) - beforeBody, {timeout: 3_000}).toBe(36)
+  expect(await scrollTop()).toBe(before)
+
+  await body.evaluate(element => { element.scrollTop = element.scrollHeight })
+  await wheelOutline(24)
+  expect(await remainingInBody()).toBeLessThanOrEqual(1)
+
+  await body.evaluate(element => { element.scrollTop = 0 })
+  await wheelOutline(-24)
+  expect(await bodyOffset()).toBe(0)
+})
+
+it('keeps a partially visible card under its click', async () => {
+  const displaced = card(fixture.displaced)
+  const port = await box(outline())
+  const {height} = await box(displaced)
+  await positionCard(displaced, -height / 2)
+  const clipped = await box(displaced)
+  expect(clipped.y).toBeLessThan(port.y)
+  expect(clipped.y + clipped.height).toBeGreaterThan(port.y + 20)
+  const offset = await scrollTop()
+  const text = await box(displaced.getByText('Second card in a dense group.', {exact: true}))
+  const textMiddle = text.y + text.height / 2
+  expect(textMiddle).toBeGreaterThan(port.y)
+  await page.mouse.click(text.x + 6, textMiddle)
+  await displaced.getByRole('button', {name: 'Clear comment selection'}).waitFor({timeout: 5_000})
+  await renderFrames()
+  expect(await scrollTop()).toBe(offset)
+  expect((await box(displaced)).y).toBeCloseTo(clipped.y, 0)
+})
+
+it('reveals and focuses a displaced card with Enter on its source', async () => {
+  const reveal = card(fixture.reveal)
+  const source = row(fixture.reveal).getByRole('button', {name: '1 open comment thread', exact: true})
+  await source.scrollIntoViewIfNeeded({timeout: 5_000})
+  const port = await box(outline())
+  expect((await box(reveal)).y).toBeGreaterThan(port.y + port.height)
+  await source.focus({timeout: 5_000})
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => {
+    const [port, revealed] = await Promise.all([box(outline()), box(reveal)])
+    return revealed.y >= port.y && revealed.y + revealed.height <= port.y + port.height
+  }, {timeout: 5_000}).toBe(true)
+  expect(await reveal.evaluate(element => element === document.activeElement)).toBe(true)
+
+  const offset = await scrollTop()
+  await page.keyboard.press('Tab')
+  const focusedControl = await box(reveal.locator(':focus'))
+  expect(focusedControl.y).toBeGreaterThanOrEqual(port.y)
+  expect(focusedControl.y + focusedControl.height).toBeLessThanOrEqual(port.y + port.height)
+  expect(await scrollTop()).toBeCloseTo(offset, 0)
+
+  await page.mouse.move(port.x + 20, port.y + port.height / 2)
+  await wheelOutline(48)
+  await wheelOutline(-48)
+  expect(await scrollTop()).toBeCloseTo(offset, 0)
+})
+
+it('keeps an open thread usable while preparing a closed sibling with nested replies', async () => {
+  const open = card(fixture.first)
+  const closed = card(fixture.closed)
+  await open.getByText('First card in a dense group.', {exact: true}).waitFor({timeout: 5_000})
+  expect(await closed.count()).toBe(0)
+  await page.evaluate(`import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.holdChildList(${JSON.stringify(fixture.closed.reply)}))`)
+
+  await page.getByRole('button', {name: 'Show closed', exact: true}).click({timeout: 5_000})
+  await page.getByRole('button', {name: 'Hide closed', exact: true}).waitFor({timeout: 5_000})
+  const pending = () => page.evaluate(({threadId, reply}) => ({
+    requested: window.marginFixtureChildList.requested,
+    mounted: document.querySelector(`[data-margin-card="${threadId}"]`) !== null,
+    childList: window.__omniliner?.repo?.query.childIds({id: reply, hydrate: true, propertyChildren: 'none'}).status(),
+  }), fixture.closed)
+  await expect.poll(pending, {timeout: 5_000}).toMatchObject({requested: true, mounted: false})
+
+  await row(fixture.first).getByRole('button', {name: '3 open comment threads'}).click({timeout: 5_000})
+  await open.getByRole('button', {name: 'Clear comment selection'}).waitFor({timeout: 5_000})
+  expect(await closed.count()).toBe(0)
+
+  await page.evaluate(threadId => {
+    const gate = window.marginFixtureChildList
+    const observer = new MutationObserver(() => {
+      const card = document.querySelector<HTMLElement>(`[data-margin-card="${threadId}"]`)
+      if (!card?.style.transform || card.style.opacity === '0' || card.hidden) return
+      gate.firstPlacedText = card.innerText
+      observer.disconnect()
+    })
+    observer.observe(document.body, {childList: true, attributes: true, subtree: true, attributeFilter: ['style', 'hidden']})
+    gate.release()
+  }, fixture.closed.threadId)
+  await expect.poll(() => page.evaluate(() => window.marginFixtureChildList.firstPlacedText), {timeout: 5_000})
+    .toContain(fixture.closed.deepReplyText)
+  await closed.getByRole('button', {name: 'Reopen', exact: true}).waitFor({timeout: 5_000})
+  expect(await open.getByRole('button', {name: 'Clear comment selection'}).count()).toBe(1)
+})
+
+it('can wheel past the final card and back', async () => {
+  const port = await box(outline())
+  const limits = () => outline().evaluate(element => ({
+    offset: element.scrollTop,
+    maximum: element.scrollHeight - element.clientHeight,
+  }))
+  await page.mouse.move(port.x + 20, port.y + port.height / 2)
+  for (let step = 0; step < 20; step++) {
+    const {offset, maximum} = await limits()
+    if (maximum - offset <= 1) break
+    await page.mouse.wheel(0, 216)
+    await expect.poll(scrollTop, {timeout: 3_000}).toBeGreaterThan(offset)
+  }
+  const last = card(fixture.last)
+  const [after, final] = await Promise.all([box(outline()), box(last)])
+  expect(final.y).toBeGreaterThanOrEqual(after.y)
+  expect(final.y + final.height).toBeLessThanOrEqual(after.y + after.height)
+  const bottom = await limits()
+  expect(bottom.maximum - bottom.offset).toBeLessThanOrEqual(1)
+  await page.mouse.move(final.x + 8, final.y + final.height / 2)
+  await page.mouse.wheel(0, 140)
+  await renderFrames()
+  expect(await limits()).toEqual(bottom)
+  await wheelOutline(-24)
+})

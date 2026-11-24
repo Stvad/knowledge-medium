@@ -140,6 +140,9 @@ export interface BlockContextType {
      *  one rendered occurrence of that block, even when the same block is
      *  visible in the main outline and one or more embeds/backlink rows. */
     renderScopeId?: string
+    /** Mount children immediately in this render scope when its content must
+     *  be measured as a whole. Embedded surfaces retain their own policy. */
+    eagerChildrenScope?: string
     /** Name written to the block shell's `data-block-surface`. Blocks in the
      *  same render scope can have different names. */
     surfaceName?: string

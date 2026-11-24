@@ -2,6 +2,11 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
+import { BlockContext } from '@/context/block'
+import { RepoContext } from '@/context/repo'
+import * as login from '@/components/Login'
+import { BlockFocusShellDecorator } from '@/extensions/BlockFocusShellDecorator'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { ChangeScope, type User } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -212,6 +217,50 @@ describe('PanelCursorFollowsScroll', () => {
     await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)).toEqual({blockId: 'b', renderScopeId: SCOPE})
     })
+  })
+
+  it('preserves the viewport when another wheel clips a followed row before its focus effect, but reveals it on explicit focus', async () => {
+    using currentUser = vi.spyOn(login, 'useUser')
+    currentUser.mockReturnValue({id: USER.id, name: 'Fixture user'})
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, cursorFollowsScrollPlugin]))
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    render(<PanelCursorFollowsScroll block={panel}/>)
+    dom.moveRow('a', -400)
+    dom.moveRow('b', 20)
+    dom.scroll()
+    await afterSettling(() => {
+      expect(peekFocusedBlockLocation(panel)).toEqual({blockId: 'b', renderScopeId: SCOPE})
+    })
+
+    // The wheel wins the race with the newly focused shell's React commit.
+    dom.moveRow('b', -40)
+    const shell = dom.shellOf('b') as HTMLDivElement
+    const content = shell.querySelector('div')!
+    const reveal = vi.fn()
+    content.scrollIntoView = reveal
+    const context = {panelId: PANEL_ID, renderScopeId: SCOPE}
+    const {getByTestId} = render(
+      <RepoContext value={repo}>
+        <BlockContext value={context}>
+          <BlockFocusShellDecorator
+            resolveContext={{block: repo.block('b'), repo, uiStateBlock: panel, types: [], isTopLevel: false, blockContext: context}}
+            shellRef={{current: shell}}
+            contentRef={{current: content}}
+            state={{shellProps: {'data-block-shell': 'true', 'data-block-id': 'b', 'data-editing': 'false', tabIndex: 0}, shortcutSurfaceOptions: {}}}
+          >
+            {({shellProps}) => <div data-testid="decorated" {...shellProps}/>}
+          </BlockFocusShellDecorator>
+        </BlockContext>
+      </RepoContext>,
+    )
+    expect(getByTestId('decorated').dataset.blockFocused).toBe('true')
+    expect(reveal).not.toHaveBeenCalled()
+
+    await act(() => focusBlock(panel, 'a', {renderScopeId: SCOPE}))
+    await act(() => focusBlock(panel, 'b', {renderScopeId: SCOPE}))
+    expect(reveal).toHaveBeenCalledWith({behavior: 'smooth', block: 'nearest'})
   })
 
   it('leaves a cursor that is still on screen alone', async () => {
