@@ -426,29 +426,16 @@ describe('alias.collision — tombstoned claimants are not collisions', () => {
   })
 })
 
-// ──── Regression: restore / undo must re-trigger collision detection ────
+// ──── Restore must not resurrect a claim taken in the gap ────
 //
 // Soft-delete removes a row from `block_aliases`, freeing its alias for
-// reuse. If another block claims that alias in the gap, restoring (or
-// undoing the delete on) the original row would put two live blocks
-// in `block_aliases` for the same alias — silent duplication.
-//
-// Two failure modes the pre-fix code has:
-//   1. The processor's `watches` is `['content', 'properties']`. A
-//      plain `tx.restore(id)` with no patch only flips `deleted`, so
-//      the processor doesn't fire at all.
-//   2. Even if it did fire (because the restore included a patch
-//      changing content or properties), `planSync` treats
-//      `before.deleted=true → after.deleted=false` like a regular
-//      update: aliases are unchanged on both sides, so the AR1 /
-//      direct-claim diffs see nothing added, and the row's
-//      re-emergence as a claimant goes uninspected.
-//
-// Fix: watch `deleted` and treat a restore (`before.deleted &&
-// !after.deleted`) as an insert-like collision-only plan over the
-// non-blank afterAliases.
+// reuse. If another block claims that alias in the gap, restoring the
+// original row as stored would put two live blocks in `block_aliases` for
+// the same alias. The raw `tx.restore` primitive refuses it; the user-facing
+// revivals (`core.restore`, undo) yield the name instead — see
+// `src/data/test/aliasReclaim.test.ts`.
 
-describe('alias.collision — restore / undo re-claims a now-taken alias', () => {
+describe('alias.collision — restore re-claims a now-taken alias', () => {
   it('rejects tx.restore when another block has claimed the alias in the gap', async () => {
     const aId = await seatAt('Shared', 'Shared')
     await env.repo.tx(tx => tx.delete(aId), {scope: ChangeScope.BlockDefault})
@@ -475,29 +462,6 @@ describe('alias.collision — restore / undo re-claims a now-taken alias', () =>
     expect((caught as ProcessorRejection).meta?.attemptedOn).toBe(aId)
 
     // A is still tombstoned (the restore was rolled back).
-    const aRow = await env.read(aId)
-    expect(aRow!.deleted).toBe(1)
-  })
-
-  it('rejects repo.undo of a delete when the alias was reclaimed in the gap', async () => {
-    const aId = await seatAt('Shared', 'Shared')
-    await env.repo.tx(tx => tx.delete(aId), {scope: ChangeScope.BlockDefault})
-    await flush()
-
-    // Create B as a competing claimant. Real-world this would happen
-    // in a different session or via collaborative sync — in either
-    // case B's creation isn't part of the user's undo history at the
-    // moment they decide to undo their delete. Pop B's entry to
-    // simulate that: A's delete becomes the top of the stack.
-    await seatAtExplicitId('b-explicit', 'Shared', 'Shared (B)')
-    env.repo.undoManager.popUndo(ChangeScope.BlockDefault)
-
-    // Undo the delete — same alias-collision shape as the explicit
-    // tx.restore case, exercised via the undo replay path
-    // (`txImpl.applyRaw` on the snapshot's `before`).
-    await expect(env.repo.undo(ChangeScope.BlockDefault)).rejects.toBeInstanceOf(ProcessorRejection)
-
-    // A still tombstoned.
     const aRow = await env.read(aId)
     expect(aRow!.deleted).toBe(1)
   })

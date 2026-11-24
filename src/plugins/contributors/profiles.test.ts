@@ -146,8 +146,10 @@ describe('contributor profiles', () => {
 
       await repo.tx(tx => tx.update('agent-note', {content: 'Human revision'}), opts)
 
+      // The profile already holds Vlad, so its repair keeps it rather than
+      // releasing it to commit.
       const profile = await repo.load(humanId)
-      expect(profile?.properties[aliasesProp.name]).toEqual([USER.id])
+      expect(profile?.properties[aliasesProp.name]).toEqual(['Vlad', USER.id])
       expect(profile?.properties[userIdProp.name]).toBe(USER.id)
       expect(profile?.properties[contributorKindProp.name]).toBe('human')
       expect(profile?.properties[contributorRoleProp.name]).toBe('Owner')
