@@ -1,6 +1,7 @@
 import {ChangeScope} from '@/data/api'
 import {keysBetween} from '@/data/orderKey'
-import {navigateInPanel} from '@/utils/panelHistory'
+import {topLevelBlockIdProp} from '@/data/properties'
+import {buildLayout} from '@/utils/routing'
 import {captureAnchor} from '../anchor'
 import {annotationMarginOpenProp} from '../marginSchema'
 import {createThread, setThreadStatus} from '../threads'
@@ -39,11 +40,10 @@ export const holdChildList = (id: string) => {
   }
 }
 
-export async function openMarginFixtureOutline() {
+export async function createMarginFixtureOutline() {
   const repo = window.__omniliner?.repo
   const workspaceId = repo?.activeWorkspaceId
-  const panelId = document.querySelector<HTMLElement>('[data-panel-active="true"]')?.dataset.panelId
-  if (!repo || !workspaceId || !panelId) throw new Error('The local workspace has no active panel')
+  if (!repo || !workspaceId) throw new Error('The local workspace has no repository')
 
   const keys = keysBetween(null, null, ROW_COUNT)
   const {outlineId, rows} = await repo.tx(async tx => {
@@ -55,13 +55,15 @@ export async function openMarginFixtureOutline() {
     const ids = await tx.createMany(children)
     return {outlineId, rows: ids.map((id, index) => ({id, content: children[index].content}))}
   }, {scope: ChangeScope.BlockDefault, description: 'seed comments margin outline'})
-  await navigateInPanel(repo.block(panelId), outlineId)
-  return {outlineId, panelId, rows, firstSource: rows[COMMENT_GROUP_ROW]}
+  return {outlineId, hash: buildLayout(workspaceId, [outlineId]), rows, firstSource: rows[COMMENT_GROUP_ROW]}
 }
 
-export async function seedMarginFixture({panelId, rows}: Awaited<ReturnType<typeof openMarginFixtureOutline>>) {
+export async function seedMarginFixture({outlineId, rows}: Awaited<ReturnType<typeof createMarginFixtureOutline>>) {
   const repo = window.__omniliner?.repo
-  if (!repo) throw new Error('The local workspace has no repository')
+  const panelId = document.querySelector<HTMLElement>('[data-panel-active="true"]')?.dataset.panelId
+  if (!repo || !panelId) throw new Error('The local workspace has no active panel')
+  const panel = repo.block(panelId)
+  if (panel.peekProperty(topLevelBlockIdProp) !== outlineId) throw new Error('The active panel did not open the fixture outline')
 
   const threadAt = async (index: number, comment: string, quote?: string) => {
     const {id, content} = rows[index]
@@ -90,6 +92,6 @@ export async function seedMarginFixture({panelId, rows}: Awaited<ReturnType<type
   await threadAt(ROW_COUNT - 1, 'Second discussion on the last row.', 'alpha')
   const last = await threadAt(ROW_COUNT - 1, 'Last discussion on the last row.', 'beta')
 
-  await repo.block(panelId).set(annotationMarginOpenProp, true)
+  await panel.set(annotationMarginOpenProp, true)
   return {first, displaced, closed: {...closed, reply, deepReplyText: DEEP_REPLY_TEXT}, tall, reveal, sparse, last, rowCount: ROW_COUNT}
 }

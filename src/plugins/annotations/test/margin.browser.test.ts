@@ -3,7 +3,7 @@ import {resolve} from 'node:path'
 import {chromium, type Browser, type Locator, type Page} from 'playwright'
 import {createServer, type ViteDevServer} from 'vite'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it} from 'vitest'
-import type {openMarginFixtureOutline, seedMarginFixture} from './marginFixture'
+import type {createMarginFixtureOutline, seedMarginFixture} from './marginFixture'
 
 let server: ViteDevServer | undefined
 let browser: Browser | undefined
@@ -55,17 +55,20 @@ beforeEach(async () => {
     throw new Error(`Local app did not open its panel. ${text}\n${pageErrors.join('\n')}`, {cause})
   }
   fixtureUrl = new URL('/src/plugins/annotations/test/marginFixture.ts', origin).href
-  const prepared = await page.evaluate<Awaited<ReturnType<typeof openMarginFixtureOutline>>>(
-    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.openMarginFixtureOutline())`,
+  const prepared = await page.evaluate<Awaited<ReturnType<typeof createMarginFixtureOutline>>>(
+    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.createMarginFixtureOutline())`,
   )
-  await outline().locator(`[data-block-shell][data-block-id="${prepared.outlineId}"]`).waitFor({timeout: 10_000})
+  await page.goto(new URL(prepared.hash, origin).href, {waitUntil: 'commit', timeout: 15_000})
+  const root = outline().locator(`[data-block-shell][data-block-id="${prepared.outlineId}"]`)
+  await root.waitFor({timeout: 10_000})
   const {firstSource} = prepared
   await row({targetId: firstSource.id}).getByText(firstSource.content, {exact: true}).waitFor({timeout: 10_000})
   fixture = await page.evaluate<Awaited<ReturnType<typeof seedMarginFixture>>>(
     `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture(${JSON.stringify(prepared)}))`,
   )
-  await margin().waitFor({state: 'visible', timeout: 10_000})
-  await card(fixture.tall).getByText('Review paragraph 48.', {exact: false}).waitFor({state: 'attached', timeout: 5_000})
+  await root.waitFor({timeout: 10_000})
+  await card(fixture.first).waitFor({timeout: 10_000})
+  await margin().and(page.locator('[aria-busy="false"]')).waitFor({timeout: 10_000})
 })
 
 afterEach(async () => {
@@ -163,6 +166,7 @@ it('scrolls by each wheel delta over an active card and the blank margin', async
 it('keeps tall card bodies scrollable and moves the outline at both ends', async () => {
   const tall = card(fixture.tall)
   await row(fixture.tall).getByRole('button', {name: '1 open comment thread', exact: true}).click({timeout: 5_000})
+  await tall.getByText('Review paragraph 48.', {exact: false}).waitFor({state: 'attached', timeout: 5_000})
   await positionCard(tall, 50)
   const body = tall.locator('[data-margin-card-body]')
   const bodyOffset = () => body.evaluate(element => element.scrollTop)
