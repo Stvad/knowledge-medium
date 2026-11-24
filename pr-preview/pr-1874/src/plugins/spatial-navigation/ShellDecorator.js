@@ -1,0 +1,1 @@
+export{SD as SpatialNavigationShellDecorator}from"../../../chunks/app-DftIvrW8.js";

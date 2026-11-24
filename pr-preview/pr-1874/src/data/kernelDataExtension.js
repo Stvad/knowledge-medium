@@ -1,0 +1,1 @@
+export{ket as kernelDataExtension}from"../../chunks/app-DftIvrW8.js";

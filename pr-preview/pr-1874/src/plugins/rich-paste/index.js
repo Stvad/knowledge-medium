@@ -1,0 +1,1 @@
+export{XC as richPastePlugin}from"../../../chunks/app-DftIvrW8.js";

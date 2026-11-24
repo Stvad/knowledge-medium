@@ -1,0 +1,1 @@
+export{Ett as KERNEL_PROCESSORS}from"../../../chunks/app-DftIvrW8.js";

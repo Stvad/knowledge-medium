@@ -1,0 +1,1 @@
+export{Cft as deriveWorkspaceIdNamespace}from"../../../chunks/app-DftIvrW8.js";

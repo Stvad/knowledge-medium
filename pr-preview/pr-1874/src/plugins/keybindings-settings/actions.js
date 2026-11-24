@@ -1,0 +1,1 @@
+export{AP as openKeybindingsSettingsAction}from"../../../chunks/app-DftIvrW8.js";

@@ -1,0 +1,1 @@
+export{fg as confirmThreadDeletion}from"../../../chunks/app-DftIvrW8.js";

@@ -1,0 +1,1 @@
+export{nX as SuspenseFallback}from"../../../chunks/app-DftIvrW8.js";

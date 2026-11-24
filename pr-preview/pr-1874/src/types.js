@@ -1,0 +1,1 @@
+export{Xft as isChildBackedPropertiesWorkspace}from"../chunks/app-DftIvrW8.js";

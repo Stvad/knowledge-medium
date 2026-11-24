@@ -1,0 +1,1 @@
+export{iU as ExtensionRenderBoundary}from"../../chunks/app-DftIvrW8.js";

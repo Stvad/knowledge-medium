@@ -1,0 +1,1 @@
+export{FS as Wikilink}from"../../../../../chunks/app-DftIvrW8.js";

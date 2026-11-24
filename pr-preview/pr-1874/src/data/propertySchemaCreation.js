@@ -1,0 +1,1 @@
+export{bY as adoptOrCreatePropertySchema}from"../../chunks/app-DftIvrW8.js";

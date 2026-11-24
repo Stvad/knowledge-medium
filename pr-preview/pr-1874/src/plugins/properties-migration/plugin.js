@@ -1,0 +1,1 @@
+export{Vc as propertiesMigrationPlugin}from"../../../chunks/app-DftIvrW8.js";

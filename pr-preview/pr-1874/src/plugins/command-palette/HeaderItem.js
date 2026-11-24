@@ -1,0 +1,1 @@
+export{gF as CommandPaletteHeaderItem}from"../../../chunks/app-DftIvrW8.js";

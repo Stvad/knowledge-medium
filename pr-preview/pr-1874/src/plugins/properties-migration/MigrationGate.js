@@ -1,0 +1,1 @@
+export{Hc as MigrationGate}from"../../../chunks/app-DftIvrW8.js";

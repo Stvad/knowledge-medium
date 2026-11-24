@@ -1,0 +1,1 @@
+export{RL as appUpdatePromptExtension}from"../../../chunks/app-DftIvrW8.js";

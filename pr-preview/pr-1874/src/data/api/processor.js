@@ -1,0 +1,1 @@
+export{Ngt as definePostCommitProcessor}from"../../../chunks/app-DftIvrW8.js";
