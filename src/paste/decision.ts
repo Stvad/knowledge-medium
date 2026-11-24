@@ -46,9 +46,8 @@ export type PasteDecision =
  *  `defaultPasteDecision`. */
 export type PasteSurface = 'editor' | 'shell'
 
-/** Caret/selection on the editor surface at paste time. The decision is
- *  resolved synchronously (`runSync`), so an override sees the live paste-time
- *  caret and has no opportunity to move it mid-decision. Present only on the
+/** Caret/selection on the editor surface when the text paste is decided.
+ *  The decision resolves synchronously (`runSync`). Present only on the
  *  `editor` surface (see the `surface ⟺ caret` invariant on `PasteRequest`).
  *  Lets overrides vary by position (e.g. title line 1 vs body line 2+) without
  *  re-deriving it from the DOM. */
@@ -58,6 +57,8 @@ export interface PasteCaret {
    *  keeps newlines after a single-block paste, so this can exceed 1. This
    *  is an editor-doc line, NOT an outline position. */
   line: number
+  /** Offset of the start of the line containing `from`. */
+  lineStart: number
   /** Total lines in the block's editor document (`doc.lines`); `line ===
    *  lineCount` ⟺ caret on the last line. */
   lineCount: number

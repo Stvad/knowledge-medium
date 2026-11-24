@@ -7,9 +7,9 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { waitFor } from '@/test/waitFor'
 import { GridController } from '../controller'
-import { takeTableStep } from '../navigation'
+import { moveVertical } from '@/plugins/spatial-navigation/actions'
 
-vi.mock('../navigation', () => ({takeTableStep: vi.fn(() => true)}))
+vi.mock('@/plugins/spatial-navigation/actions', () => ({moveVertical: vi.fn(async () => true)}))
 
 const workspaceId = 'ws-grid-edges'
 const SCOPE = 'tables:panel:host'
@@ -20,7 +20,7 @@ beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 beforeEach(async () => {
   await resetTestDb(db.db)
-  vi.mocked(takeTableStep).mockClear()
+  vi.mocked(moveVertical).mockClear()
 })
 
 it('absorbs a key at the last row while the move there is still committing: a step written then would be overwritten', async () => {
@@ -42,9 +42,9 @@ it('absorbs a key at the last row while the move there is still committing: a st
   expect(controller.command('down')).toBe(true)
   expect(controller.getPendingRow()).toBe('row-2')
   expect(controller.command('down')).toBe(true)
-  expect(takeTableStep).not.toHaveBeenCalled()
+  expect(moveVertical).not.toHaveBeenCalled()
 
   await waitFor(() => expect(controller.getPendingRow()).toBeNull())
   expect(controller.command('down')).toBe(true)
-  expect(takeTableStep).toHaveBeenCalledOnce()
+  expect(moveVertical).toHaveBeenCalledOnce()
 })

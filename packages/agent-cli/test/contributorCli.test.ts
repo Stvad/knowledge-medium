@@ -160,6 +160,18 @@ describe('compiled CLI contributor commands', {timeout: 120_000}, () => {
     expect(stdout).toContain('((media-1))')
   })
 
+  it('add-media types an .svg as an image without --mime', async () => {
+    const file = path.join(tempDir, 'pic.svg')
+    await fs.writeFile(file, '<svg/>')
+    await runCli(['--contributor', 'none', 'add-media', file])
+    await runCli(['--contributor', 'none', 'add-media', file, '--mime', 'text/plain'])
+
+    expect(bridge.commands.filter(command => command.type === 'add-media')).toMatchObject([
+      {filename: 'pic.svg', mime: 'image/svg+xml'},
+      {filename: 'pic.svg', mime: 'text/plain'},
+    ])
+  })
+
   it('add-media refuses a --filename the parser has turned into a number', async () => {
     const file = path.join(tempDir, 'notes.txt')
     await fs.writeFile(file, 'x')

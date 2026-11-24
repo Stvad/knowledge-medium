@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema, type Tx } from '@/data/api'
 import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
+import { keepsStoredValue } from './internals/propertyChildrenProcessor'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet, sameTxProcessorsFacet } from '@/data/facets'
@@ -20,6 +21,7 @@ import { parseBlockRefs, parseReferences } from '@/plugins/references/referenceP
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
+  awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
   encodedPropertyValueToChildContents,
@@ -174,6 +176,49 @@ const expectEscapedEnvelope = (schema: typeof statusSchema, value: string, conte
   expect(content).not.toMatch(/[[(]/)
   expect(valueChildContentToEncoded(schema, content)).toBe(value)
 }
+
+describe('awaitsReferenceTarget', () => {
+  const refs = defineProperty('refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+  const ref = defineProperty('ref', {codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault})
+  const words = defineProperty('words', {codec: codecs.list(codecs.string), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+
+  it.each([
+    ['an unstamped named member', refs, '[[Name]]', null, true],
+    ['an unstamped named scalar', ref, '[[Name]]', null, true],
+    ['a stamped named member', refs, '[[Name]]', 'target', false],
+    // An id form decodes textually, before any stamp.
+    ['an id member', refs, '((target))', null, false],
+    // A marked row is a field row once its bit is stamped, never a value.
+    ['a marked row', refs, '::[[Name]]', null, false],
+    // Only a `ref` member reads the stamp; for text, `[[Name]]` is the value.
+    ['named text in a string list', words, '[[Name]]', null, false],
+    ['prose', refs, 'Name', null, false],
+  ] as const)('%s', (_case, schema, content, referenceTargetId, expected) => {
+    expect(awaitsReferenceTarget(schema, {content, referenceTargetId})).toBe(expected)
+  })
+})
+
+describe('keepsStoredValue', () => {
+  const refs = defineProperty('refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+  const ref = defineProperty('ref', {codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault})
+  const shape = defineProperty('shape', {codec: codecs.unsafeIdentity<string[]>(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+
+  it.each([
+    ['an absent key, by anything', refs, undefined, ['a'], true],
+    ['an absent key, by an unset', refs, undefined, undefined, true],
+    ['a list, by an unset', refs, ['a'], undefined, false],
+    ['a list, by a superset in another order', refs, ['a', 'b'], ['b', 'c', 'a'], true],
+    ['a list, by one missing a member', refs, ['a', 'b'], ['a'], false],
+    ['a list, by one with fewer copies', refs, ['a', 'a'], ['a'], false],
+    ['a scalar, by itself', ref, 'a', 'a', true],
+    ['a scalar, by another value', ref, 'a', 'b', false],
+    ['a scalar, by an unset', ref, 'a', undefined, false],
+    // Only a list's members are counted; any other array is one value.
+    ['an array scalar, by a superset', shape, ['a'], ['a', 'b'], false],
+  ] as const)('%s', (_case, schema, stored, projected, expected) => {
+    expect(keepsStoredValue(schema, stored, projected)).toBe(expected)
+  })
+})
 
 describe('dormant at properties_migration = cell', () => {
   it('setProperty writes the cell only — no field rows', async () => {
@@ -3092,6 +3137,25 @@ describe('revival re-materializes property children (#778)', () => {
 
     expect(await cellValue('p')).toBeUndefined()
     expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('unsets a key whose field row the reviving tx brought back and then deleted', async () => {
+    // Net, that field row stayed dead, so no field diff shows its delete.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'done')
+      const revived = (await tx.childrenOf('p', undefined)).filter(row => row.isFieldForm === true)
+      expect(revived.map(row => row.id)).toEqual([field!.id])
+      await deleteSubtreeInTx(tx, field!.id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await liveFieldRows('p')).toEqual([])
+    expect(await cellValue('p')).toBeUndefined()
   })
 })
 

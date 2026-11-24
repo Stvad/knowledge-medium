@@ -6,7 +6,6 @@
 import type { EditorView } from '@codemirror/view'
 import { Block } from '@/data/block'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
-import { structuralEditPolicyForBlock, type StructuralEditPolicy } from '@/data/structuralEditPolicy'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction'
 import { EXTEND_BLOCK_SELECTION_ACTION_ID, TOGGLE_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
@@ -16,11 +15,10 @@ import {
   type BlockShortcutDependencies, type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
 import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
-import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
-import { showInfo } from '@/utils/toast'
+import { nextDrawnStep, previousDrawnStep } from '@/utils/selection'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
-import { gridDrawing, gridOfHost } from './registry'
+import { gridDrawing } from './registry'
 
 export const GRID_CONTEXT_KEY = 'tablesGrid'
 /** The id of the row, or of the cell's value, whose context this is. A context
@@ -136,8 +134,7 @@ export const tableActions: ActionConfig[] = [
   gridAction(TABLE_ROW_CONTEXT, 'clear', ['Delete', 'Backspace']),
   gridAction(TABLE_TYPING_CONTEXT, 'open', [...PRINTABLE, ...PRINTABLE.map(key => `Shift+${key}`)], {passKey: true}),
   ...editKeys,
-  // A row's text and a list's members are outline blocks: Enter, Tab and
-  // Backspace stay the outline's (`./rowVerbs` between rows).
+  // A row's text and a list's members keep the outline's Enter, Tab and Backspace.
   gridAction(TABLE_OUTLINE_EDIT_CONTEXT, 'leave', 'Escape', {yieldToEditor: true}),
 ]
 
@@ -191,10 +188,12 @@ const atEditorEdge = (view: EditorView, edge: Edge) => {
 
 /** Whether the outline's step from `block` past `edge` leaves what its scope
  *  draws: from the first block upwards onto the scope root, and from the last
- *  block downwards, where the outline has nothing. */
-const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge): Promise<boolean> => {
-  if (edge === 'top' || edge === 'start') return (await previousVisibleBlock(block, surface))?.id === surface.scopeRootId
-  return await nextVisibleBlock(block, surface) === null
+ *  block downwards, where the walk reaches another row of this grid or the
+ *  end. A destination outside the grid stays the outline's. */
+const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge, grid: GridController): Promise<boolean> => {
+  if (edge === 'top' || edge === 'start') return (await previousDrawnStep(block, surface)).block?.id === surface.scopeRootId
+  const next = await nextDrawnStep(block, surface)
+  return !next.block || (next.surface.renderScopeId === grid.renderScopeId && grid.isRow(next.block.id))
 }
 
 /** What the grid draws a block as, from the scope it is drawn in: a row's
@@ -222,15 +221,15 @@ type Step = Edge | 'sideways' | 'here'
  *  The walk is async, so the key's default is prevented first, as the
  *  outline's verbs do on the same test: otherwise the caret moves before
  *  either handler runs. */
-const crossing = (step: Step): Applies => (deps, trigger, grid) => {
+const crossing = (step: Step, includeRowNotes = true): Applies => (deps, trigger, grid) => {
   const {block} = deps as BlockShortcutDependencies
   const surface = outlineSurfaceOf(deps as BlockShortcutDependencies)
   if (!block || !surface) return true
   const place = placeOf(grid, block.id, surface.scopeRootId)
-  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : step === 'bottom' && place === 'rowChild'
+  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : includeRowNotes && step === 'bottom' && place === 'rowChild'
   if (!walks) return place === 'value' || place === 'rowText' || (place === 'member' && step === 'sideways')
   trigger.preventDefault()
-  return leavesScope(block, surface, step as Edge)
+  return leavesScope(block, surface, step as Edge, grid)
 }
 
 /** An editor verb: only at the editor's edge, then as `crossing`. */
@@ -239,12 +238,8 @@ const leavingAt = (edge: Edge): Applies => (deps, trigger, grid) => {
   return editorView !== undefined && atEditorEdge(editorView, edge) && crossing(edge)(deps, trigger, grid)
 }
 
-/** No block selection starts inside a grid. Block selection runs in the
- *  panel's own surface, whose walk follows the data tree: extended from a
- *  block the grid draws it reaches blocks it does not (a row's other
- *  properties, its children), which a selection's Delete would then remove.
- *  In an editor the key stays CodeMirror's own text selection. Every action
- *  that starts one is listed in `SELECTION_STARTS`. */
+/** Bulk selection stores block IDs, so a grid occurrence could turn a
+ *  selection gesture into an edit on its source outline. */
 const noBlockSelection = (context: ActionContextType, actionId: string): ActionDispatchDecorator => ({
   actionId,
   context,
@@ -253,51 +248,6 @@ const noBlockSelection = (context: ActionContextType, actionId: string): ActionD
     if (!gridDrawing(renderScopeId, block?.id)) return next(deps, trigger)
   },
 })
-
-/** What a verb on a table host does instead of the outline's. */
-type HostVerb = 'grid-row' | 'refuse' | 'outline'
-
-/** On a table host, the outline's "create below" (and "create above" at a
- *  scope root) makes a first child, which is the grid's first row, and
- *  focuses it in the host's own scope, where the grid does not draw it: no
- *  editor appears. The grid makes that row instead, focused where it draws it.
- *  Where the outline would make a sibling of the host, or refuses the verb
- *  itself, the outline's handler runs. `decide` mirrors the verb's own tests.
- *  Accepted: a host whose grid is not mounted (collapsed, drawn as an embed's
- *  or a backlink's root) falls through to the outline, which expands it. */
-const onTableHost = (
-  context: ActionContextType, actionId: string,
-  decide: (deps: BlockShortcutDependencies, policy: StructuralEditPolicy) => HostVerb,
-): ActionDispatchDecorator => ({
-  actionId,
-  context,
-  wrap: async (deps, trigger, next) => {
-    const blockDeps = deps as BlockShortcutDependencies
-    const {block, renderScopeId, scopeRootId} = blockDeps
-    // No scope root: an imperative dispatch, which the verbs themselves ignore.
-    const grid = block && scopeRootId ? gridOfHost(renderScopeId ?? '', block.id) : undefined
-    const verb = grid ? decide(blockDeps, await structuralEditPolicyForBlock(block, blockDeps)) : 'outline'
-    if (verb === 'grid-row') await grid!.insertFirstRow()
-    else if (verb === 'refuse') showInfo('Enter at the end of a table’s title adds a row; its title does not split.')
-    else await next(deps, trigger)
-  },
-})
-
-const createsFirstChild = (placement: 'createBelowPlacement' | 'createAbovePlacement') =>
-  (_deps: BlockShortcutDependencies, policy: StructuralEditPolicy): HostVerb =>
-    policy[placement] === 'child-first' ? 'grid-row' : 'outline'
-
-/** Enter in the host's text, by `split_block_cm`'s own cases. At the end it
- *  makes a first child when the policy says so. Mid-text at a scope root it
- *  would split the text's tail into a first child: a row focused where it is
- *  not drawn, so it is refused there. */
-const hostEnter = (deps: BlockShortcutDependencies, policy: StructuralEditPolicy): HostVerb => {
-  const {editorView, disableBlockSplit} = deps as CodeMirrorEditModeDependencies
-  if (!editorView || disableBlockSplit) return 'outline'
-  const atEnd = editorView.state.selection.main.head === editorView.state.doc.length
-  if (atEnd) return policy.createBelowPlacement === 'child-first' ? 'grid-row' : 'outline'
-  return policy.isScopeRoot ? 'refuse' : 'outline'
-}
 
 const NORMAL = ActionContextTypes.NORMAL_MODE
 const EDITING = ActionContextTypes.EDIT_MODE_CM
@@ -315,12 +265,10 @@ const SELECTION_STARTS: readonly (readonly [ActionContextType, string])[] = [
 ]
 
 export const tableOutlineVerbRedirects = [
-  redirect(NORMAL, 'move_down', 'down', crossing('bottom')),
+  redirect(NORMAL, 'move_down', 'down', crossing('bottom', false)),
   redirect(NORMAL, 'move_up', 'up', crossing('top')),
   redirect(NORMAL, 'move_left', 'left', crossing('sideways')),
   redirect(NORMAL, 'move_right', 'right', crossing('sideways')),
-  redirect(NORMAL, 'create_block_below_and_edit', 'insert-below', crossing('here')),
-  redirect(NORMAL, 'create_block_above_and_edit', 'insert-above', crossing('here')),
   redirect(NORMAL, 'enter_edit_mode', 'open-start', crossing('here')),
   redirect(NORMAL, 'enter_edit_mode_at_end', 'open', crossing('here')),
   // Arrows at an editor's edge leave the cell the way row mode moves.
@@ -329,7 +277,4 @@ export const tableOutlineVerbRedirects = [
   redirect(EDITING, 'move_left_from_cm_start', 'previous', leavingAt('start')),
   redirect(EDITING, 'move_right_from_cm_end', 'next', leavingAt('end')),
   ...SELECTION_STARTS.map(([context, actionId]) => noBlockSelection(context, actionId)),
-  onTableHost(NORMAL, 'create_block_below_and_edit', createsFirstChild('createBelowPlacement')),
-  onTableHost(NORMAL, 'create_block_above_and_edit', createsFirstChild('createAbovePlacement')),
-  onTableHost(EDITING, 'split_block_cm', hostEnter),
 ].map(decorator => actionDispatchWrap(decorator, {source: 'tables', precedence: 100}))

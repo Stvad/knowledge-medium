@@ -190,7 +190,7 @@ describe('recoverFailedUploads (§9 failed-upload recovery actor)', () => {
   it('DEFERS (no probe) when the queued user is no longer the active account', async () => {
     await stageFailed(store)
 
-    const summary = await recoverFailedUploads(USER, deps({ isActiveUser: () => false }))
+    const summary = await recoverFailedUploads(USER, deps({ canUpload: () => false }))
 
     expect(summary).toMatchObject({ deferred: 1 })
     expect(blobStore.probes).toBe(0)

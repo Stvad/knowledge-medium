@@ -126,10 +126,13 @@ const focusableFallbacks = (row: HTMLElement): HTMLElement[] =>
     .filter(element => !element.closest(PROPERTY_ROW_CONTROL_SELECTOR))
     .filter(isFocusableElement)
 
-export const getPropertyRows = (blockId: string): HTMLElement[] => {
+export const getPropertyRows = (blockId: string, renderScopeId?: string): HTMLElement[] => {
   if (typeof document === 'undefined') return []
   return Array.from(document.querySelectorAll<HTMLElement>(PROPERTY_ROW_SELECTOR))
-    .filter(row => row.dataset.blockId === blockId && isVisibleElement(row))
+    .filter(row => row.dataset.blockId === blockId && (
+      renderScopeId === undefined ||
+      row.closest('[data-block-shell]')?.getAttribute('data-render-scope-id') === renderScopeId
+    ) && isVisibleElement(row))
 }
 
 export const getPropertyRowFocusTarget = (
@@ -170,8 +173,9 @@ export const focusPropertyRowElement = (
 export const focusPropertyRow = (
   blockId: string,
   position: 'first' | 'last',
+  renderScopeId?: string,
 ): boolean => {
-  const rows = getPropertyRows(blockId)
+  const rows = getPropertyRows(blockId, renderScopeId)
   const row = position === 'first' ? rows[0] : rows.at(-1)
   return row ? focusPropertyRowElement(row, position === 'first' ? 'start' : 'end') : false
 }
@@ -199,8 +203,9 @@ export const focusAdjacentPropertyRow = (
   blockId: string,
   currentRow: HTMLElement,
   direction: -1 | 1,
+  renderScopeId?: string,
 ): boolean => {
-  const rows = getPropertyRows(blockId)
+  const rows = getPropertyRows(blockId, renderScopeId)
   const index = rows.indexOf(currentRow)
   if (index < 0) return false
   const next = rows[index + direction]

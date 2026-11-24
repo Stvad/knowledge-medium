@@ -220,7 +220,7 @@ it('preserves a queued write before the first workspace row can validate its enc
   await queuePatch()
   const before = await queued()
   const connect = vi.fn(async () => { throw new Error('Unexpected connection') })
-  await expect(serveDatabase(fixture.db, config, user, new AbortController().signal, connect))
+  await expect(serveDatabase(fixture.db, config, user, new AbortController().signal, {connect}))
     .rejects.toThrow('Queued writes without a workspace row')
   expect(connect).not.toHaveBeenCalled()
   expect(await queued()).toEqual(before)

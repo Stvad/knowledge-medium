@@ -29,8 +29,9 @@ import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
-import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { markDanglingReplyLinks, refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
+import { captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
 import { CHOOSE_CONTRIBUTOR_MESSAGE } from '@/plugins/contributors/processor.js'
 import { addMedia } from './addMedia.ts'
 import { readMedia } from './readMedia.ts'
@@ -116,6 +117,7 @@ import {
 } from '@/data/internals/propertyCellBackfill'
 import {readIsChildBackedWorkspace} from '@/data/workspaceSchema'
 import type {
+  AgentMedia,
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
   BlockPosition,
@@ -992,7 +994,7 @@ const SUBTREE_KEY_PROP = 'agent:subtreeKey'
  *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
  *  split matches "paste as markdown" exactly; `shape:'block'` keeps it one
  *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
- *  (the daemon passes `agent:reply`).
+ *  (the daemon passes `agent:reply`, which flags dangling links inline).
  *
  *  Idempotent by `key`: the tagged blocks are made to carry the parsed
  *  tree's content/parentage by a positional (pre-order) reconcile — update
@@ -1041,6 +1043,14 @@ const reconcileMarkdownSubtree = async (
       }
     }
     await collect(parentId)
+
+    const trailing = final ? existing.slice(parsed.length) : []
+    if (properties?.['agent:reply'] === true) {
+      // Links to a pruned node's owned property rows can still go stale
+      // when subtree deletion removes them.
+      const prunedIds = new Set(trailing.map(row => row.id))
+      await markDanglingReplyLinks(tx, workspaceId, parsed, prunedIds)
+    }
 
     // Cursor per real parent for APPENDING new nodes. To keep the subtree
     // CONTIGUOUS, new nodes slot right after the parent's last child ALREADY
@@ -1122,54 +1132,51 @@ const reconcileMarkdownSubtree = async (
     // descendants; delete it leaf-first (reverse order) so no parent orphans
     // a child. Only on `final` — a mid-stream tick must not delete a tail it
     // simply hasn't re-streamed yet.
-    if (final && existing.length > parsed.length) {
-      for (let i = existing.length - 1; i >= parsed.length; i -= 1) {
-        const doomed = existing[i]
-        // Salvage the user's OWN content: a block the user nested under this
-        // reply node isn't tagged with our key, so `collect` never saw it and
-        // it isn't in the doomed set. `tx.delete` is a single-row soft-delete
-        // (no cascade), so leaving it would strand it under a tombstone and it
-        // would vanish from the outline. Reparent any such foreign child up to
-        // the doomed node's parent BEFORE deleting — deleting leaf-first means
-        // the doomed node's own tagged children are already gone, so only
-        // foreign children remain, and a child under a parent that is itself
-        // doomed bubbles up again until it lands under a surviving ancestor.
-        const target = doomed.parentId ?? parentId
-        // Visible view: a property field row is machinery OWNED by `doomed`
-        // (not foreign content), so it must not be rescued/reparented — it
-        // goes with `doomed` in the subtree-delete below.
-        const foreign = (await tx.childrenOf(doomed.id, workspaceId, {propertyChildren: 'none'}))
-          .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
-        if (foreign.length > 0) {
-          // Land the rescued children in the doomed node's OWN slot (between
-          // it and its next sibling), keeping their relative order, rather
-          // than at the parent's end. Slot-anchoring is what makes order
-          // correct regardless of the reverse (leaf-first) walk: each doomed
-          // sibling's children land at that sibling's position, so notes
-          // under an earlier reply node stay before notes under a later one,
-          // and neither jumps past unrelated content that followed the reply.
-          const siblings = await tx.childrenOf(target, workspaceId)
-          const doomedIdx = siblings.findIndex(sibling => sibling.id === doomed.id)
-          const nextKey = doomedIdx >= 0 ? siblings[doomedIdx + 1]?.orderKey ?? null : null
-          let lower: string | null = doomed.orderKey ?? null
-          for (const child of foreign) {
-            const upper = nextKey !== null && (lower === null || nextKey > lower) ? nextKey : null
-            const orderKey = keyBetween(lower, upper)
-            // The person's own block, moved by the reconcile, not by them:
-            // a bookkeeping write, so it gains no author and no edit time.
-            await tx.move(child.id, {parentId: target, orderKey}, {skipMetadata: true})
-            lower = orderKey
-          }
+    for (const doomed of trailing.toReversed()) {
+      // Salvage the user's OWN content: a block the user nested under this
+      // reply node isn't tagged with our key, so `collect` never saw it and
+      // it isn't in the doomed set. `tx.delete` is a single-row soft-delete
+      // (no cascade), so leaving it would strand it under a tombstone and it
+      // would vanish from the outline. Reparent any such foreign child up to
+      // the doomed node's parent BEFORE deleting — deleting leaf-first means
+      // the doomed node's own tagged children are already gone, so only
+      // foreign children remain, and a child under a parent that is itself
+      // doomed bubbles up again until it lands under a surviving ancestor.
+      const target = doomed.parentId ?? parentId
+      // Visible view: a property field row is machinery OWNED by `doomed`
+      // (not foreign content), so it must not be rescued/reparented — it
+      // goes with `doomed` in the subtree-delete below.
+      const foreign = (await tx.childrenOf(doomed.id, workspaceId, {propertyChildren: 'none'}))
+        .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
+      if (foreign.length > 0) {
+        // Land the rescued children in the doomed node's OWN slot (between
+        // it and its next sibling), keeping their relative order, rather
+        // than at the parent's end. Slot-anchoring is what makes order
+        // correct regardless of the reverse (leaf-first) walk: each doomed
+        // sibling's children land at that sibling's position, so notes
+        // under an earlier reply node stay before notes under a later one,
+        // and neither jumps past unrelated content that followed the reply.
+        const siblings = await tx.childrenOf(target, workspaceId)
+        const doomedIdx = siblings.findIndex(sibling => sibling.id === doomed.id)
+        const nextKey = doomedIdx >= 0 ? siblings[doomedIdx + 1]?.orderKey ?? null : null
+        let lower: string | null = doomed.orderKey ?? null
+        for (const child of foreign) {
+          const upper = nextKey !== null && (lower === null || nextKey > lower) ? nextKey : null
+          const orderKey = keyBetween(lower, upper)
+          // The person's own block, moved by the reconcile, not by them:
+          // a bookkeeping write, so it gains no author and no edit time.
+          await tx.move(child.id, {parentId: target, orderKey}, {skipMetadata: true})
+          lower = orderKey
         }
-        // Subtree-delete (not single-row): after foreign content is rescued
-        // above, `doomed`'s only remaining descendants are its own property
-        // field/value machinery, which must be tombstoned with it rather
-        // than stranded live under the tombstone (§9). True pre-flip too:
-        // the backfill mints that machinery before the workspace reads it,
-        // and `propertyChildren` recognizes it on the bit.
-        // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge reconciling a markdown subtree, not a user gesture
-        await deleteSubtreeInTx(tx, doomed.id)
       }
+      // Subtree-delete (not single-row): after foreign content is rescued
+      // above, `doomed`'s only remaining descendants are its own property
+      // field/value machinery, which must be tombstoned with it rather
+      // than stranded live under the tombstone (§9). True pre-flip too:
+      // the backfill mints that machinery before the workspace reads it,
+      // and `propertyChildren` recognizes it on the bit.
+      // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge reconciling a markdown subtree, not a user gesture
+      await deleteSubtreeInTx(tx, doomed.id)
     }
   }, agentTxOptions('reconcile-markdown-subtree', {undoable: input.undoable}))
 
@@ -2240,13 +2247,25 @@ ${code}
   return fn(context, data)
 }
 
+/** The app's media lanes, behind the Attachments plugin's toggle. Its renderer
+ *  stands in for "the plugin is on". */
+const appMedia: AgentMedia = {
+  captureRefusal: runtime => runtime.read(blockRenderersFacet).media === undefined
+    ? 'Enable the Attachments plugin to add media.'
+    : null,
+  resolve: request => getAssetResolver().resolve(request),
+  capture: captureMediaFromFiles,
+}
+
 export const createAgentRuntimeContext = ({
   repo,
   runtime,
   safeMode,
   hostHealth,
+  media = appMedia,
 }: AgentRuntimeBridgeOptions): AgentRuntimeContext => {
   const context: AgentRuntimeContext = {
+    media,
     hostHealth,
     repo,
     db: repo.db,
@@ -2305,6 +2324,7 @@ export const executeCommand = async (
       runtime: context.runtime,
       safeMode: context.safeMode,
       hostHealth: context.hostHealth,
+      media: context.media,
     })
   }
   return executeAttributedCommand(command, context)
@@ -2389,18 +2409,17 @@ const executeAttributedCommand = async (
         context.repo,
         viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId)),
         requireString(command.ref, 'ref'),
-        getAssetResolver(),
+        context.media,
       )
 
     case 'add-media': {
       const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
-      if (context.runtime.read(blockRenderersFacet).media === undefined) {
-        throw new Error('Enable the Attachments plugin to add media.')
-      }
+      const refusal = context.media.captureRefusal(context.runtime)
+      if (refusal !== null) throw new Error(refusal)
       // Refused here, not left to the attribution check inside the capture's tx: by
       // then the bytes are stored, and nothing reclaims them.
       refuseUnchosenContributor(context, command)
-      return addMedia(context.repo, workspaceId, {
+      return addMedia(context.repo, workspaceId, context.media.capture, {
         base64: requireString(command.base64, 'base64'),
         filename: command.filename,
         mime: command.mime,

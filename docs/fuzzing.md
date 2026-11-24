@@ -375,9 +375,9 @@ The interaction fuzzer found one more:
 
 - `delete_block` was the only structural handler with no scope-root
   guard: Delete with the zoomed page focused tombstoned the entire
-  rendered surface out from under the panel. The boundary rule now
-  lives in `StructuralEditPolicy.canDelete` (scope-less callers like
-  the agent bridge remain free to delete).
+  rendered surface out from under the panel. An initial fix blocked
+  explicit deletion at the scope root, which also blocked deleting a page
+  from its own outline. Explicit Delete now allows that gesture.
 
 The shortcut-context ownership fuzzer went red on its FIRST fixed smoke
 seed, which was its whole point: the hazard had been read out of the code
@@ -416,8 +416,8 @@ hadn't reached (both confirmed red-first and fixed):
 
 - `delete_empty_block_cm`'s empty-block path deleted before consulting
   the scope-root boundary (reachable: split the zoomed page at cursor
-  0, then Backspace in the emptied root) — now gated on
-  `StructuralEditPolicy.canDelete`.
+  0, then Backspace in the emptied root). The Backspace handler
+  now checks the scope boundary before deleting the empty block.
 - `parseReferences`' stale-plan guard checked only content/properties,
   so a references-ONLY writer (ref-backfill reprojection on schema
   load) landing between plan build and apply was clobbered with

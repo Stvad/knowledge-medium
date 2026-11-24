@@ -44,7 +44,8 @@ export function BlockPasteShellDecorator({
       const content = readClipboardContent(e.clipboardData)
       if (!content) return
 
-      const cutPaste = await pasteArmedCut(content.text, block, repo, { scopeRootId, propertyDisplay })
+      const surface = {scopeRootId, propertyDisplay, renderScopeId}
+      const cutPaste = await pasteArmedCut(content.text, block, repo, surface)
       if (cutPaste) {
         if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
           void focusBlock(uiStateBlock, cutPaste.blocks[0].id, { renderScopeId })
@@ -58,7 +59,7 @@ export function BlockPasteShellDecorator({
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
       const resolved = await resolvePasteWithMediaCapture(runtime, shellPasteRequest(content, block), { repo, workspaceId })
       if (!resolved) return
-      const pasted = await pasteResolvedDecision(resolved, block, repo, { scopeRootId, propertyDisplay })
+      const pasted = await pasteResolvedDecision(resolved, block, repo, surface)
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, { renderScopeId })
       }

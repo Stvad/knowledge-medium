@@ -15,7 +15,6 @@ import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import {
-  editorSelection,
   focusBlock,
   requestEditorFocus,
 } from '@/data/properties.js'
@@ -282,6 +281,7 @@ export interface BlockShellProps {
   'data-block-id': string
   'data-render-scope-id'?: string
   'data-editing': 'true' | 'false'
+  'data-block-focused'?: 'true'
   className?: string
   tabIndex: number
   ref?: Ref<HTMLDivElement>
@@ -839,15 +839,7 @@ export const enterEditModeForBlock = async (
   }
 
   await resetBlockSelection(uiStateBlock)
-  // Before focusBlock: BlockEditor places the cursor in the commit that mounts
-  // it, so a selection written after edit mode moves misses that placement.
-  if (selection) {
-    await uiStateBlock.set(editorSelection, {
-      blockId: block.id,
-      ...selection,
-    })
-  }
-  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
+  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId, selection})
 
   requestEditorFocus(uiStateBlock)
 }

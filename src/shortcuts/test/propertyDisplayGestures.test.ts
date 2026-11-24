@@ -12,12 +12,16 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty, type BlockData, type User } from '@/data/api'
+import { childrenViewFacet, listingSurfaceOf } from '@/data/childrenView'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import { focusBlock } from '@/data/properties'
 import type { Repo } from '@/data/repo'
+import { insertDrawnBlock } from '@/data/structuralInsert'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { visibleChildIds } from '@/data/visibleChildren'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { bindBlockActionContext, createSharedBlockActions, type BlockAction } from '@/shortcuts/blockActions'
 import { ActionContextTypes, type BlockShortcutDependencies, type MultiSelectModeDependencies } from '@/shortcuts/types'
@@ -65,6 +69,13 @@ beforeEach(async () => {
   draftRow = (await childIds(statusRow))[0]!
 })
 
+const installDerivedFieldValues = () => repo.setRuntimeContributions(childrenViewFacet, 'test.derived-field-values', [({parent}) =>
+  parent.id === statusRow && {
+    id: 'test.derived-field-values',
+    order: 'derived',
+    read: () => ({load: async () => [draftRow], peek: () => [draftRow]}),
+  }])
+
 const parentOf = async (id: string): Promise<string | null> => (await repo.load(id))?.parentId ?? null
 async function childIds(id: string): Promise<string[]> { return await repo.runQuery('core.childIds', {id}) as string[] }
 
@@ -102,6 +113,45 @@ describe('the block actions pass their surface\'s display scope', () => {
     expect(await parentOf(draftRow)).toBe('owner')
   })
 
+  it.each(['none', 'non-hidden'] as const)('derived outdent respects the %s property display', async workspace => {
+    const propertyDisplay = {...NON_HIDDEN, workspace}
+    const surface = listingSurfaceOf({propertyDisplay, scopeRootId: 'page'})
+    installDerivedFieldValues()
+    const placement = () => sharedDb.db.get<{parent_id: string; order_key: string}>(
+      'SELECT parent_id, order_key FROM blocks WHERE id = ? AND deleted = 0', [draftRow],
+    )
+    const hidden = workspace === 'none'
+    expect(await visibleChildIds(repo.block('owner'), surface)).toEqual(hidden ? ['a', 'b'] : ['a', statusRow, 'b'])
+    const before = await placement()
+
+    await run(createSharedBlockActions({repo}).outdentBlock, draftRow, propertyDisplay)
+
+    if (hidden) {
+      expect(await placement()).toEqual(before)
+    } else {
+      expect(await placement()).toMatchObject({parent_id: 'owner'})
+      expect(await childIds('owner')).toEqual(['a', statusRow, draftRow, 'b'])
+    }
+  })
+
+  it('empty Enter creates a sibling when the derived list’s field row is hidden', async () => {
+    const block = repo.block(draftRow)
+    await block.setContent('')
+    installDerivedFieldValues()
+    const scope = listingSurfaceOf({propertyDisplay: {...NON_HIDDEN, workspace: 'none'}, scopeRootId: 'page'})
+    expect(await visibleChildIds(repo.block('owner'), scope)).toEqual(['a', 'b'])
+    const storedChildren = () => sharedDb.db.getAll<{id: string; content: string; order_key: string}>(
+      'SELECT id, content, order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [statusRow],
+    )
+    const before = await storedChildren()
+    expect(before).toMatchObject([{id: draftRow, content: ''}])
+
+    const inserted = await insertDrawnBlock(block, scope, {kind: 'empty-enter'})
+
+    expect(inserted).not.toBeNull()
+    expect(await storedChildren()).toEqual([before[0], {id: inserted?.id, content: '', order_key: expect.any(String)}])
+  })
+
   it('every block of a selection', async () => {
     const {indentBlock} = createSharedBlockActions({repo})
     const indent = applyToAllBlocksInSelection(bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock))
@@ -111,5 +161,38 @@ describe('the block actions pass their surface\'s display scope', () => {
     }
     await indent.handler(deps, {kind: 'test'} as never)
     expect(await parentOf('b')).toBe(statusRow)
+  })
+
+  it('uses the focused children view for every block in a bulk indent', async () => {
+    await repo.tx(tx => tx.create({id: 'c', workspaceId: WS, parentId: 'owner', orderKey: 'a3', content: 'c'}),
+      {scope: ChangeScope.BlockDefault})
+    const renderScopeId = 'filtered-outline'
+    repo.setRuntimeContributions(childrenViewFacet, 'test.bulk-indent', [({parent, surface}) =>
+      parent.id === 'owner' && surface.renderScopeId === renderScopeId ? {
+        id: 'test.bulk-indent',
+        read: () => {
+          const owned = repo.query.childIds({id: parent.id})
+          const filtered = (ids: readonly string[]) => ['c', 'b', 'a'].filter(id => ids.includes(id))
+          return {
+            load: async () => filtered(await owned.load()),
+            peek: () => {
+              const ids = owned.peek()
+              return ids && filtered(ids)
+            },
+          }
+        },
+      } : undefined])
+
+    const uiStateBlock = repo.block('page')
+    await focusBlock(uiStateBlock, 'a', {renderScopeId})
+    const {indentBlock} = createSharedBlockActions({repo})
+    const indent = applyToAllBlocksInSelection(bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock))
+    await indent.handler({
+      selectedBlocks: [repo.block('b'), repo.block('a')], anchorBlock: repo.block('b'),
+      uiStateBlock, scopeRootId: 'page', propertyDisplay: NON_HIDDEN,
+    }, {kind: 'test'} as never)
+
+    expect(await childIds('owner')).toEqual([statusRow, 'c'])
+    expect(await childIds('c')).toEqual(['b', 'a'])
   })
 })

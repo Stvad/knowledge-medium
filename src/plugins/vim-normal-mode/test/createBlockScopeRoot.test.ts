@@ -1,17 +1,7 @@
 // @vitest-environment node
 /**
- * Pins the scope-relative placement of vim `o` / `O` — the "invisible
- * block" bug as reported from a backlinks panel: pressing `o` on a
- * backlink entry created a SIBLING of the entry's shown block, which
- * lives outside the rendered subtree, so the block existed in the DB
- * with nowhere to show.
- *
- * The rule lives in `resolveStructuralEditPolicy`; these tests pin that
- * the two vim handlers actually consult it. They were the only
- * structural handlers not covered — `split_block_cm` (Enter) and
- * `indent_block` (Tab) are pinned in `defaultShortcuts.test.ts`, and
- * neither vim create action is in the `defaultActions.fuzz.test.ts`
- * pool, so removing the policy call here used to break nothing.
+ * Vim `o` and `O` on a scope root use `insertDrawnBlock` to create
+ * a first child inside the rendered subtree.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'

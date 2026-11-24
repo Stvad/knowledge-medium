@@ -11,13 +11,6 @@ import type {
   BlockShellState,
 } from '@/extensions/blockInteraction.js'
 
-const FOCUSED_BLOCK_CLASS = '[&>.block-body>div:first-child]:bg-accent/40'
-
-const mergeClassName = (...parts: Array<string | undefined>): string | undefined => {
-  const className = parts.filter(Boolean).join(' ')
-  return className.length ? className : undefined
-}
-
 const isSurfaceActive = (state: BlockShellState): boolean =>
   typeof state.shortcutSurfaceOptions.surfaceActive === 'boolean'
     ? state.shortcutSurfaceOptions.surfaceActive
@@ -70,8 +63,8 @@ export function BlockFocusShellDecorator({
   const inEditMode = useInEditMode(block.id)
   // Gate the highlight on "this surface owns keystrokes": when the
   // user crosses panels (j/l in spatial-nav, or a click), only the
-  // focused block in the *active* panel shows the bg-accent/40
-  // class. The inactive panel still has its `focusedBlockLocation` set —
+  // focused block in the *active* panel gets a highlight.
+  // The inactive panel still has its `focusedBlockLocation` set —
   // which we need so the highlight reappears when the user comes
   // back via h/k/j/l — but suppressing the visual until then makes
   // "where am I right now" unambiguous, and reading the per-panel
@@ -111,10 +104,7 @@ export function BlockFocusShellDecorator({
   const nextState = useMemo<BlockShellState>(() => ({
     shellProps: {
       ...state.shellProps,
-      className: mergeClassName(
-        state.shellProps.className,
-        active ? FOCUSED_BLOCK_CLASS : undefined,
-      ),
+      'data-block-focused': active ? 'true' : undefined,
     },
     shortcutSurfaceOptions: state.shortcutSurfaceOptions,
   }), [active, state.shellProps, state.shortcutSurfaceOptions])

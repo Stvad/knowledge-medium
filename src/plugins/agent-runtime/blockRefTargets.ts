@@ -4,8 +4,9 @@
  * id parses as a reference to nothing: refused, the agent retries; written,
  * it is a dead link the user finds later.
  */
+import type { Tx } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { extractBlockRefIds } from '@/plugins/references/referenceParser.js'
+import { extractBlockRefIds, parseMarkdownBlockRefs } from '@/plugins/references/referenceParser.js'
 
 const TARGET_ROWS_SQL = `
   SELECT b.id AS id, b.workspace_id AS workspaceId, b.deleted AS deleted
@@ -56,4 +57,44 @@ export const refuseDanglingBlockRefs = async (
     + `${dangling.join('\n')}\n`
     + 'A ((ref)) takes a block\'s id as the views print it after ^.',
   )
+}
+
+/** Keep the answer deliverable when its author is no longer available to fix a link. */
+export const markDanglingReplyLinks = async (
+  tx: Tx,
+  workspaceId: string,
+  blocks: readonly {content: string}[],
+  prunedIds: ReadonlySet<string>,
+): Promise<void> => {
+  const marksByBlock = blocks.map(({content}) => parseMarkdownBlockRefs(content))
+  const targetIds = new Set(marksByBlock.flatMap(marks => marks.map(mark => mark.blockId)))
+  if (targetIds.size === 0) return
+  const liveRows = await tx.liveRowsForIds(workspaceId, [...targetIds])
+  const liveIds = new Set(liveRows.filter(row => !prunedIds.has(row.id)).map(row => row.id))
+
+  for (const [index, block] of blocks.entries()) {
+    const edits: Array<{startIndex: number, endIndex: number, text: string}> = []
+    for (const {blockId, startIndex, endIndex, labelSpan} of marksByBlock[index]) {
+      if (liveIds.has(blockId)) continue
+      const warning = `(broken block link: ${blockId})`
+      if (labelSpan) {
+        // Edit around the label so embedded references have disjoint edits.
+        // The warning prefix keeps labels like "> quote" inline.
+        edits.push(
+          {startIndex, endIndex: labelSpan.startIndex, text: '⚠ '},
+          {startIndex: labelSpan.endIndex, endIndex, text: ` ${warning}`},
+        )
+      } else {
+        edits.push({startIndex, endIndex, text: warning})
+      }
+    }
+    if (edits.length === 0) continue
+    let content = ''
+    let cursor = 0
+    for (const edit of edits.sort((a, b) => a.startIndex - b.startIndex)) {
+      content += block.content.slice(cursor, edit.startIndex) + edit.text
+      cursor = edit.endIndex
+    }
+    block.content = content + block.content.slice(cursor)
+  }
 }

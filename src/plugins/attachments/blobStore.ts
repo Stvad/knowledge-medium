@@ -78,7 +78,7 @@ export interface BlobStore {
    *  never actually saw was gone. NOTE this can't distinguish a genuinely-absent object
    *  from an RLS-DENIED one: Supabase Storage hides existence, so an unauthorized download
    *  returns a 404-shape too, which surfaces here as `null` ("path free"). That's benign
-   *  for recovery — the resulting re-drive is `isActiveUser`-gated (no PUT under the wrong
+   *  for recovery — the resulting re-drive is `canUpload`-gated (no PUT under the wrong
    *  session) and self-corrects via the drain's 409-verify. (This is the same direct RLS
    *  GET as {@link get}; the split is purely about turning the 404 into a value instead of
    *  a throw, which recovery branches on.) */
@@ -108,6 +108,10 @@ export interface SupabaseBlobStoreDeps {
    *  past the probe and is handled as a transient '400' by the classifier.) */
   getAccessToken: () => Promise<string | null>
 }
+
+/** Read the session used by this client's storage requests. */
+export const sessionAccessToken = async (client: SupabaseClient | null): Promise<string | null> =>
+  client ? (await client.auth.getSession()).data.session?.access_token ?? null : null
 
 // Storage error shapes vary by storage-api version. supabase-js surfaces
 // `statusCode = body.statusCode ?? body.code ?? String(httpStatus)` alongside a
@@ -268,4 +272,27 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       }
     },
   }
+}
+
+/** A blob store for a build with no remote object store (local-only / unauthed):
+ *  `get` always misses, so the resolver serves LOCAL byte-store hits and fails
+ *  closed (`fetch-failed`) only on a true miss. Every write throws: a delete that
+ *  resolved here would read as confirmed with nothing deleted. */
+export const NO_REMOTE_BLOB_STORE: BlobStore = {
+  put: async () => {
+    throw new BlobPutError('no remote object store configured', false, undefined, 'no_remote')
+  },
+  get: async () => {
+    throw new Error('no remote object store configured')
+  },
+  // Throw (not a 404-null) so the §9 recovery probe treats local-only as TRANSIENT and
+  // DEFERS — never mistaking "no remote configured" for "path free" and re-driving an
+  // upload there's nowhere to send. (Recovery is gated off in local-only anyway; this
+  // only covers a mode flip mid-lane.)
+  probe: async () => {
+    throw new Error('no remote object store configured')
+  },
+  delete: async () => {
+    throw new Error('no remote object store configured')
+  },
 }

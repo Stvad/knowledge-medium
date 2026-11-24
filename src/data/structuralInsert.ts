@@ -1,0 +1,160 @@
+import { ChangeScope, type BlockData, type Tx } from '@/data/api'
+import type { Block } from '@/data/block'
+import { hasSourceContent } from '@/data/blockTypes'
+import { childrenViewFor, listingSurfaceOf, propertyDisplayChildrenView, type ListingSurface } from '@/data/childrenView'
+import { captureOccurrenceEdge, createChild, createSiblingAbove, createSiblingBelow, liveChildAt, split, type InsertPosition as StoredInsertPosition, type SplitPlacement } from '@/data/mutators'
+import type { SurfaceCarrier } from '@/data/outlineSurface'
+import { isCollapsedProp } from '@/data/properties'
+import { outdentDrawnBlock } from '@/data/structuralEditPolicy'
+import { drawnChildrenOf } from '@/data/visibleChildren'
+import { nestedWriteLocation } from '@/utils/drawnWalk'
+
+export type InsertGesture =
+  | {kind: 'above' | 'below' | 'enter' | 'empty-enter'}
+  | {
+    kind: 'split'
+    isCurrent?: () => boolean
+    /** Save and re-arm the live editor around the transactional split. */
+    write(placement: SplitPlacement, commit: (before: string, after: string) => Promise<string | null>): Promise<string | null>
+  }
+
+export type InsertPosition = 'first' | 'last' | 'before' | 'after'
+
+export interface ChildrenInsertRequest {
+  block: Block
+  data: BlockData
+  surface: ListingSurface
+  gesture: InsertGesture['kind']
+  /** First or last child of the block, or a sibling before or after it. */
+  position: InsertPosition
+  /** Check the initiating occurrence and, for a split, the editor in the hook's writing transaction. */
+  stillCurrent(tx: Tx): Promise<boolean>
+}
+
+interface OccurrenceRequest extends ChildrenInsertRequest {
+  occurrence(tx: Tx): Promise<BlockData | null>
+}
+
+export interface InsertedBlock {
+  id: string
+  renderScopeId: string | undefined
+  /** False when the destination draws the block without an editor for its text. */
+  edit?: boolean
+}
+
+/** The view may return a created ID, specify a different focus surface, or ask the outline to place the block. */
+export type ChildrenInsertDecision = string | InsertedBlock | {position: InsertPosition; renderScopeId?: string}
+
+async function childPositionFor(request: ChildrenInsertRequest, renderScopeId: string | undefined): Promise<StoredInsertPosition | undefined> {
+  const {block, data, position} = request
+  if (position !== 'first' && position !== 'last') return undefined
+  const ctx = {parent: block, data, surface: {...request.surface, renderScopeId}}
+  const view = childrenViewFor(ctx)
+  if (view === propertyDisplayChildrenView) return {kind: position}
+  const children = await view.read(ctx).load()
+  const ownMember = (child: typeof children[number]): child is string => typeof child === 'string'
+  const siblingId = position === 'first' ? children.find(ownMember) : children.findLast(ownMember)
+  return siblingId === undefined ? {kind: position} : {kind: position === 'first' ? 'before' : 'after', siblingId}
+}
+
+async function insertInDataOrder(
+  request: OccurrenceRequest,
+  gesture: InsertGesture,
+  renderScopeId = request.surface.renderScopeId,
+): Promise<InsertedBlock | null> {
+  const {block, position} = request
+  const {repo, id} = block
+  const childPosition = await childPositionFor(request, renderScopeId)
+  const childAnchorId = childPosition && 'siblingId' in childPosition ? childPosition.siblingId : undefined
+  const currentAtPosition = async (tx: Tx) => {
+    const current = await request.occurrence(tx)
+    if (!current) return null
+    if (childAnchorId !== undefined && !await liveChildAt(tx, childAnchorId, id)) return null
+    return current
+  }
+  const options = {scope: ChangeScope.BlockDefault, description: gesture.kind === 'split' ? `split ${id}` : `insert at ${id}`}
+  if (gesture.kind === 'split') {
+    if (position === 'after' || position === 'last') return null
+    const placement = position === 'first' ? 'firstChild' : 'siblingBefore'
+    const newId = await gesture.write(placement, (before, after) => repo.tx(async tx => {
+      const current = await currentAtPosition(tx)
+      if (!current || hasSourceContent(current)) return null
+      return tx.run(split, {id, before, after, placement, firstChildBeforeId: childAnchorId})
+    }, options))
+    return newId === null ? null : {id: position === 'first' ? newId : id, renderScopeId}
+  }
+
+  const newId = await repo.tx(async tx => {
+    if (!await currentAtPosition(tx)) return null
+    if (childPosition) return tx.run(createChild, {parentId: id, position: childPosition, revealParent: true})
+    return tx.run(position === 'before' ? createSiblingAbove : createSiblingBelow, {siblingId: id})
+  }, options)
+  return newId === null ? null : {id: newId, renderScopeId}
+}
+
+async function insertWithView(parent: Block, surface: ListingSurface, request: OccurrenceRequest, gesture: InsertGesture, projected: boolean) {
+  const data = parent.peek() ?? await parent.load()
+  if (!data) return undefined
+  const ctx = {parent, data, surface}
+  const view = childrenViewFor(ctx)
+  const sameScopeQuery = view.order === 'query' && surface.renderScopeId === request.surface.renderScopeId
+  const needsExplicitPlacement = (position: InsertPosition) => gesture.kind === 'split' || position === 'before' || position === 'after'
+  if (view.insert && gesture.kind === 'split' && gesture.isCurrent?.() === false) return null
+  const answer = await view.insert?.(ctx, request)
+  if (answer === undefined && sameScopeQuery && needsExplicitPlacement(request.position)) return null
+  if (typeof answer === 'string') return {id: answer, renderScopeId: request.surface.renderScopeId}
+  if (answer && 'position' in answer) {
+    const {position, renderScopeId} = answer
+    if ((projected || sameScopeQuery) && needsExplicitPlacement(position)) return null
+    return insertInDataOrder({...request, position}, gesture, renderScopeId)
+  }
+  return answer
+}
+
+function positionFor(gesture: InsertGesture['kind'], atRoot: boolean, showsChildren: boolean): InsertPosition {
+  if (atRoot) return 'first'
+  if (gesture === 'above' || gesture === 'split') return 'before'
+  return showsChildren ? 'first' : 'after'
+}
+
+export async function insertDrawnBlock(block: Block, carrier: SurfaceCarrier, gesture: InsertGesture): Promise<InsertedBlock | null> {
+  const {repo} = block
+  const data = block.peek() ?? await block.load()
+  if (!data || repo.isReadOnly) return null
+  if (gesture.kind === 'split' && hasSourceContent(data)) return null
+  const declaration = await nestedWriteLocation(block, carrier.renderScopeId)
+  if (declaration === null) return null
+  const direct = declaration?.memberId === block.id ? declaration : undefined
+  const projected = direct?.projected ?? false
+  const scopeRootId = direct?.boundaryId ?? carrier.scopeRootId
+  const surface = listingSurfaceOf({...carrier, scopeRootId})
+  const isScopeRoot = block.id === scopeRootId
+  const children = await drawnChildrenOf(block, surface)
+  const showsChildren = children.length > 0 && !block.peekProperty(isCollapsedProp)
+  const position = positionFor(gesture.kind, isScopeRoot, showsChildren)
+  const occurrence = captureOccurrenceEdge(block.id, data.parentId, declaration).currentRow
+  const isCurrent = gesture.kind === 'split' ? gesture.isCurrent : undefined
+  const request: OccurrenceRequest = {
+    block, data, surface, gesture: gesture.kind, position, occurrence,
+    stillCurrent: async tx => !!await occurrence(tx) && isCurrent?.() !== false,
+  }
+
+  // The owner can place a nested member beside the others even when editing the member is scoped to its own subtree.
+  if (declaration && (direct || isScopeRoot)) {
+    const nestedPosition = direct ? positionFor(gesture.kind, false, showsChildren) : position
+    const result = await insertWithView(declaration.parent.block, declaration.parent.surface, {...request, position: nestedPosition}, gesture, projected)
+    if (result !== undefined) return result
+  }
+  if (projected && gesture.kind === 'split') return null
+
+  const parent = position === 'first' ? block : data.parentId === null ? null : repo.block(data.parentId)
+  if (parent) {
+    const result = await insertWithView(parent, surface, request, gesture, projected)
+    if (result !== undefined) return result
+  }
+  if (gesture.kind === 'empty-enter' && position === 'after') {
+    const moved = await outdentDrawnBlock(block, surface, data.parentId)
+    if (moved !== false) return null
+  }
+  return insertInDataOrder(request, gesture)
+}
