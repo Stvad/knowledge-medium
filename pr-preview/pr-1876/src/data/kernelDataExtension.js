@@ -1,1 +1,1 @@
-export{Tet as kernelDataExtension}from"../../chunks/app-CblAhgWR.js";
+export{Det as kernelDataExtension}from"../../chunks/app-COBQeT2F.js";
