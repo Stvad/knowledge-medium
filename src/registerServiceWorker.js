@@ -1,1 +1,1 @@
-export{KL as checkForAppUpdate,qL as registerServiceWorker}from"../chunks/app-DlrBuiZp.js";
+export{qL as checkForAppUpdate,JL as registerServiceWorker}from"../chunks/app-CGS8CdPA.js";

@@ -1,1 +1,1 @@
-export{PS as Wikilink}from"../../../../../chunks/app-DlrBuiZp.js";
+export{FS as Wikilink}from"../../../../../chunks/app-CGS8CdPA.js";

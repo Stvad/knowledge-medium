@@ -1,1 +1,1 @@
-export{UI as withRowSlide}from"../../chunks/app-DlrBuiZp.js";
+export{WI as withRowSlide}from"../../chunks/app-CGS8CdPA.js";

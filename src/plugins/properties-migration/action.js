@@ -1,1 +1,1 @@
-export{Wc as describeOutcome,Gc as migratePropertiesToBlocksAction}from"../../../chunks/app-DlrBuiZp.js";
+export{Wc as describeOutcome,Gc as migratePropertiesToBlocksAction}from"../../../chunks/app-CGS8CdPA.js";

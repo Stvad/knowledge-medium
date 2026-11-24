@@ -1,1 +1,1 @@
-export{Fa as startupMetricsPlugin}from"../../../chunks/app-DlrBuiZp.js";
+export{Fa as startupMetricsPlugin}from"../../../chunks/app-CGS8CdPA.js";

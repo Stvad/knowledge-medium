@@ -1,1 +1,1 @@
-export{w_ as agentDispatchCompanionPlugin}from"../../../chunks/app-DlrBuiZp.js";
+export{w_ as agentDispatchCompanionPlugin}from"../../../chunks/app-CGS8CdPA.js";

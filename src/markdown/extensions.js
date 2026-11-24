@@ -1,1 +1,1 @@
-export{gW as markdownExtensionsFacet,_W as resolveMarkdownRenderConfig}from"../../chunks/app-DlrBuiZp.js";
+export{_W as markdownExtensionsFacet,vW as resolveMarkdownRenderConfig}from"../../chunks/app-CGS8CdPA.js";

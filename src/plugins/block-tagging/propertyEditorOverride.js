@@ -1,1 +1,1 @@
-export{rp as blockTagsConfigUi}from"../../../chunks/app-DlrBuiZp.js";
+export{rp as blockTagsConfigUi}from"../../../chunks/app-CGS8CdPA.js";

@@ -1,1 +1,1 @@
-export{WC as aliasCollisionRejectionToast}from"../../../chunks/app-DlrBuiZp.js";
+export{GC as aliasCollisionRejectionToast}from"../../../chunks/app-CGS8CdPA.js";
