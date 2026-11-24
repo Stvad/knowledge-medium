@@ -29,7 +29,7 @@ import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
-import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { markDanglingReplyLinks, refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
 import { captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
 import { CHOOSE_CONTRIBUTOR_MESSAGE } from '@/plugins/contributors/processor.js'
@@ -994,7 +994,7 @@ const SUBTREE_KEY_PROP = 'agent:subtreeKey'
  *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
  *  split matches "paste as markdown" exactly; `shape:'block'` keeps it one
  *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
- *  (the daemon passes `agent:reply`).
+ *  (the daemon passes `agent:reply`, which flags dangling links inline).
  *
  *  Idempotent by `key`: the tagged blocks are made to carry the parsed
  *  tree's content/parentage by a positional (pre-order) reconcile — update
@@ -1043,6 +1043,11 @@ const reconcileMarkdownSubtree = async (
       }
     }
     await collect(parentId)
+
+    if (properties?.['agent:reply'] === true) {
+      const prunedIds = new Set(final ? existing.slice(parsed.length).map(row => row.id) : [])
+      await markDanglingReplyLinks(tx, workspaceId, parsed, prunedIds)
+    }
 
     // Cursor per real parent for APPENDING new nodes. To keep the subtree
     // CONTIGUOUS, new nodes slot right after the parent's last child ALREADY

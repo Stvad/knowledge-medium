@@ -70,6 +70,7 @@ beforeEach(async () => {
 const create = async (args: {
   id: string
   content?: string
+  workspaceId?: string
   parentId?: string | null
   orderKey?: string
   references?: BlockReference[]
@@ -78,7 +79,7 @@ const create = async (args: {
   await repo.tx(async tx => {
     await tx.create({
       id: args.id,
-      workspaceId: WS,
+      workspaceId: args.workspaceId ?? WS,
       parentId: args.parentId ?? null,
       orderKey: args.orderKey ?? `key-${args.id}`,
       content: args.content ?? args.id,
@@ -412,10 +413,13 @@ describe('delete-block / restore-block commands', () => {
 describe('reconcile-markdown-subtree command', () => {
   type ReconcileResult = {ids: string[], rootIds: string[]}
   const KEY = 'reply:test:1'
+  const MISSING = '22222222-2222-4222-8222-222222222222'
+  const DELETED = '33333333-3333-4333-8333-333333333333'
+  const FOREIGN = '44444444-4444-4444-8444-444444444444'
 
   const reconcile = (
     markdown: string,
-    opts: {key?: string, shape?: 'outline' | 'block', final?: boolean, commandId?: string} = {},
+    opts: {key?: string, shape?: 'outline' | 'block', final?: boolean, commandId?: string, properties?: BlockProperties} = {},
   ) => executeCommand({
     commandId: opts.commandId ?? `rms-${markdown.length}-${opts.final ? 'f' : 'p'}`,
     type: 'reconcile-markdown-subtree',
@@ -424,7 +428,7 @@ describe('reconcile-markdown-subtree command', () => {
     key: opts.key ?? KEY,
     ...(opts.shape ? {shape: opts.shape} : {}),
     ...(opts.final ? {final: true} : {}),
-    properties: {'agent:reply': true},
+    properties: opts.properties ?? {'agent:reply': true},
   }, context) as Promise<ReconcileResult>
 
   const replyRoots = async () =>
@@ -453,6 +457,70 @@ describe('reconcile-markdown-subtree command', () => {
       expect(row.properties?.['agent:reply']).toBe(true)
       expect(row.properties?.['agent:subtreeKey']).toBe(KEY)
     }
+  })
+
+  it('keeps reply prose and live links while marking missing, deleted, and foreign targets', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    await create({id: DELETED})
+    await repo.tx(tx => tx.delete(DELETED), {scope: ChangeScope.BlockDefault})
+    repo.setActiveWorkspaceId('ws-other')
+    try {
+      await create({id: FOREIGN, workspaceId: 'ws-other'})
+    } finally {
+      repo.setActiveWorkspaceId(WS)
+    }
+
+    const live = `[mention](((${TOPIC_A})))`
+    const code = `\`((${MISSING}))\``
+    const web = `[web](https://example.com/((${MISSING})))`
+    const result = await reconcile([
+      `- See [the source](((${MISSING}))) and ${live}.`,
+      `  - See ((${DELETED})) and !((${FOREIGN})).`,
+      `  - Example syntax: ${code} and ${web}.`,
+      `  - [Use \`this\`](<((${MISSING}))>)`,
+    ].join('\n'), {final: true})
+
+    const subtree = await context.getSubtree(TOPIC_A)
+    const rows = result.ids.map(id => subtree.find(row => row.id === id)!)
+    expect(rows.map(row => row.content)).toEqual([
+      `See the source (broken block link: ${MISSING}) and ${live}.`,
+      `See (broken block link: ${DELETED}) and (broken block link: ${FOREIGN}).`,
+      `Example syntax: ${code} and ${web}.`,
+      `Use \`this\` (broken block link: ${MISSING})`,
+    ])
+    expect(rows[1].parentId).toBe(rows[0].id)
+  })
+
+  it('treats a link to a reply block pruned by the same write as broken', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    const draft = await reconcile('- One\n- Two')
+    const tailId = draft.rootIds[1]
+    const text = `- See [two](((${tailId})))`
+    await reconcile(text)
+    expect((await replyRoots()).map(row => row.content)).toEqual([text.slice(2), 'Two'])
+
+    await reconcile(text, {final: true})
+    expect((await replyRoots()).map(row => row.content)).toEqual([`See two (broken block link: ${tailId})`])
+  })
+
+  it('preserves the supplied Markdown in a generic reconciliation', async () => {
+    await create({id: TOPIC_A, content: 'parent'})
+    const text = `See [the source](((${MISSING})))`
+    await reconcile(text, {properties: {}, final: true})
+    expect((await replyRoots()).map(row => row.content)).toEqual([text])
+  })
+
+  it('flags a broken streamed link and restores it in place when the final reply corrects it', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    const draft = await reconcile(`See [the source](((${MISSING})))`, {shape: 'block'})
+    expect((await replyRoots()).map(row => row.content)).toEqual([
+      `See the source (broken block link: ${MISSING})`,
+    ])
+
+    const corrected = `See [the source](((${TOPIC_A})))`
+    const final = await reconcile(corrected, {shape: 'block', final: true})
+    expect(final.rootIds).toEqual(draft.rootIds)
+    expect((await replyRoots()).map(row => row.content)).toEqual([corrected])
   })
 
   it('is idempotent by key: re-sending the same markdown adds no blocks', async () => {

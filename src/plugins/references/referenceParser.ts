@@ -17,7 +17,8 @@
 
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
-import { visit } from 'unist-util-visit'
+import remarkGfm from 'remark-gfm'
+import { SKIP, visit } from 'unist-util-visit'
 import type { Text } from 'mdast'
 import {
   MAX_ALIAS_LENGTH,
@@ -396,6 +397,32 @@ export function parseBlockRefs(content: string): ParsedBlockRef[] {
 
 export function extractBlockRefIds(content: string): string[] {
   return Array.from(new Set(parseBlockRefs(content).map(r => r.blockId)))
+}
+
+/** Source spans suitable for rewriting a Markdown block: code and ordinary link URLs are literal. */
+export const parseMarkdownBlockRefs = (content: string): ParsedBlockRef[] => {
+  if (!content.includes('((')) return []
+  const marks: ParsedBlockRef[] = []
+  visit(unified().use(remarkParse).use(remarkGfm).parse(content), ['text', 'link'], node => {
+    const startIndex = node.position?.start.offset
+    const endIndex = node.position?.end.offset
+    if (startIndex === undefined || endIndex === undefined) return SKIP
+    if (node.type === 'link') {
+      const blockId = parseBlockRefTarget(node.url)
+      if (blockId) {
+        const labelStart = node.children[0]?.position?.start.offset
+        const labelEnd = node.children.at(-1)?.position?.end.offset
+        const label = labelStart === undefined || labelEnd === undefined ? '' : content.slice(labelStart, labelEnd)
+        marks.push({blockId, startIndex, endIndex, label, embed: false})
+        return SKIP
+      }
+      return
+    }
+    for (const mark of parseBlockRefs(content.slice(startIndex, endIndex))) {
+      marks.push({...mark, startIndex: startIndex + mark.startIndex, endIndex: startIndex + mark.endIndex})
+    }
+  })
+  return marks
 }
 
 // ──── Rendering helpers (centralized so callers don't build wikilink
