@@ -73,15 +73,28 @@ export const markDanglingReplyLinks = async (
   const liveIds = new Set(liveRows.filter(row => !prunedIds.has(row.id)).map(row => row.id))
 
   for (const [index, block] of blocks.entries()) {
+    const edits: Array<{startIndex: number, endIndex: number, text: string}> = []
+    for (const {blockId, startIndex, endIndex, labelSpan} of marksByBlock[index]) {
+      if (liveIds.has(blockId)) continue
+      const warning = `(broken block link: ${blockId})`
+      if (labelSpan) {
+        // Edit around the label so embedded references have disjoint edits.
+        // The warning prefix keeps labels like "> quote" inline.
+        edits.push(
+          {startIndex, endIndex: labelSpan.startIndex, text: '⚠ '},
+          {startIndex: labelSpan.endIndex, endIndex, text: ` ${warning}`},
+        )
+      } else {
+        edits.push({startIndex, endIndex, text: warning})
+      }
+    }
+    if (edits.length === 0) continue
     let content = ''
     let cursor = 0
-    for (const mark of marksByBlock[index]) {
-      if (liveIds.has(mark.blockId)) continue
-      content += block.content.slice(cursor, mark.startIndex)
-      if (mark.label) content += `${mark.label} `
-      content += `(broken block link: ${mark.blockId})`
-      cursor = mark.endIndex
+    for (const edit of edits.sort((a, b) => a.startIndex - b.startIndex)) {
+      content += block.content.slice(cursor, edit.startIndex) + edit.text
+      cursor = edit.endIndex
     }
-    if (cursor > 0) block.content = content + block.content.slice(cursor)
+    block.content = content + block.content.slice(cursor)
   }
 }

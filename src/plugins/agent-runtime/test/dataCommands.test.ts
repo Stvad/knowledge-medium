@@ -483,12 +483,39 @@ describe('reconcile-markdown-subtree command', () => {
     const subtree = await context.getSubtree(TOPIC_A)
     const rows = result.ids.map(id => subtree.find(row => row.id === id)!)
     expect(rows.map(row => row.content)).toEqual([
-      `See the source (broken block link: ${MISSING}) and ${live}.`,
+      `See ⚠ the source (broken block link: ${MISSING}) and ${live}.`,
       `See (broken block link: ${DELETED}) and (broken block link: ${FOREIGN}).`,
       `Example syntax: ${code} and ${web}.`,
-      `Use \`this\` (broken block link: ${MISSING})`,
+      `⚠ Use \`this\` (broken block link: ${MISSING})`,
     ])
     expect(rows[1].parentId).toBe(rows[0].id)
+  })
+
+  it('preserves autolink URLs and keeps a broken link label inline', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    const url = `https://example.com/((${MISSING}))`
+    await reconcile(`- ${url} and <${url}>\n- [> quote](((${MISSING})))`, {final: true})
+    expect((await replyRoots()).map(row => row.content)).toEqual([
+      `${url} and <${url}>`,
+      `⚠ > quote (broken block link: ${MISSING})`,
+    ])
+  })
+
+  it('checks both the outer link and the references inside its label', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    const inner = `See !((${MISSING}))`
+    const marked = `See (broken block link: ${MISSING})`
+    const liveInner = `See ((${TOPIC_A}))`
+    await reconcile([
+      `- [${inner}](((${TOPIC_A})))`,
+      `- [${inner}](((${MISSING})))`,
+      `- [${liveInner}](((${MISSING})))`,
+    ].join('\n'), {final: true})
+    expect((await replyRoots()).map(row => row.content)).toEqual([
+      `[${marked}](((${TOPIC_A})))`,
+      `⚠ ${marked} (broken block link: ${MISSING})`,
+      `⚠ ${liveInner} (broken block link: ${MISSING})`,
+    ])
   })
 
   it('treats a link to a reply block pruned by the same write as broken', async () => {
@@ -500,7 +527,7 @@ describe('reconcile-markdown-subtree command', () => {
     expect((await replyRoots()).map(row => row.content)).toEqual([text.slice(2), 'Two'])
 
     await reconcile(text, {final: true})
-    expect((await replyRoots()).map(row => row.content)).toEqual([`See two (broken block link: ${tailId})`])
+    expect((await replyRoots()).map(row => row.content)).toEqual([`See ⚠ two (broken block link: ${tailId})`])
   })
 
   it('preserves the supplied Markdown in a generic reconciliation', async () => {
@@ -514,7 +541,7 @@ describe('reconcile-markdown-subtree command', () => {
     await create({id: TOPIC_A, content: 'mention'})
     const draft = await reconcile(`See [the source](((${MISSING})))`, {shape: 'block'})
     expect((await replyRoots()).map(row => row.content)).toEqual([
-      `See the source (broken block link: ${MISSING})`,
+      `See ⚠ the source (broken block link: ${MISSING})`,
     ])
 
     const corrected = `See [the source](((${TOPIC_A})))`

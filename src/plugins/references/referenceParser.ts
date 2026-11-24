@@ -399,27 +399,36 @@ export function extractBlockRefIds(content: string): string[] {
   return Array.from(new Set(parseBlockRefs(content).map(r => r.blockId)))
 }
 
-/** Source spans suitable for rewriting a Markdown block: code and ordinary link URLs are literal. */
-export const parseMarkdownBlockRefs = (content: string): ParsedBlockRef[] => {
+interface MarkdownBlockRef extends Pick<ParsedBlockRef, 'blockId' | 'startIndex' | 'endIndex'> {
+  labelSpan?: {startIndex: number, endIndex: number}
+}
+
+/** Source spans for rewriting Markdown. A label can itself contain refs;
+ *  its own span lets callers edit the outer link's delimiters independently. */
+export const parseMarkdownBlockRefs = (content: string): MarkdownBlockRef[] => {
   if (!content.includes('((')) return []
-  const marks: ParsedBlockRef[] = []
+  const marks: MarkdownBlockRef[] = []
   visit(unified().use(remarkParse).use(remarkGfm).parse(content), ['text', 'link'], node => {
     const startIndex = node.position?.start.offset
     const endIndex = node.position?.end.offset
     if (startIndex === undefined || endIndex === undefined) return SKIP
     if (node.type === 'link') {
+      // Autolink display text is the URL itself, so leave it opaque.
+      if (content[startIndex] !== '[') return SKIP
       const blockId = parseBlockRefTarget(node.url)
       if (blockId) {
         const labelStart = node.children[0]?.position?.start.offset
         const labelEnd = node.children.at(-1)?.position?.end.offset
-        const label = labelStart === undefined || labelEnd === undefined ? '' : content.slice(labelStart, labelEnd)
-        marks.push({blockId, startIndex, endIndex, label, embed: false})
-        return SKIP
+        const labelSpan = labelStart === undefined || labelEnd === undefined
+          ? undefined : {startIndex: labelStart, endIndex: labelEnd}
+        marks.push({blockId, startIndex, endIndex, labelSpan})
       }
       return
     }
     for (const mark of parseBlockRefs(content.slice(startIndex, endIndex))) {
-      marks.push({...mark, startIndex: startIndex + mark.startIndex, endIndex: startIndex + mark.endIndex})
+      const start = startIndex + mark.startIndex
+      const labelSpan = mark.label ? {startIndex: start + 1, endIndex: content.indexOf(']', start + 1)} : undefined
+      marks.push({blockId: mark.blockId, startIndex: start, endIndex: startIndex + mark.endIndex, labelSpan})
     }
   })
   return marks
