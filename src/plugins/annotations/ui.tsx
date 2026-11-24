@@ -47,7 +47,7 @@ import {GutterPill} from '@/components/GutterPill.js'
 import {SurfaceZoomCrumbs, ZoomableSurface, type SurfaceZoom} from '@/components/ZoomableSurface.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
-import {isPanelRenderScopeId} from '@/utils/renderScope.js'
+import {isPanelRenderScopeId, surfaceOfRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
@@ -153,9 +153,9 @@ export type PillClick =
   | {kind: 'expand-inline'}
   | {kind: 'activate'; threadId: string; revealClosed: boolean}
 
-/** What a click on the pill does. With the margin drawn it pins the block's
+/** What a click on the pill does. With the margin drawn it reveals the block's
  *  first open thread's card, or, for a block whose threads are all resolved,
- *  the first one's, revealing closed threads so the card is there to pin. */
+ *  the first one's, revealing closed threads so the card is visible. */
 export const pillClick = (threads: readonly ThreadSummary[], inMargin: boolean): PillClick => {
   const first = threads.find(thread => thread.open) ?? threads[0]
   return inMargin && first
@@ -193,7 +193,7 @@ const CommentPill: BlockRenderer = ({block}) => {
   const key = viewKey(blockContext.renderScopeId, block.id)
   const panelId = blockContext.panelId
   // With the margin drawn, the threads are already beside the block: the pill
-  // pins its first card instead of expanding them a second time inline.
+  // reveals its first card instead of expanding them a second time inline.
   const inMargin = useInMargin(blockContext)
   const activeThread = useActiveThread(panelId ?? '')
   const inlineExpanded = useThreadsExpanded(key)
@@ -205,7 +205,7 @@ const CommentPill: BlockRenderer = ({block}) => {
       return
     }
     if (click.revealClosed) showClosedThreads(panelId!)
-    activateThread(panelId!, click.threadId)
+    activateThread(panelId!, click.threadId, 'reveal')
   }
   const count = pillCount(threads)
   if (count === null && !expanded) return null
@@ -574,23 +574,29 @@ export const ReanchorControls = ({root, targetContent}: {
   )
 }
 
-/** What a thread's line shows: a suggestion's change, or the quote. */
-const ThreadQuote = ({block, root}: {block: Block; root: RootFields}) => {
+const ThreadQuote = ({block, root, sourceContent}: {block: Block; root: RootFields; sourceContent?: string | null}) => {
   const suggestion = threadSuggestionOf(root)
-  return suggestion ? <SuggestionText root={root} suggestion={suggestion}/> : <QuoteText anchor={threadAnchorOf(root)} source={block}/>
+  if (suggestion) return <SuggestionText root={root} suggestion={suggestion}/>
+  const anchor = threadAnchorOf(root)
+  const excerpt = anchor.kind === 'block' && sourceContent ? truncate(firstLine(sourceContent.trimStart()), 80) : ''
+  return excerpt
+    ? <span data-margin-source-excerpt><span className="italic">Whole block</span> · {excerpt}</span>
+    : <QuoteText anchor={anchor} source={block}/>
 }
 
 const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; onReply: () => Promise<void>}) => {
   const repo = useRepo()
+  const {renderScopeId} = useBlockContext()
   const readOnly = useReadOnly(repo)
   const {state, targetContent} = useAnchorState(root)
   const open = threadIsOpen(root)
   const awaitingDecision = open && threadSuggestionOf(root) !== null
   const anchorShown = showsAnchorState(root)
+  const sourceContent = renderScopeId && surfaceOfRenderScopeId(renderScopeId) === 'margin' ? targetContent : undefined
   return (
     <div className="space-y-0.5">
     <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-      <span className={`${awaitingDecision ? 'basis-full' : 'line-clamp-3 flex-1 basis-32'} min-w-0 text-muted-foreground`}><ThreadQuote block={block} root={root}/></span>
+      <span className={`${awaitingDecision ? 'basis-full' : 'line-clamp-3 flex-1 basis-32'} min-w-0 text-muted-foreground`}><ThreadQuote block={block} root={root} sourceContent={sourceContent}/></span>
       {anchorShown && state !== 'exact' && (
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
       )}

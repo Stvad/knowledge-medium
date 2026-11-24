@@ -111,8 +111,8 @@ export const useComposer = (key: string): ComposerState | undefined =>
 /** Panels whose margin is drawn right now: switched on AND wide enough. Their
  *  pills hand threads to the margin instead of expanding them inline. */
 const marginShowing = new Set<string>()
-/** The thread whose card each panel's margin keeps in view (`placeCards`). */
-const activeThreads = new Map<string, string>()
+/** A reveal waits for placement when its card is still loading or closed. */
+const activeThreads = new Map<string, {id: string; reveal: boolean}>()
 const showingClosed = createKeyedToggleSet('annotations-show-closed')
 
 export const setMarginShowing = (panelId: string, showing: boolean): void => {
@@ -125,21 +125,28 @@ export const setMarginShowing = (panelId: string, showing: boolean): void => {
 export const useMarginShowing = (panelId: string | undefined): boolean =>
   useSyncExternalStore(subscribe, () => panelId !== undefined && marginShowing.has(panelId))
 
-export const activateThread = (panelId: string, threadId: string): void => {
-  if (activeThreads.get(panelId) === threadId) return
-  activeThreads.set(panelId, threadId)
+export const activateThread = (panelId: string, threadId: string, intent: 'select' | 'reveal' = 'select'): void => {
+  const reveal = intent === 'reveal'
+  if (!reveal && activeThreads.get(panelId)?.id === threadId) return
+  activeThreads.set(panelId, {id: threadId, reveal})
   listeners.notify()
 }
 
-/** Release the panel's active card back to its row. */
+export const takeMarginReveal = (panelId: string, threadId: string): boolean => {
+  const active = activeThreads.get(panelId)
+  if (!active?.reveal || active.id !== threadId) return false
+  active.reveal = false
+  return true
+}
+
 export const deactivateThread = (panelId: string): void => {
   if (activeThreads.delete(panelId)) listeners.notify()
 }
 
-export const peekActiveThread = (panelId: string): string | undefined => activeThreads.get(panelId)
+export const peekActiveThread = (panelId: string): string | undefined => activeThreads.get(panelId)?.id
 
 export const useActiveThread = (panelId: string): string | undefined =>
-  useSyncExternalStore(subscribe, () => activeThreads.get(panelId))
+  useSyncExternalStore(subscribe, () => peekActiveThread(panelId))
 
 export const toggleShowClosed = showingClosed.toggle
 export const showClosedThreads = showingClosed.add
@@ -151,7 +158,7 @@ export const peekMarginShowing = (panelId: string): boolean => marginShowing.has
  *  else inline under its block. */
 export const outerCardSurface = (panelId: string): CardSurface => marginShowing.has(panelId) ? 'margin' : 'comments'
 
-/** Show `threadId`'s card for the block that `key` names in `panelId`: pinned
+/** Show `threadId`'s card for the block that `key` names in `panelId`: revealed
  *  in the margin, and expanded inline for when the margin isn't drawn, with
  *  closed threads shown if it is closed. */
 export const revealThread = (panelId: string, key: string, threadId: string, open: boolean): void => {
@@ -160,7 +167,7 @@ export const revealThread = (panelId: string, key: string, threadId: string, ope
     showingResolved.add(key)
     showingClosed.add(panelId)
   }
-  activateThread(panelId, threadId)
+  activateThread(panelId, threadId, peekMarginShowing(panelId) ? 'reveal' : 'select')
 }
 
 /** The notifications that move cards without mounting or unmounting one, for
