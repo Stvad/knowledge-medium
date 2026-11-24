@@ -1,1 +1,1 @@
-export{BQ as htmlDocumentTypeSeed}from"../../../chunks/app-DftIvrW8.js";
+export{BQ as htmlDocumentTypeSeed}from"../../../chunks/app-nFcAqr3t.js";
