@@ -1,1 +1,0 @@
-export{WP as CommandPalette}from"../../../chunks/app-nFcAqr3t.js";
