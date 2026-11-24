@@ -1,1 +1,1 @@
-export{hF as commandPaletteToggle}from"../../../chunks/app-COBQeT2F.js";
+export{hF as commandPaletteToggle}from"../../../chunks/app-DDEj5D2_.js";
