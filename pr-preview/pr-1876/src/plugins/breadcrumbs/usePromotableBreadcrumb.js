@@ -1,1 +1,0 @@
-export{HO as usePromotableBreadcrumb}from"../../../chunks/app-CCbHr6Sr.js";

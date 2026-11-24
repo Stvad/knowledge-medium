@@ -1,1 +1,0 @@
-export{mY as usePropertySchemas}from"../../chunks/app-CCbHr6Sr.js";

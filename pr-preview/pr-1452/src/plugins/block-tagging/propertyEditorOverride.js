@@ -1,1 +1,0 @@
-export{al as blockTagsConfigUi}from"../../../chunks/app-otp5Iace.js";

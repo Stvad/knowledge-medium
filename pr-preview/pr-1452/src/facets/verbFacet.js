@@ -1,1 +1,0 @@
-export{FG as defineVerbFacet}from"../../chunks/app-otp5Iace.js";

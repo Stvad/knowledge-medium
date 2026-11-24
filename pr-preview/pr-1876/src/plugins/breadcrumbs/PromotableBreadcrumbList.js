@@ -1,1 +1,0 @@
-export{UO as PromotableBreadcrumbList}from"../../../chunks/app-CCbHr6Sr.js";

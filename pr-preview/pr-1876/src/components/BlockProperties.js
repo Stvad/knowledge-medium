@@ -1,1 +1,0 @@
-export{CW as BlockProperties}from"../../chunks/app-CCbHr6Sr.js";

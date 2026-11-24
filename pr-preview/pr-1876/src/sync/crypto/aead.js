@@ -1,1 +1,0 @@
-export{pat as open,mat as seal}from"../../../chunks/app-CCbHr6Sr.js";

@@ -1,1 +1,0 @@
-export{cj as DEFAULT_THEME_ID_DARK,lj as DEFAULT_THEME_ID_LIGHT,qA as defaultThemeContributions,KA as defaultThemesPlugin}from"../../../chunks/app-CCbHr6Sr.js";

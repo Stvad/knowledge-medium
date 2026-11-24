@@ -1,1 +1,0 @@
-export{kC as useMinuteClock}from"../../chunks/app-otp5Iace.js";

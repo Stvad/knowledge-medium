@@ -1,1 +1,0 @@
-export{K6 as SYNCED_TABLES,q6 as syncedWriteTarget,J6 as writeTargets}from"../../chunks/app-CCbHr6Sr.js";

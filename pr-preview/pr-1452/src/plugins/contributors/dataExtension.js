@@ -1,1 +1,0 @@
-export{LU as contributorsDataExtension}from"../../../chunks/app-otp5Iace.js";

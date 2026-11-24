@@ -1,1 +1,0 @@
-export{mx as blockInfoPlugin}from"../../../chunks/app-CCbHr6Sr.js";

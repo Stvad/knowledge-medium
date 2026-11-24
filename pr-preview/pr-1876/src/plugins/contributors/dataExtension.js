@@ -1,1 +1,0 @@
-export{K2 as contributorsDataExtension}from"../../../chunks/app-CCbHr6Sr.js";

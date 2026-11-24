@@ -1,1 +1,0 @@
-export{jS as wikilinkMarkdownExtension}from"../../../../../chunks/app-CCbHr6Sr.js";

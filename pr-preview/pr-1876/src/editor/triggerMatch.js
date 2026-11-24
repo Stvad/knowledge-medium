@@ -1,1 +1,0 @@
-export{q$ as matchCharTrigger}from"../../chunks/app-CCbHr6Sr.js";

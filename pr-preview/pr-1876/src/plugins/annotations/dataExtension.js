@@ -1,1 +1,0 @@
-export{H1 as annotationsDataExtension}from"../../../chunks/app-CCbHr6Sr.js";

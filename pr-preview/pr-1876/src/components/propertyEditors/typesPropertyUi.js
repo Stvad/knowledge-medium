@@ -1,1 +1,0 @@
-export{dI as kernelPropertyUiExtension,fI as typesPropertyUi,pI as typesPropertyUiExtension}from"../../../chunks/app-CCbHr6Sr.js";

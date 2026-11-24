@@ -1,1 +1,0 @@
-export{QD as TypeChip}from"../../../chunks/app-otp5Iace.js";

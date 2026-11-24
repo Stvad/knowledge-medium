@@ -1,1 +1,0 @@
-export{XL as withMoveTransition}from"../../chunks/app-otp5Iace.js";

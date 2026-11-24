@@ -1,1 +1,0 @@
-export{Cgt as defineQuery}from"../../../chunks/app-CCbHr6Sr.js";

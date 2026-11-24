@@ -1,1 +1,0 @@
-export{UP as useCommandPaletteActions}from"../../../chunks/app-CCbHr6Sr.js";
