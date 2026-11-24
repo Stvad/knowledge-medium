@@ -1,1 +1,1 @@
-export{wtt as assertAliasClaimable,Ttt as claimedAliases}from"../../chunks/app-J1HkG0qB.js";
+export{wtt as assertAliasClaimable,Ttt as claimedAliases}from"../../chunks/app-DbGqQMi1.js";

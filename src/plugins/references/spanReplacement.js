@@ -1,1 +1,1 @@
-export{TQ as preferredSpanReplacement}from"../../../chunks/app-J1HkG0qB.js";
+export{TQ as preferredSpanReplacement}from"../../../chunks/app-DbGqQMi1.js";

@@ -1,1 +1,1 @@
-export{LP as shortcutHelpToggle}from"../../../chunks/app-J1HkG0qB.js";
+export{IP as shortcutHelpToggle}from"../../../chunks/app-DbGqQMi1.js";

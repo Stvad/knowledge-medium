@@ -1,1 +1,1 @@
-export{ew as attachmentsPlugin}from"../../../chunks/app-J1HkG0qB.js";
+export{QC as attachmentsPlugin}from"../../../chunks/app-DbGqQMi1.js";
