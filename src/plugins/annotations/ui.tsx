@@ -198,14 +198,15 @@ const CommentPill: BlockRenderer = ({block}) => {
   const activeThread = useActiveThread(panelId ?? '')
   const inlineExpanded = useThreadsExpanded(key)
   const expanded = inMargin ? threads.some(thread => thread.id === activeThread) : inlineExpanded
-  const onPill = () => {
+  const onPill = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
     const click = pillClick(threads, inMargin)
     if (click.kind === 'expand-inline') {
       toggleThreadsExpanded(key)
       return
     }
     if (click.revealClosed) showClosedThreads(panelId!)
-    activateThread(panelId!, click.threadId, 'reveal')
+    activateThread(panelId!, click.threadId, event.detail === 0 ? 'reveal-and-focus' : 'reveal')
   }
   const count = pillCount(threads)
   if (count === null && !expanded) return null
@@ -214,7 +215,7 @@ const CommentPill: BlockRenderer = ({block}) => {
     <GutterPill
       count={count}
       expanded={expanded}
-      onClick={event => { event.stopPropagation(); onPill() }}
+      onClick={onPill}
       label={label}
       icon={MessageSquare}
       tone="amber"
@@ -389,6 +390,7 @@ const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; r
         layoutBoundary: false,
         renderScopeId,
         scopeRootId: shownId,
+        eagerChildrenScope: surfaceOfRenderScopeId(renderScopeId) === 'margin' ? renderScopeId : undefined,
         [COMMENT_CARD_KEY]: renderScopeId,
         [CONTRIBUTOR_CARD_MODE_KEY]: shownId,
         [CONTRIBUTOR_CARD_HEADER_KEY]: thread.id,

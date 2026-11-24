@@ -111,14 +111,15 @@ it('reveals only the requested card once it is placed, including a repeat visit 
   const panel = 'margin-reveal'
   try {
     activateThread(panel, 'thread')
-    expect(takeMarginReveal(panel, 'thread')).toBe(false)
+    expect(takeMarginReveal(panel, 'thread')).toBeUndefined()
     activateThread(panel, 'thread', 'reveal')
     activateThread(panel, 'thread')
-    expect(takeMarginReveal(panel, 'neighbor')).toBe(false)
-    expect(takeMarginReveal(panel, 'thread')).toBe(true)
-    expect(takeMarginReveal(panel, 'thread')).toBe(false)
-    activateThread(panel, 'thread', 'reveal')
-    expect(takeMarginReveal(panel, 'thread')).toBe(true)
+    expect(takeMarginReveal(panel, 'neighbor')).toBeUndefined()
+    expect(takeMarginReveal(panel, 'thread')).toBe('reveal')
+    expect(takeMarginReveal(panel, 'thread')).toBeUndefined()
+    activateThread(panel, 'thread', 'reveal-and-focus')
+    expect(takeMarginReveal(panel, 'thread')).toBe('reveal-and-focus')
+    expect(takeMarginReveal(panel, 'thread')).toBeUndefined()
   } finally {
     deactivateThread(panel)
   }

@@ -9,6 +9,7 @@ let server: ViteDevServer | undefined
 let browser: Browser | undefined
 let cacheDir: string | undefined
 let origin: string
+let fixtureUrl: string
 let page: Page
 let fixture: Awaited<ReturnType<typeof seedMarginFixture>>
 
@@ -53,7 +54,7 @@ beforeEach(async () => {
     const text = await page.locator('body').innerText()
     throw new Error(`Local app did not open its panel. ${text}\n${pageErrors.join('\n')}`, {cause})
   }
-  const fixtureUrl = new URL('/src/plugins/annotations/test/marginFixture.ts', origin).href
+  fixtureUrl = new URL('/src/plugins/annotations/test/marginFixture.ts', origin).href
   fixture = await page.evaluate<Awaited<ReturnType<typeof seedMarginFixture>>>(
     `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture())`,
   )
@@ -108,12 +109,23 @@ const wheelOutline = async (delta: number) => {
 
 it('scrolls by each wheel delta over an active card and the blank margin', async () => {
   const first = card(fixture.first)
-  // Let near-viewport rows take their measured heights before comparing deltas.
-  await outline().getByText('Outline row 35 with alpha, beta, and gamma.', {exact: true}).waitFor({timeout: 5_000})
+  const textFrame = outline().locator('[data-panel-text-frame]')
+  const outlineRowText = (index: number) => textFrame.getByText(`Outline row ${index} with alpha, beta, and gamma.`, {exact: true})
+  // Traverse the lazy rows once so wheel deltas compare measured geometry.
+  await outlineRowText(35).waitFor({timeout: 5_000})
+  await outline().evaluate(port => { port.scrollTop = (port.scrollHeight - port.clientHeight) / 2 })
+  await outlineRowText(55).waitFor({timeout: 5_000})
+  await outline().evaluate(port => { port.scrollTop = port.scrollHeight })
+  await expect.poll(() => textFrame.getByText(/^Outline row \d+ with alpha, beta, and gamma\.$/).count(), {timeout: 5_000})
+    .toBe(fixture.rowCount)
   await positionCard(first, 94)
   const firstPill = row(fixture.first).getByRole('button', {name: '3 open comment threads'})
+  const offsetAtSelection = await scrollTop()
   await firstPill.click({timeout: 5_000})
   await expect.poll(() => firstPill.getAttribute('aria-expanded')).toBe('true')
+  await renderFrames()
+  expect(await first.evaluate(element => element.contains(document.activeElement))).toBe(false)
+  expect(await scrollTop()).toBe(offsetAtSelection)
   const start = await box(first)
   await page.mouse.move(start.x + start.width / 2, start.y + 14)
   for (const delta of [18, 18, -12, 18, -10]) await wheelOutline(delta)
@@ -187,7 +199,7 @@ it('keeps a partially visible card under its click', async () => {
   expect((await box(displaced)).y).toBeCloseTo(clipped.y, 0)
 })
 
-it('reveals a displaced card with Enter on its source', async () => {
+it('reveals and focuses a displaced card with Enter on its source', async () => {
   const reveal = card(fixture.reveal)
   const source = row(fixture.reveal).getByRole('button', {name: '1 open comment thread', exact: true})
   await source.scrollIntoViewIfNeeded({timeout: 5_000})
@@ -199,13 +211,56 @@ it('reveals a displaced card with Enter on its source', async () => {
     const [port, revealed] = await Promise.all([box(outline()), box(reveal)])
     return revealed.y >= port.y && revealed.y + revealed.height <= port.y + port.height
   }, {timeout: 5_000}).toBe(true)
-  expect(await source.evaluate(element => element === document.activeElement)).toBe(true)
+  expect(await reveal.evaluate(element => element === document.activeElement)).toBe(true)
 
   const offset = await scrollTop()
+  await page.keyboard.press('Tab')
+  const focusedControl = await box(reveal.locator(':focus'))
+  expect(focusedControl.y).toBeGreaterThanOrEqual(port.y)
+  expect(focusedControl.y + focusedControl.height).toBeLessThanOrEqual(port.y + port.height)
+  expect(await scrollTop()).toBeCloseTo(offset, 0)
+
   await page.mouse.move(port.x + 20, port.y + port.height / 2)
   await wheelOutline(48)
   await wheelOutline(-48)
   expect(await scrollTop()).toBeCloseTo(offset, 0)
+})
+
+it('keeps an open thread usable while preparing a closed sibling with nested replies', async () => {
+  const open = card(fixture.first)
+  const closed = card(fixture.closed)
+  await open.getByText('First card in a dense group.', {exact: true}).waitFor({timeout: 5_000})
+  expect(await closed.count()).toBe(0)
+  await page.evaluate(`import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.holdChildList(${JSON.stringify(fixture.closed.reply)}))`)
+
+  await page.getByRole('button', {name: 'Show closed', exact: true}).click({timeout: 5_000})
+  await page.getByRole('button', {name: 'Hide closed', exact: true}).waitFor({timeout: 5_000})
+  const pending = () => page.evaluate(({threadId, reply}) => ({
+    requested: window.marginFixtureChildList.requested,
+    mounted: document.querySelector(`[data-margin-card="${threadId}"]`) !== null,
+    childList: window.__omniliner?.repo?.query.childIds({id: reply, hydrate: true, propertyChildren: 'none'}).status(),
+  }), fixture.closed)
+  await expect.poll(pending, {timeout: 5_000}).toMatchObject({requested: true, mounted: false})
+
+  await row(fixture.first).getByRole('button', {name: '3 open comment threads'}).click({timeout: 5_000})
+  await open.getByRole('button', {name: 'Clear comment selection'}).waitFor({timeout: 5_000})
+  expect(await closed.count()).toBe(0)
+
+  await page.evaluate(threadId => {
+    const gate = window.marginFixtureChildList
+    const observer = new MutationObserver(() => {
+      const card = document.querySelector<HTMLElement>(`[data-margin-card="${threadId}"]`)
+      if (!card?.style.transform || card.style.opacity === '0' || card.hidden) return
+      gate.firstPlacedText = card.innerText
+      observer.disconnect()
+    })
+    observer.observe(document.body, {childList: true, attributes: true, subtree: true, attributeFilter: ['style', 'hidden']})
+    gate.release()
+  }, fixture.closed.threadId)
+  await expect.poll(() => page.evaluate(() => window.marginFixtureChildList.firstPlacedText), {timeout: 5_000})
+    .toContain(fixture.closed.deepReplyText)
+  await closed.getByRole('button', {name: 'Reopen', exact: true}).waitFor({timeout: 5_000})
+  expect(await open.getByRole('button', {name: 'Clear comment selection'}).count()).toBe(1)
 })
 
 it('can wheel past the final card and back', async () => {

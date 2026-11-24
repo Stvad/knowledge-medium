@@ -111,8 +111,9 @@ export const useComposer = (key: string): ComposerState | undefined =>
 /** Panels whose margin is drawn right now: switched on AND wide enough. Their
  *  pills hand threads to the margin instead of expanding them inline. */
 const marginShowing = new Set<string>()
+type MarginReveal = 'reveal' | 'reveal-and-focus'
 /** A reveal waits for placement when its card is still loading or closed. */
-const activeThreads = new Map<string, {id: string; reveal: boolean}>()
+const activeThreads = new Map<string, {id: string; reveal?: MarginReveal}>()
 const showingClosed = createKeyedToggleSet('annotations-show-closed')
 
 export const setMarginShowing = (panelId: string, showing: boolean): void => {
@@ -125,18 +126,19 @@ export const setMarginShowing = (panelId: string, showing: boolean): void => {
 export const useMarginShowing = (panelId: string | undefined): boolean =>
   useSyncExternalStore(subscribe, () => panelId !== undefined && marginShowing.has(panelId))
 
-export const activateThread = (panelId: string, threadId: string, intent: 'select' | 'reveal' = 'select'): void => {
-  const reveal = intent === 'reveal'
+export const activateThread = (panelId: string, threadId: string, intent: 'select' | MarginReveal = 'select'): void => {
+  const reveal = intent === 'select' ? undefined : intent
   if (!reveal && activeThreads.get(panelId)?.id === threadId) return
   activeThreads.set(panelId, {id: threadId, reveal})
   listeners.notify()
 }
 
-export const takeMarginReveal = (panelId: string, threadId: string): boolean => {
+export const takeMarginReveal = (panelId: string, threadId: string): MarginReveal | undefined => {
   const active = activeThreads.get(panelId)
-  if (!active?.reveal || active.id !== threadId) return false
-  active.reveal = false
-  return true
+  if (active?.id !== threadId) return undefined
+  const reveal = active.reveal
+  active.reveal = undefined
+  return reveal
 }
 
 export const deactivateThread = (panelId: string): void => {

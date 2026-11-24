@@ -25,13 +25,14 @@ import {isEqual} from 'lodash-es'
 import {MessageSquare, X} from 'lucide-react'
 import {EditorView, repositionTooltips} from '@codemirror/view'
 import type {Block} from '@/data/block'
+import type {Repo} from '@/data/repo'
 import {isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {PropertyDisplayScopeContext} from '@/context/propertyDisplay.js'
 import {NO_PROPERTY_DISPLAY_SCOPE} from '@/data/propertyDisplayMode.js'
 import {isInteractiveContentEvent, scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.js'
 import {useRepo} from '@/context/repo.js'
-import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
+import {useHandle, usePropertyValue, useStableJson, useWorkspaceId} from '@/hooks/block.js'
 import {PANEL_CONTENT_RIGHT_INSET, PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
 import {PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE, PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE, PANEL_LANE_ATTRIBUTE} from '@/utils/panelLanes.js'
 import {DIVIDER_HANDLE_WIDTH_PX, DividerHandle} from '@/components/DividerHandle.js'
@@ -109,7 +110,7 @@ export const CommentMargin = ({block}: {block: Block}) => {
   const [open] = usePropertyValue(block, annotationMarginOpenProp)
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   if (!open || !topLevelBlockId) return null
-  return <MarginColumn panelBlock={block} topLevelBlockId={topLevelBlockId}/>
+  return <MarginColumn key={topLevelBlockId} panelBlock={block} topLevelBlockId={topLevelBlockId}/>
 }
 
 const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLevelBlockId: string}) => {
@@ -247,7 +248,8 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       for (const entry of cards.current.values()) entry.el.hidden = !rowIndex.has(entry.blockId)
       const boxes = placed.map(card => ({anchor: card.anchor, height: card.entry.el.offsetHeight}))
       const tops = placeCards(boxes, CARD_GAP_PX)
-      const links = anchorLinkGroups(placed, tops, peekActiveThread(panelId))
+      const selected = peekActiveThread(panelId)
+      const links = anchorLinkGroups(placed, tops, selected)
       setAnchorLinks(current => isEqual(current, links) ? current : links)
       for (const [i, {entry}] of placed.entries()) {
         const transform = `translateY(${Math.round(tops[i])}px)`
@@ -263,8 +265,12 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       }
       const last = placed.length - 1
       column.style.minHeight = `${last < 0 ? 0 : Math.ceil(tops[last] + boxes[last].height + FOOTER_PX + CARD_GAP_PX)}px`
-      const reveal = placed.find(card => takeMarginReveal(panelId, card.key))
-      reveal?.entry.el.scrollIntoView({block: 'nearest', inline: 'nearest'})
+      const selectedCard = placed.find(card => card.key === selected)
+      if (selectedCard) {
+        const reveal = takeMarginReveal(panelId, selectedCard.key)
+        if (reveal) selectedCard.entry.el.scrollIntoView({block: 'nearest', inline: 'nearest'})
+        if (reveal === 'reveal-and-focus') selectedCard.entry.el.focus({preventScroll: true})
+      }
       return nextFrame
     }
     const schedule = () => {
@@ -325,6 +331,9 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     () => marginHosts(scopeThreads, rows, topLevelBlockId, showClosed),
     [scopeThreads, rows, topLevelBlockId, showClosed],
   )
+  const requested = useStableJson(showing ? hosts.threadIds : [])
+  const prepared = usePreparedDiscussions(repo, requested)
+  const loading = loadedThreads === null || requested.some(id => !prepared.has(id))
 
   return (
     <>
@@ -333,6 +342,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         <div
           ref={columnRef}
           aria-label="Comments margin"
+          aria-busy={loading}
           role="complementary"
           {...{[PANEL_LANE_ATTRIBUTE]: 'comments-margin'}}
           className="pointer-events-none relative z-[5]"
@@ -378,10 +388,12 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
                 scopeRootId: topLevelBlockId,
                 editorTooltipParent: document.body,
               }}>
-                {loadedThreads?.length === 0 && (
-                  <p className="absolute top-0 px-1 pt-1 text-xs text-muted-foreground">No comments here.</p>
+                {(loadedThreads?.length === 0 || (loading && prepared.size === 0)) && (
+                  <p className="absolute top-0 px-1 pt-1 text-xs text-muted-foreground">
+                    {loading ? 'Loading comments…' : 'No comments here.'}
+                  </p>
                 )}
-                {hosts.cardRows.map(blockId => <MarginRow key={blockId} blockId={blockId}/>)}
+                {hosts.cardRows.map(blockId => <MarginRow key={blockId} blockId={blockId} prepared={prepared}/>)}
                 {[...hosts.stubs].map(([blockId, count]) => <HiddenThreadsStub key={blockId} blockId={blockId} count={count}/>)}
               </NestedBlockContextProvider>
             </PropertyDisplayScopeContext>
@@ -397,6 +409,8 @@ const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])
 const IDLE_LAYOUT = {schedule: () => {}, flush: (): ColumnFrame | null => null}
 
 export interface MarginHosts {
+  /** Threads that will render a card, excluding collapsed descendant stubs. */
+  threadIds: readonly string[]
   /** Rendered rows with cards of their own, in outline order. */
   cardRows: readonly string[]
   /** Rendered rows standing in for open threads whose own row isn't
@@ -415,23 +429,54 @@ export const marginHosts = (
 ): MarginHosts => {
   const rendered = new Set(rows)
   const withCards = new Set<string>()
+  const threadIds: string[] = []
   const stubs = new Map<string, number>()
   for (const thread of threads) {
     if (!thread.open && !showClosed) continue
     const host = [...thread.path, scopeId].find(id => rendered.has(id))
     if (host === undefined) continue
-    if (host === (thread.path[0] ?? scopeId)) withCards.add(host)
-    else if (thread.open) stubs.set(host, (stubs.get(host) ?? 0) + 1)
+    if (host === (thread.path[0] ?? scopeId)) {
+      withCards.add(host)
+      threadIds.push(thread.threadId)
+    } else if (thread.open) stubs.set(host, (stubs.get(host) ?? 0) + 1)
   }
-  return {cardRows: rows.filter(id => withCards.has(id)), stubs}
+  return {threadIds, cardRows: rows.filter(id => withCards.has(id)), stubs}
 }
 
-const MarginRow = ({blockId}: {blockId: string}) => {
+/** Admit new cards together. Once a card unmounts its child-list handles can
+ *  be collected, so bringing it back needs a fresh preparation. */
+const usePreparedDiscussions = (repo: Repo, requested: readonly string[]): ReadonlySet<string> => {
+  const [prepared, setPrepared] = useState<ReadonlySet<string>>(() => new Set())
+  useEffect(() => {
+    const pending = requested.filter(id => !prepared.has(id))
+    if (pending.length === 0 && prepared.size === requested.length) return
+    let current = true
+    // A failed preload still gets the ordinary renderer and its error handling.
+    void Promise.allSettled(pending.map(id => prepareDiscussion(repo.block(id)))).then(() => {
+      if (current) setPrepared(new Set(requested))
+    })
+    return () => { current = false }
+  }, [repo, requested, prepared])
+  return prepared
+}
+
+/** Warm the child lists read by the margin's property-free outline. Otherwise
+ *  each reply first renders as a leaf, displacing later cards as deeper lists load. */
+const prepareDiscussion = async (root: Block): Promise<void> => {
+  const rows = await root.repo.query.subtree({id: root.id, propertyChildren: 'none'}).load()
+  const parents = new Set<string>()
+  for (const row of rows) {
+    if (row.depth > 0 && row.parentId) parents.add(row.parentId)
+  }
+  await Promise.all([...parents].map(id => root.repo.query.childIds({id, hydrate: true, propertyChildren: 'none'}).load()))
+}
+
+const MarginRow = ({blockId, prepared}: {blockId: string; prepared: ReadonlySet<string>}) => {
   const registry = useContext(MarginRegistryContext)!
   const repo = useRepo()
   const threads = useThreadSummaries(repo.block(blockId))
   const showClosed = useShowClosed(registry.panelId)
-  return threads.map((thread, order) => (thread.open || showClosed) && (
+  return threads.map((thread, order) => prepared.has(thread.id) && (thread.open || showClosed) && (
     <CardSlot
       key={thread.id}
       slotKey={thread.id}
@@ -484,6 +529,7 @@ const CardSlot = ({slotKey, activates = true, blockId, order, quote, trailing, c
   return (
     <div
       ref={ref}
+      tabIndex={activates ? -1 : undefined}
       data-margin-card={slotKey}
       {...{[PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE]: blockId, [PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE]: rowScope}}
       // Only for what is in the card itself: a menu portalled out of it
