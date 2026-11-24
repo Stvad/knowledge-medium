@@ -187,7 +187,7 @@ describe('agent runtime bridge', () => {
     const read = await fetch(`${baseUrl}/runtime/commands`, {
       method: 'POST',
       headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
-      body: JSON.stringify({type: 'search', query: 'anything'}),
+      body: JSON.stringify({type: 'view-memory-index', ref: 'Memory'}),
     })
     expect(read.status).toBe(202)
 

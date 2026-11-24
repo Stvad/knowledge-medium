@@ -10,6 +10,7 @@ export const readCommands = (id: string): KnownAgentCommand[] => [
   {type: 'get-subtree', rootId: id},
   {type: 'view-block', ref: id},
   {type: 'view-outline', ref: id},
+  {type: 'view-memory-index', ref: id},
   {type: 'view-backlinks', ref: id},
   {type: 'view-grouped-backlinks', ref: id},
   {type: 'view-search', query: 'fixture'},

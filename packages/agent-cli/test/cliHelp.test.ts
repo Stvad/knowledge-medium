@@ -52,6 +52,10 @@ describe('kmagent help', () => {
 
   it('gives a graph read verb its tool description under its own --help', async () => {
     expect(await help('subtree')).toContain(getCommandMeta('view-outline').description)
+    const memory = await help('memory-index')
+    expect(memory).toContain(getCommandMeta('view-memory-index').description)
+    expect(memory).toContain('--workspace <id>')
+    expect(memory).toContain('--json')
   }, 20_000)
 })
 

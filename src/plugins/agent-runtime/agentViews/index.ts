@@ -1,6 +1,7 @@
 import type { Repo } from '@/data/repo'
 import type { KnownAgentCommand } from '@knowledge-medium/agent-cli/protocol'
 import { buildBlockView, renderBlockView } from './block.ts'
+import { buildMemoryIndex } from './memoryIndex.ts'
 import { buildOutlineView, renderOutlineView } from './outline.ts'
 import {
   buildBacklinksView,
@@ -41,6 +42,10 @@ export const runViewCommand = async (
     case 'view-block': {
       const view = await buildBlockView(repo, workspaceId, command)
       return json ? view : renderBlockView(view)
+    }
+    case 'view-memory-index': {
+      const index = await buildMemoryIndex(repo, workspaceId, command.ref)
+      return json ? index : index.text
     }
     case 'view-outline': {
       const view = await buildOutlineView(repo, workspaceId, command)

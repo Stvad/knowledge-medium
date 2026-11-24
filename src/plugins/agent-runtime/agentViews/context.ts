@@ -169,6 +169,16 @@ export const visibleChildCounts = async (
   return new Map(rows.map(row => [row.id, row.n]))
 }
 
+/** Only potential embed hosts need text before the index chooses which summaries to load. */
+export const indexChildren = (
+  repo: Repo, workspaceId: string, parentId: string,
+): Promise<Array<{id: string, content: string}>> => repo.db.getAll(
+  `SELECT c.id, CASE WHEN instr(c.content, '!') > 0 THEN c.content ELSE '' END AS content
+     FROM blocks p JOIN blocks c ON ${visibleChildOfSql('c', 'p.id')}
+    WHERE p.id = ? ORDER BY c.order_key, c.id`,
+  [...visibleChildParams(repo, workspaceId), parentId],
+)
+
 /** The visible children of `parentIds`, ordered by parent (in input order)
  *  then sibling order, each with its own visible child count — one level of
  *  an outline. `limit`/`offset` page across the whole level. */

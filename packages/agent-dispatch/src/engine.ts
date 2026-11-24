@@ -262,14 +262,17 @@ export const createEngine = (deps: EngineDeps) => {
 
   /** The watcher's memory as the run starts: what its prompt shows, and the
    *  entries the reply's account of memory changes is diffed against. The
-   *  shared notes are fixed here, so an embed the run adds or removes is
-   *  reported as that one note rather than as the notes it shows appearing
-   *  or going; an edit through an embed the run added goes unlisted. */
+   *  shared roots are fixed here so adding or removing an embed is reported
+   *  as a change to the embed itself. */
   const loadMemory = async (watcher: BacklinksWatcher, mentionId: string) => {
     const blockId = await graph.ensureMemoryBlock(await targetPageId(watcher.target))
-    const outline = await graph.memoryOutline(blockId)
-    const scope: MemoryScope = {memoryId: blockId, sharedRoots: outline.sharedRoots, mentionId}
-    return {blockId, outline: outline.text, scope, entries: await graph.memoryEntries(scope)}
+    const [index, comparisonRoots] = await Promise.all([
+      graph.memoryIndex(blockId),
+      graph.memoryComparisonRoots(blockId),
+    ])
+    const sharedRoots = [...new Set([...index.sharedRoots, ...comparisonRoots])]
+    const scope: MemoryScope = {memoryId: blockId, sharedRoots, mentionId}
+    return {blockId, index: index.text, scope, entries: await graph.memoryEntries(scope)}
   }
 
   /** What the run changed in its memory, for the reply; null when nothing. */
@@ -452,7 +455,7 @@ export const createEngine = (deps: EngineDeps) => {
         watcherName: watcher.name,
         target: watcher.target,
         thread: thread ?? undefined,
-        memory: memory ? {blockId: memory.blockId, outline: memory.outline, shared: memory.scope.sharedRoots.length > 0} : undefined,
+        memory: memory ? {blockId: memory.blockId, index: memory.index} : undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,

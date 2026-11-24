@@ -553,13 +553,16 @@ describe('recent_changes', () => {
 
     const block = await tools.get_block.handler({ref: 'today'}, {})
     const outline = await tools.subtree.handler({ref: 'Page', depth: 2}, {})
+    const memory = await tools.memory_index.handler({ref: 'Memory'}, {})
 
     expect(runCommand.mock.calls.map(call => call[0])).toEqual([
       {type: 'view-block', ref: 'today'},
       {type: 'view-outline', ref: 'Page', depth: 2},
+      {type: 'view-memory-index', ref: 'Memory'},
     ])
     expect(block.content).toEqual([{type: 'text', text: '- hello  ^abc'}])
     expect(outline.content).toEqual([{type: 'text', text: '- hello  ^abc'}])
+    expect(memory.content).toEqual([{type: 'text', text: '- hello  ^abc'}])
   })
 
   it('sql_query sends maxRows and refuses writes without calling the bridge', async () => {

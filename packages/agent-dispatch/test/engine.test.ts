@@ -42,10 +42,11 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const graph: Graph & ReplyWriter = {
     ensureMemoryBlock: vi.fn(async () => 'mem-1'),
     propertyValueBlocks: async () => new Set(),
-    memoryOutline: vi.fn(async () => ({
-      text: ['Memory  ^mem-1', ...memory.map(entry => `- ${entry.content}  ^${entry.id}`)].join('\n'),
+    memoryIndex: vi.fn(async () => ({
+      text: memory.map(entry => `- ${entry.content} ^${entry.id}`).join('\n'),
       sharedRoots: [],
     })),
+    memoryComparisonRoots: vi.fn(async () => []),
     memoryEntries: vi.fn(async () => memory.map(entry => ({...entry}))),
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
@@ -191,7 +192,7 @@ describe('watcher memory', () => {
     await engine.drain()
 
     expect(fake.graph.ensureMemoryBlock).toHaveBeenCalledWith('page-claude')
-    expect(promptOf(runTask)).toContain('- replies short  ^n-1')
+    expect(promptOf(runTask)).toContain('- replies short ^n-1')
     expect(promptOf(runTask)).toContain('append_markdown with target mem-1')
     // Nothing written: the reply says nothing about memory.
     expect(finalReply(fake.reconciles)).toBe('Reply text')
@@ -269,7 +270,7 @@ describe('watcher memory', () => {
 
   it('runs without memory when it cannot be read, and never asks the run to keep it', async () => {
     const fake = fakeGraph(seed())
-    fake.graph.memoryOutline = vi.fn(async () => { throw new Error('bridge blipped') })
+    fake.graph.memoryIndex = vi.fn(async () => { throw new Error('bridge blipped') })
     const runTask = vi.fn(async () => okRun())
     const engine = engineWith({graph: fake.graph, runTask})
     await engine.tick()
@@ -290,7 +291,7 @@ describe('watcher memory', () => {
     await engine.tick()
     await engine.drain()
 
-    expect((deliverToChannel.mock.calls[0] as unknown as [{content: string}])[0].content).toContain('- replies short  ^n-1')
+    expect((deliverToChannel.mock.calls[0] as unknown as [{content: string}])[0].content).toContain('- replies short ^n-1')
   })
 })
 

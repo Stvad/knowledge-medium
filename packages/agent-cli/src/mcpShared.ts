@@ -12,6 +12,7 @@ export const KM_MCP_TOOL_NAMES = [
   'page',
   'daily_note',
   'search',
+  'memory_index',
   'guide',
   'sql_query',
   'read_media',

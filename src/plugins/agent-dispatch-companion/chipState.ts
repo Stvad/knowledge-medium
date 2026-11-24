@@ -112,6 +112,7 @@ const KM_TOOL_ACTIVITY_LABELS = {
   page: 'Reading',
   daily_note: 'Reading',
   search: 'Search',
+  memory_index: 'Reading',
   guide: 'Reading',
   sql_query: 'Reading',
   read_media: 'Reading',

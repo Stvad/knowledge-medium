@@ -12,17 +12,10 @@ import { MEMORY_BLOCK_TITLE, type MemoryEntry } from './memory.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 
-export interface MemoryOutline {
-  /** The outline the run's prompt shows. */
-  text: string
-  /** The blocks its embeds show, by id: the shared notes. */
-  sharedRoots: string[]
-}
-
 /** The blocks a run's account of memory changes compares, fixed when it starts. */
 export interface MemoryScope {
   memoryId: string
-  /** The shared notes the run's outline shows: {@link MemoryOutline.sharedRoots}. */
+  /** Shared roots found by the index and the comparison outline. */
   sharedRoots: readonly string[]
   /** The mention: under it go the daemon's reply and its progress note,
    *  which can sit inside a shared note or the memory and are not memory. */
@@ -35,10 +28,6 @@ interface TaskPropsWrite {
   attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
 }
 
-/** Blocks of memory a run's prompt shows (about 50 short lines). */
-const MEMORY_OUTLINE_LIMIT = 50
-/** Levels of it: a note, the block it embeds, and that block's children. */
-const MEMORY_OUTLINE_DEPTH = 3
 /** Blocks of memory, shared notes included, the reply's account of changes
  *  compares; past it the comparison is skipped, since a cut window would
  *  report false changes. One limit for both: a large embedded page skips the
@@ -139,21 +128,14 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     return created
   }
 
-  /** The bounded outline the run's own `subtree` tool prints (shallow levels
-   *  first, long entries cut with a marker, embeds expanded), and the shared
-   *  notes in it: the rows an embed brings in, which live outside the memory
-   *  block. Both from one view's bounds, so the shared notes are the ones the
-   *  run is shown. */
-  const memoryOutline = async (memoryId: string): Promise<MemoryOutline> => {
-    const params = {type: 'view-outline', ref: memoryId, depth: MEMORY_OUTLINE_DEPTH, limit: MEMORY_OUTLINE_LIMIT} as const
-    const [text, view] = await Promise.all([
-      client.runCommand(params),
-      client.runCommand({...params, format: 'json'}) as Promise<{rows?: Array<{id?: unknown, embedded?: unknown}>}>,
-    ])
-    if (typeof text !== 'string') throw new Error('view-outline returned no text')
-    if (!Array.isArray(view?.rows)) throw new Error('view-outline returned no rows')
-    const sharedRoots = view.rows.flatMap(row => row.embedded && typeof row.id === 'string' ? [row.id] : [])
-    return {text, sharedRoots}
+  /** The comparison retains the outline's depth and row bounds so it covers
+   *  embeds inside details even though the prompt omits their content. */
+  const memoryComparisonRoots = async (memoryId: string): Promise<string[]> => {
+    const outline = await client.runCommand({
+      type: 'view-outline', ref: memoryId, depth: 3, limit: 50, format: 'json',
+    }) as {rows?: Array<{id?: unknown, embedded?: unknown}>}
+    if (!Array.isArray(outline?.rows)) throw new Error('view-outline returned no rows')
+    return outline.rows.flatMap(row => row.embedded && typeof row.id === 'string' ? [row.id] : [])
   }
 
   /** Every block below the memory block and every block of the shared notes,
@@ -207,7 +189,8 @@ export const createGraph = (bridgeClient: BridgeClient) => {
   return {
     ensureMemoryBlock,
     propertyValueBlocks,
-    memoryOutline,
+    memoryIndex: bridgeGraph.memoryIndex,
+    memoryComparisonRoots,
     memoryEntries,
     resolvePageId: bridgeGraph.resolvePageId,
     backlinkSources: bridgeGraph.backlinkSources,

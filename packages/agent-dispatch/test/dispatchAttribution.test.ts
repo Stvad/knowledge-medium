@@ -287,14 +287,18 @@ describe('watcher memory against the app', () => {
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
 
     // The run's own write, as the km tools make it.
-    await inProcessClient().runCommand({type: 'append-markdown', target: memory.id, markdown: 'Replies short.'})
+    await inProcessClient().runCommand({
+      type: 'append-markdown', target: memory.id, markdown: '- Replies short.\n  - Keep technical details in linked notes.',
+    })
+    const [noteId] = await repo.query['core.childIds']({id: memory.id}).load()
     await writeInTab({[PROPS.status]: '', [PROPS.attempts]: 0})
     await repo.tx(async tx => { await tx.update(MENTION, {content: '[[claude]] summarize this again'}) }, opts)
     await engine.tick()
     await engine.drain()
 
     expect(await memoryBlocks()).toHaveLength(1)
-    expect(prompts.at(-1)).toContain(`Replies short.  ^`)
+    expect(prompts.at(-1)).toContain(`Replies short. (+1 child) ^${noteId}`)
+    expect(prompts.at(-1)).not.toContain('Keep technical details in linked notes.')
     expect(prompts.at(-1)).toContain(`append_markdown with target ${memory.id}`)
   })
 
@@ -385,20 +389,41 @@ describe('watcher memory against the app', () => {
     const edit = (id: string, content: string) => inProcessClient().runCommand({type: 'update-block', id, content})
 
     it.each([
-      ['a block embed', `!((${SHARED}))`, SHARED],
-      ['a page embed', '![[Shared]]', SHARED_PAGE],
-    ])('shows the notes %s brings in as shared, and reports an edit made through one', async (_, embed, shownRoot) => {
+      ['a block embed', `!((${SHARED}))`],
+      ['a page embed', '![[Shared]]'],
+    ])('shows a shared note summary from %s and reports an edit to its hidden detail', async (_, embed) => {
       await seedMemory(embed)
       const prompts = await runOnce(async () => {
         await edit(SHARED_CHILD, 'As links, never bare URLs.')
       })
 
-      expect(prompts[0]).toContain(`^${shownRoot}`)
-      // The notes a page embed brings in, not just its title.
-      expect(prompts[0]).toContain(`Cite sources.  ^${SHARED}`)
-      expect(prompts[0]).toContain('↳ embedded; lives in:')
-      expect(prompts[0]).toMatch(/"↳ embedded; lives in: …" is a shared note/)
+      expect(prompts[0]).toContain(`[shared] Cite sources. (+1 child) ^${SHARED}`)
+      expect(prompts[0]).not.toContain('As links.')
       expect(await replyText()).toContain(`Memory changed during this run: edited [As links, never bare URLs.](((${SHARED_CHILD})))`)
+    })
+
+    it('reports a note added to an embedded page after the index was read', async () => {
+      await seedMemory('![[Shared]]')
+      const prompts = await runOnce(async () => {
+        await inProcessClient().runCommand({type: 'append-markdown', target: SHARED_PAGE, markdown: 'New shared summary'})
+      })
+      expect(prompts[0]).not.toContain('New shared summary')
+      expect(await replyText()).toContain('Memory changed during this run: saved [New shared summary]')
+    })
+
+    it('reports edits to a shared note embedded in a detail omitted from the index', async () => {
+      const memoryId = await seedMemory('Writing preferences')
+      const [noteId] = await repo.query['core.childIds']({id: memoryId}).load()
+      await repo.mutate.createChild({parentId: noteId, content: `!((${SHARED}))`})
+      await repo.awaitProcessors()
+
+      const prompts = await runOnce(async () => {
+        await edit(SHARED, 'Cite primary sources.')
+      })
+      expect(prompts[0]).toContain(`Writing preferences (+1 child) ^${noteId}`)
+      expect(prompts[0]).not.toContain(SHARED)
+      expect(await replyText()).toContain(`Memory changed during this run: edited [Cite primary sources.](((${SHARED})))`)
+      expect(prompts[0]).toContain('embeds you encounter when reading details')
     })
 
     it('reports no edit to a block of another workspace: embedded, under the memory block or under a shared note', async () => {
@@ -448,8 +473,8 @@ describe('watcher memory against the app', () => {
         await edit(OWN_DEEP, 'Deep note, revised.')
       })
 
-      // Shown as a row the embed brings in, so it is a shared note too.
-      expect(prompts[0]).toMatch(new RegExp(`Deep note\\.  \\^${OWN_DEEP}\\n\\s*↳ embedded`))
+      expect(prompts[0]).toContain(`[shared] Deep note. ^${OWN_DEEP}`)
+      expect(prompts[0]).not.toContain('Subtopic')
       expect(await replyText()).toMatch(new RegExp(
         `^Memory changed during this run: edited \\[Deep note, revised\\.\\]\\(\\(\\(${OWN_DEEP}\\)\\)\\)$`, 'm'))
     })

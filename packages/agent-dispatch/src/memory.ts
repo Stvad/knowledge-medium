@@ -1,12 +1,3 @@
-/*
- * A watcher's memory: one block per note under a `Memory` block that is a
- * direct child of the watched page, plus the shared notes its outline shows:
- * the blocks its embeds (`!((id))`, `![[Page]]`) bring in, which other
- * watchers' memories can embed too. The run keeps it with the ordinary km
- * write tools; the daemon reports what changed in both, so a write to it is
- * never silent. An embed past the outline's bounds is not a shared note.
- */
-
 /** The content that marks the memory block among the watched page's children. */
 export const MEMORY_BLOCK_TITLE = 'Memory'
 
