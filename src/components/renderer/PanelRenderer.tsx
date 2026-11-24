@@ -373,7 +373,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
           onFocusCapture={trackPanelFocus ? activatePanel : undefined}
           onScroll={scheduleScrollTopWrite}
         >
-          <div className="grid">
+          <div className="grid min-h-full">
             <div data-panel-text-frame="" className="col-start-1 row-start-1 mx-auto w-full min-w-0 max-w-3xl self-start">
               {panelBody}
             </div>

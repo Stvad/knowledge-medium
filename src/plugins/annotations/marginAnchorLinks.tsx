@@ -37,15 +37,12 @@ export const anchorLinkGroups = (
 export const MarginAnchorLinks = ({groups, width}: {groups: readonly AnchorLinkGroup[]; width: number}) => {
   const railX = width / 2
   const sourceX = 2
-  const height = groups.reduce((max, {sourceY, cardYs}) =>
-    Math.max(max, sourceY + sourceX, cardYs[cardYs.length - 1] + 2), 0)
   const selected = groups.find(group => group.selected)?.selected
   return (
     <svg
-      className="pointer-events-none absolute top-0 text-amber-600/55 dark:text-amber-400/60"
+      className="pointer-events-none absolute top-0 h-full text-amber-600/55 dark:text-amber-400/60"
       style={{left: -width}}
       width={width}
-      height={height}
       aria-hidden
       data-margin-anchor-links
     >

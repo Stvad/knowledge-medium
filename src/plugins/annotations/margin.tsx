@@ -35,7 +35,7 @@ import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {PANEL_CONTENT_RIGHT_INSET, PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
 import {PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE, PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE, PANEL_LANE_ATTRIBUTE} from '@/utils/panelLanes.js'
 import {DIVIDER_HANDLE_WIDTH_PX, DividerHandle} from '@/components/DividerHandle.js'
-import {isEditorElement} from '@/utils/dom.js'
+import {isEditorElement, nearestScrollableAncestor} from '@/utils/dom.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
 import {anchorLinkGroups, MarginAnchorLinks} from './marginAnchorLinks.tsx'
@@ -114,6 +114,7 @@ export const CommentMargin = ({block}: {block: Block}) => {
 
 const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLevelBlockId: string}) => {
   const panelId = panelBlock.id
+  const {stackedPanel} = useBlockContext()
   const [storedShare] = usePropertyValue(panelBlock, annotationMarginShareProp)
   /** The share of the pane the layout pass asks for: the stored one, or a
    *  drag's. */
@@ -153,6 +154,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     const host = scrollport?.querySelector<HTMLElement>(':scope > * > [data-panel-side-content]')
     const textFrame = scrollport?.querySelector<HTMLElement>(':scope > * > [data-panel-text-frame]')
     if (!panelEl || !scrollport || !host || !textFrame) return
+    const viewport = nearestScrollableAncestor(host) ?? document.documentElement
     setSideContent(host)
     const selector = scopeRowSelector(scope)
     let pending = 0
@@ -189,7 +191,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       return {
         left: Math.round(contentLeft - host.getBoundingClientRect().left),
         width: fit.width,
-        height: Math.min(window.innerHeight, scrollport.clientHeight - parseFloat(getComputedStyle(scrollport).paddingBottom)),
+        height: viewport.clientHeight - parseFloat(getComputedStyle(viewport).paddingBottom),
         pane: Math.floor(portRect.width),
         clearance: fit.clearance,
         rightInset: panelRect.right - contentLeft - fit.width,
@@ -278,6 +280,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     const resize = new ResizeObserver(schedule)
     resize.observe(panelEl)
     resize.observe(scrollport)
+    resize.observe(viewport)
     cardObserver.current = resize
     for (const entry of cards.current.values()) resize.observe(entry.el)
     // Rows mounting or unmounting, which can leave the outline's height as it
@@ -296,7 +299,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       setPanelGeometry(null)
       layout.current = IDLE_LAYOUT
     }
-  }, [panelId, scope, topLevelBlockId, repo])
+  }, [panelId, scope, topLevelBlockId, repo, stackedPanel])
 
   const applyStoredShare = () => {
     preferredShare.current = storedShare
@@ -335,33 +338,35 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           className="pointer-events-none relative z-[5]"
           style={{left: frame.left, width: frame.width}}
         >
-          <div className="pointer-events-none sticky top-0 z-10" style={{height: frame.height}}>
-            <DividerHandle
-              label="Resize comments margin"
-              title="Drag to resize; double-click for automatic width"
-              // Centred in the gap left of the column.
-              style={{pointerEvents: 'auto', left: -(EDGE_PX + DIVIDER_HANDLE_WIDTH_PX) / 2, top: 0, height: frame.height}}
-              drag={{
-                onStart: () => {
-                  dragStart.current = {width: frame.width, pane: frame.pane}
-                  return true
-                },
-                // The layout pass bounds the width asked for.
-                onMove: dx => {
-                  preferredShare.current = (dragStart.current.width - dx) / dragStart.current.pane
-                  layout.current.schedule()
-                },
-                onEnd: () => {
-                  const end = layout.current.flush()
-                  const share = end ? shareOf(end) : undefined
-                  if (share === undefined || share === storedShare) applyStoredShare()
-                  else void panelBlock.set(annotationMarginShareProp, share)
-                },
-                onCancel: applyStoredShare,
-              }}
-              onReset={() => void panelBlock.set(annotationMarginShareProp, undefined)}
-            />
-            <MarginFooter panelBlock={panelBlock} hasThreads={scopeThreads.length > 0}/>
+          <div className="pointer-events-none absolute inset-0 z-10">
+            <div className="sticky top-0 max-h-full" style={{height: frame.height}}>
+              <DividerHandle
+                label="Resize comments margin"
+                title="Drag to resize; double-click for automatic width"
+                // Centred in the gap left of the column.
+                style={{pointerEvents: 'auto', left: -(EDGE_PX + DIVIDER_HANDLE_WIDTH_PX) / 2, top: 0, height: '100%'}}
+                drag={{
+                  onStart: () => {
+                    dragStart.current = {width: frame.width, pane: frame.pane}
+                    return true
+                  },
+                  // The layout pass bounds the width asked for.
+                  onMove: dx => {
+                    preferredShare.current = (dragStart.current.width - dx) / dragStart.current.pane
+                    layout.current.schedule()
+                  },
+                  onEnd: () => {
+                    const end = layout.current.flush()
+                    const share = end ? shareOf(end) : undefined
+                    if (share === undefined || share === storedShare) applyStoredShare()
+                    else void panelBlock.set(annotationMarginShareProp, share)
+                  },
+                  onCancel: applyStoredShare,
+                }}
+                onReset={() => void panelBlock.set(annotationMarginShareProp, undefined)}
+              />
+              <MarginFooter panelBlock={panelBlock} hasThreads={scopeThreads.length > 0}/>
+            </div>
           </div>
           <MarginAnchorLinks groups={anchorLinks} width={EDGE_PX}/>
           <MarginRegistryContext value={registry}>
