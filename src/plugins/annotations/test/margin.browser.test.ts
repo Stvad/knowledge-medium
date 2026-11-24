@@ -3,7 +3,7 @@ import {resolve} from 'node:path'
 import {chromium, type Browser, type Locator, type Page} from 'playwright'
 import {createServer, type ViteDevServer} from 'vite'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it} from 'vitest'
-import type {seedMarginFixture} from './marginFixture'
+import type {openMarginFixtureOutline, seedMarginFixture} from './marginFixture'
 
 let server: ViteDevServer | undefined
 let browser: Browser | undefined
@@ -55,8 +55,14 @@ beforeEach(async () => {
     throw new Error(`Local app did not open its panel. ${text}\n${pageErrors.join('\n')}`, {cause})
   }
   fixtureUrl = new URL('/src/plugins/annotations/test/marginFixture.ts', origin).href
+  const prepared = await page.evaluate<Awaited<ReturnType<typeof openMarginFixtureOutline>>>(
+    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.openMarginFixtureOutline())`,
+  )
+  await outline().locator(`[data-block-shell][data-block-id="${prepared.outlineId}"]`).waitFor({timeout: 10_000})
+  const {firstSource} = prepared
+  await row({targetId: firstSource.id}).getByText(firstSource.content, {exact: true}).waitFor({timeout: 10_000})
   fixture = await page.evaluate<Awaited<ReturnType<typeof seedMarginFixture>>>(
-    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture())`,
+    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture(${JSON.stringify(prepared)}))`,
   )
   await margin().waitFor({state: 'visible', timeout: 10_000})
   await card(fixture.tall).getByText('Review paragraph 48.', {exact: false}).waitFor({state: 'attached', timeout: 5_000})

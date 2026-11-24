@@ -7,6 +7,7 @@ import {createThread, setThreadStatus} from '../threads'
 
 const TOPIC = 'Synthetic outline for comments'
 const ROW_COUNT = 72
+const COMMENT_GROUP_ROW = 3
 const DEEP_REPLY_TEXT = 'This nested reply finishes the closed discussion.'
 
 declare global {
@@ -38,40 +39,48 @@ export const holdChildList = (id: string) => {
   }
 }
 
-export async function seedMarginFixture() {
+export async function openMarginFixtureOutline() {
   const repo = window.__omniliner?.repo
   const workspaceId = repo?.activeWorkspaceId
   const panelId = document.querySelector<HTMLElement>('[data-panel-active="true"]')?.dataset.panelId
   if (!repo || !workspaceId || !panelId) throw new Error('The local workspace has no active panel')
 
   const keys = keysBetween(null, null, ROW_COUNT)
-  const rows = await repo.tx(async tx => {
-    const outline = await tx.create({workspaceId, parentId: null, orderKey: 'a0', content: TOPIC})
-    const rows = []
-    for (const [index, orderKey] of keys.entries()) {
-      const content = `Outline row ${index + 1} with alpha, beta, and gamma.`
-      const id = await tx.create({workspaceId, parentId: outline, orderKey, content})
-      rows.push({id, content})
-    }
-    return {outline, rows}
-  }, {scope: ChangeScope.BlockDefault})
+  const {outlineId, rows} = await repo.tx(async tx => {
+    const outlineId = await tx.create({workspaceId, parentId: null, orderKey: 'a0', content: TOPIC})
+    const children = keys.map((orderKey, index) => ({
+      workspaceId, parentId: outlineId, orderKey,
+      content: `Outline row ${index + 1} with alpha, beta, and gamma.`,
+    }))
+    const ids = await tx.createMany(children)
+    return {outlineId, rows: ids.map((id, index) => ({id, content: children[index].content}))}
+  }, {scope: ChangeScope.BlockDefault, description: 'seed comments margin outline'})
+  await navigateInPanel(repo.block(panelId), outlineId)
+  return {outlineId, panelId, rows, firstSource: rows[COMMENT_GROUP_ROW]}
+}
+
+export async function seedMarginFixture({panelId, rows}: Awaited<ReturnType<typeof openMarginFixtureOutline>>) {
+  const repo = window.__omniliner?.repo
+  if (!repo) throw new Error('The local workspace has no repository')
 
   const threadAt = async (index: number, comment: string, quote?: string) => {
-    const {id, content} = rows.rows[index]
+    const {id, content} = rows[index]
     const start = quote ? content.indexOf(quote) : -1
     const anchor = quote ? captureAnchor(content, start, start + quote.length) : null
-    const {threadId, commentId} = await createThread(repo, {targetId: id, anchor, comment})
+    const {threadId, commentId} = await createThread(repo, {targetId: id, anchor, comment}).catch(cause => {
+      throw new Error(`Could not attach a fixture comment to outline row ${index + 1}. ${String(cause)}`, {cause})
+    })
     return {threadId, targetId: id, commentId}
   }
 
-  const first = await threadAt(3, 'First card in a dense group.')
-  const displaced = await threadAt(3, 'Second card in a dense group.', 'alpha')
-  await threadAt(3, 'Third card in a dense group.', 'beta')
-  const closed = await threadAt(3, 'A closed discussion on the same source.', 'gamma')
+  const first = await threadAt(COMMENT_GROUP_ROW, 'First card in a dense group.')
+  const displaced = await threadAt(COMMENT_GROUP_ROW, 'Second card in a dense group.', 'alpha')
+  await threadAt(COMMENT_GROUP_ROW, 'Third card in a dense group.', 'beta')
+  const closed = await threadAt(COMMENT_GROUP_ROW, 'A closed discussion on the same source.', 'gamma')
   const reply = await repo.mutate.createChild({parentId: closed.commentId!, content: 'Reply to the closed discussion.'})
   await repo.mutate.createChild({parentId: reply, content: DEEP_REPLY_TEXT})
   await setThreadStatus(repo, closed.threadId, 'resolved')
-  await threadAt(4, 'Comment on the next outline row.')
+  await threadAt(COMMENT_GROUP_ROW + 1, 'Comment on the next outline row.')
   const tall = await threadAt(11, Array.from({length: 48}, (_, line) =>
     `Review paragraph ${line + 1}. The sample outline explains the sequence and gives each decision context.`
   ).join('\n\n'))
@@ -81,8 +90,6 @@ export async function seedMarginFixture() {
   await threadAt(ROW_COUNT - 1, 'Second discussion on the last row.', 'alpha')
   const last = await threadAt(ROW_COUNT - 1, 'Last discussion on the last row.', 'beta')
 
-  const panel = repo.block(panelId)
-  await navigateInPanel(panel, rows.outline)
-  await panel.set(annotationMarginOpenProp, true)
+  await repo.block(panelId).set(annotationMarginOpenProp, true)
   return {first, displaced, closed: {...closed, reply, deepReplyText: DEEP_REPLY_TEXT}, tall, reveal, sparse, last, rowCount: ROW_COUNT}
 }
