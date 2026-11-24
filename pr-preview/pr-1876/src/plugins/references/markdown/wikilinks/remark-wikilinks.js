@@ -1,1 +1,1 @@
-export{NS as remarkWikilinks}from"../../../../../chunks/app-DDEj5D2_.js";
+export{NS as remarkWikilinks}from"../../../../../chunks/app-CCbHr6Sr.js";

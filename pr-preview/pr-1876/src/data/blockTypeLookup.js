@@ -1,1 +1,1 @@
-export{Xet as loadTypeIdsByBlock}from"../../chunks/app-DDEj5D2_.js";
+export{Xet as loadTypeIdsByBlock}from"../../chunks/app-CCbHr6Sr.js";

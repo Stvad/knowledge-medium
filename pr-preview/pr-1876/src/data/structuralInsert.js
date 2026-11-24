@@ -1,1 +1,1 @@
-export{KI as insertDrawnBlock}from"../../chunks/app-DDEj5D2_.js";
+export{KI as insertDrawnBlock}from"../../chunks/app-CCbHr6Sr.js";
