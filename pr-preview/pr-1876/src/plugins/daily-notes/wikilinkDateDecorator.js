@@ -1,0 +1,1 @@
+export{pN as dailyDateWikilinkDecorator}from"../../../chunks/app-BWe5Hqcj.js";

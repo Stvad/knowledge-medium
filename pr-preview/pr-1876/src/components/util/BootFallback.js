@@ -1,0 +1,1 @@
+export{QY as BootFallback}from"../../../chunks/app-BWe5Hqcj.js";

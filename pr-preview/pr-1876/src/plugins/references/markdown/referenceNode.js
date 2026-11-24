@@ -1,0 +1,1 @@
+export{FS as EmbedComponent,IS as referenceTargetOf}from"../../../../chunks/app-BWe5Hqcj.js";

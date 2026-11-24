@@ -1,0 +1,1 @@
+export{AM as Label}from"../../../chunks/app-BWe5Hqcj.js";

@@ -1,0 +1,1 @@
+export{Qtt as agree,$tt as pluralize}from"../../chunks/app-BWe5Hqcj.js";

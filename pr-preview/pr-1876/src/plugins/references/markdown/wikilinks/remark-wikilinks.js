@@ -1,0 +1,1 @@
+export{NS as remarkWikilinks}from"../../../../../chunks/app-BWe5Hqcj.js";

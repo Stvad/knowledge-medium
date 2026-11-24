@@ -1,0 +1,1 @@
+export{GI as insertDrawnBlock}from"../../chunks/app-BWe5Hqcj.js";

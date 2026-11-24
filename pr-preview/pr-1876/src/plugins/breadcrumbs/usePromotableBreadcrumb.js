@@ -1,0 +1,1 @@
+export{VO as usePromotableBreadcrumb}from"../../../chunks/app-BWe5Hqcj.js";

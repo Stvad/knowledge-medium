@@ -1,0 +1,1 @@
+export{KW as typePropertyGroups}from"../../chunks/app-BWe5Hqcj.js";

@@ -1,0 +1,1 @@
+export{nA as BINARY_ENVELOPE_MAGIC,rA as BINARY_ENVELOPE_MIN_BYTES,iA as BINARY_ENVELOPE_OVERHEAD_BYTES,aA as BINARY_MAGIC_BYTES,oA as decodeBinaryEnvelope,sA as encodeBinaryEnvelope,cA as hasBinaryEnvelopeMagic}from"../../../chunks/app-BWe5Hqcj.js";

@@ -1,0 +1,1 @@
+export{FL as appUpdatePromptExtension}from"../../../chunks/app-BWe5Hqcj.js";

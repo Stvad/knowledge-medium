@@ -1,0 +1,1 @@
+export{PI as ensureMetricsConsoleHook}from"../../chunks/app-BWe5Hqcj.js";

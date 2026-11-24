@@ -1,0 +1,1 @@
+export{u4 as characterCounterDataExtension}from"../../../chunks/app-BWe5Hqcj.js";

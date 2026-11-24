@@ -1,0 +1,1 @@
+export{IQ as htmlDocumentDataExtension}from"../../../chunks/app-BWe5Hqcj.js";

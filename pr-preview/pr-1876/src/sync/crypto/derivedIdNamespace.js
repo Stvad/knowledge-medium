@@ -1,0 +1,1 @@
+export{yft as deriveWorkspaceIdNamespace}from"../../../chunks/app-BWe5Hqcj.js";
