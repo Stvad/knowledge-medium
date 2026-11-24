@@ -1,1 +1,0 @@
-export{_6 as Block,v6 as requireLoadedBlock}from"../../chunks/app-D6Zn76HA.js";

@@ -1,1 +1,0 @@
-export{A2 as Repo}from"../../chunks/app-D6Zn76HA.js";

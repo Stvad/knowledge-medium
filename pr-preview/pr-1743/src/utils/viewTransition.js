@@ -1,1 +1,0 @@
-export{VW as withMoveTransition}from"../../chunks/app-D6Zn76HA.js";

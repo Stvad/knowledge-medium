@@ -1,1 +1,0 @@
-export{GP as gestureBindingDescriptor,KP as matchesGestureEvent}from"../../chunks/app-D6Zn76HA.js";

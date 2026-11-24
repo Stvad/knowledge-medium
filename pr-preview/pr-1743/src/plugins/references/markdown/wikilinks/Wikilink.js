@@ -1,1 +1,0 @@
-export{Ay as Wikilink}from"../../../../../chunks/app-D6Zn76HA.js";

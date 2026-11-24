@@ -1,1 +1,0 @@
-export{lg as authorIdOf}from"../../../chunks/app-D6Zn76HA.js";

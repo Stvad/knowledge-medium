@@ -1,1 +1,0 @@
-export{FW as isIOS,IW as isMacPlatform}from"../../chunks/app-D6Zn76HA.js";

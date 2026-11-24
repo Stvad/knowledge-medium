@@ -1,1 +1,0 @@
-export{fb as useIsReadOnly}from"../../chunks/app-D6Zn76HA.js";
