@@ -1,1 +1,1 @@
-export{JC as BlockSearchPicker}from"../../chunks/app-Be2qh85V.js";
+export{zC as BlockSearchPicker}from"../../chunks/app-Cl1IrUGP.js";
