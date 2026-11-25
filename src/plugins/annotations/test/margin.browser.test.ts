@@ -46,7 +46,7 @@ beforeEach(async () => {
     localStorage.setItem('ftm.localOnly', 'true')
     localStorage.setItem('ftm.user', JSON.stringify({id: 'margin-fixture', name: 'Fixture Reviewer'}))
   })
-  await page.goto(origin, {waitUntil: 'commit', timeout: 15_000})
+  await page.goto(new URL('?seed=margin', origin).href, {waitUntil: 'commit', timeout: 15_000})
   try {
     await page.waitForFunction(() => !!window.__omniliner?.repo?.activeWorkspaceId &&
       !!document.querySelector('[data-panel-active="true"]'), null, {timeout: 75_000})
@@ -58,9 +58,15 @@ beforeEach(async () => {
   const prepared = await page.evaluate<Awaited<ReturnType<typeof createMarginFixtureOutline>>>(
     `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.createMarginFixtureOutline())`,
   )
+  // Dropping the seed query opens a new document with the fixture as its boot route.
   await page.goto(new URL(prepared.hash, origin).href, {waitUntil: 'commit', timeout: 15_000})
   const root = outline().locator(`[data-block-shell][data-block-id="${prepared.outlineId}"]`)
-  await root.waitFor({timeout: 10_000})
+  try {
+    await root.waitFor({timeout: 30_000})
+  } catch (cause) {
+    const text = await page.locator('body').innerText({timeout: 2_000}).catch(() => '')
+    throw new Error(`Fixture outline did not open at ${page.url()}. ${text}\n${pageErrors.join('\n')}`, {cause})
+  }
   const {firstSource} = prepared
   await row({targetId: firstSource.id}).getByText(firstSource.content, {exact: true}).waitFor({timeout: 10_000})
   fixture = await page.evaluate<Awaited<ReturnType<typeof seedMarginFixture>>>(
