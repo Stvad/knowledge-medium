@@ -250,7 +250,7 @@ const collectAffectedProjection = async (
 export const projectFieldRowValues = (
   schema: AnyPropertySchema,
   perFieldRow: readonly (readonly (Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null})[])[],
-  storedWhileAwaiting?: unknown,
+  storedWhileAwaiting: unknown,
 ): unknown | undefined => {
   // NO field row at all: the key is unset. That is the only thing that unsets a
   // multi-valued property, and it is the precondition

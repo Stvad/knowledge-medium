@@ -166,7 +166,7 @@ export const openPropertyValue = async (
   const plan = planOpenFold(rows)
   const {values} = plan
   const list = memberCodecOf(schema.codec) !== undefined
-  const blankCounts = list && (childContentsToEncodedPropertyValue(schema, ['']) as unknown[]).length > 0
+  const blankCounts = list && (childContentsToEncodedPropertyValue(schema, [''], undefined) as unknown[]).length > 0
   const target = (candidates: BlockData[]) => {
     if (!list) return scalarValueRow(schema, candidates)
     const last = candidates.at(-1)
@@ -295,8 +295,8 @@ export const finishPropertyValueEdit = async (
   if (rows.stored !== undefined && !rowsProjectToValue(rows.schema, rows.values, rows.stored)) return
   const peers = rows.values.filter(value => value.id !== id)
   if (peers.length && (!memberCodecOf(rows.schema.codec) ||
-    !jsonValuesEqual(childContentsToEncodedPropertyValue(rows.schema, [...peers, '']),
-      childContentsToEncodedPropertyValue(rows.schema, peers)))) return
+    !jsonValuesEqual(childContentsToEncodedPropertyValue(rows.schema, [...peers, ''], rows.stored),
+      childContentsToEncodedPropertyValue(rows.schema, peers, rows.stored)))) return
   await deleteSubtreeAnnouncedInTx(tx, id)
   const {field} = rows.fields[0]!
   if (edit.draftFieldId === field.id && !await carriesData(tx, field)) await deleteSubtreeAnnouncedInTx(tx, field.id)

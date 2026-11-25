@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { Block } from '@/data/block'
-import { isReadOnlyBlock, isRefCodec, isRefListCodec, type PropertyEditorProps } from '@/data/api'
+import { isReadOnlyBlock, isRefCodec, isRefListCodec } from '@/data/api'
 import { Button } from '@/components/ui/button'
 import { propertyShapeLabel } from './shapes'
 import { PropertyShapeButton } from './shapeUi'
@@ -46,7 +46,6 @@ export function PropertyRow({
   onNavigate,
   onConfigure,
   onChange,
-  resolveAndChange,
   onDelete,
 }: {
   row: PropertyPanelModelRow
@@ -62,7 +61,6 @@ export function PropertyRow({
   onNavigate: (event: KeyboardEvent<HTMLDivElement>, direction: -1 | 1) => void
   onConfigure: () => void
   onChange: (next: unknown) => void
-  resolveAndChange?: PropertyEditorProps<unknown>['resolveAndChange']
   onDelete: () => void
 }) {
   const rowReadOnly = readOnly || row.readOnly
@@ -131,7 +129,7 @@ export function PropertyRow({
           </span>
         )}
       </div>
-      <PropertyValueCell row={row} block={block} onChange={onChange} resolveAndChange={resolveAndChange}/>
+      <PropertyValueCell row={row} block={block} onChange={onChange}/>
       <div className="flex h-7 items-center justify-center" data-property-row-control="true">
         {!rowReadOnly && row.canDelete && (
           <Button
@@ -161,12 +159,10 @@ export function PropertyValueCell({
   row,
   block,
   onChange,
-  resolveAndChange,
 }: {
   row: PropertyPanelModelRow
   block: Block
   onChange: (next: unknown) => void
-  resolveAndChange?: PropertyEditorProps<unknown>['resolveAndChange']
 }) {
   const Editor = row.Editor
   // Activation for the VALUE cell lives here rather than in each editor: the
@@ -184,7 +180,7 @@ export function PropertyValueCell({
     >
       {Editor !== undefined && !row.decodeFailed && !row.readOnly
         && (!isReadOnlyBlock(block) || rendersReadOnly(row.schema)) ? (
-        <Editor value={row.value} onChange={onChange} resolveAndChange={resolveAndChange} block={block} schema={row.schema} />
+        <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
       ) : row.decodeFailed ? (
         <RawJsonValue value={row.encodedValue} reason="Decode failed" />
       ) : (

@@ -121,7 +121,7 @@ export const relativeDateCandidates = (
  *
  * Both spellings must round-trip exactly so a typo cannot make an ordinary page a daily note.
  */
-export const parseLiteralDailyPageTitle: (input: string, now?: Date) => ParsedRelativeDate | null = input => {
+export const parseLiteralDailyPageTitle = (input: string): ParsedRelativeDate | null => {
   const text = input.trim()
   const iso = isoFromRoamDate(text) ?? text
   const date = parseIsoDay(iso)

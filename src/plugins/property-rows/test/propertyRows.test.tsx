@@ -444,7 +444,7 @@ describe('editing through a property row', () => {
     'deleted owner', 'deleted field', 'retargeted field', 'repurposed field',
     'deleted value', 'moved value', 'repurposed value', 'retyped definition',
   ])(
-    'refuses both inline editor writes for a %s', async stale => {
+    'refuses an inline editor write for a %s', async stale => {
       const renderedEditor = vi.fn<(props: PropertyEditorProps<boolean>) => void>()
       const InlineEditor = (props: PropertyEditorProps<boolean>) => {
         renderedEditor(props)
@@ -465,7 +465,6 @@ describe('editing through a property row', () => {
       const editor = await screen.findByText('Captured boolean editor')
       expect(blockRow(editor).dataset.blockId).toBe(value.id)
       const props = renderedEditor.mock.lastCall![0]
-      expect(props.resolveAndChange).toBeTypeOf('function')
 
       if (stale === 'retyped definition') {
         await act(() => repo.block(schema.fieldId).set(presetIdProp, 'boolean'))
@@ -506,7 +505,6 @@ describe('editing through a property row', () => {
         'SELECT * FROM blocks WHERE id IN (?, ?, ?, ?) ORDER BY id', [OWNER, PANEL, field.id, value.id],
       )
       const before = await readRows()
-      const resolve = vi.fn(async () => false)
       const transaction = vi.spyOn(repo, 'tx')
       try {
         await act(async () => {
@@ -514,17 +512,14 @@ describe('editing through a property row', () => {
           expect(transaction).toHaveBeenCalledOnce()
           await transaction.mock.results[0]!.value
         })
-        expect(await readRows()).toEqual(before)
-        await expect(props.resolveAndChange!(resolve)).resolves.toBe(false)
       } finally {
         transaction.mockRestore()
       }
-      expect(resolve).not.toHaveBeenCalled()
       expect(await readRows()).toEqual(before)
     },
   )
 
-  it('resolves a complex preset value in the same write from its inline editor and property panel', async () => {
+  it('writes complex preset values from the inline editor and property panel', async () => {
     const presetId = 'rows:dimensions'
     const core = definePresetCore<{width: number}>({
       id: presetId,
@@ -535,20 +530,11 @@ describe('editing through a property row', () => {
       seedKey: 'test/property/rows-dimensions', revision: 1, name: 'rows:dimensions',
       preset: core, changeScope: ChangeScope.BlockDefault,
     })
-    const InlineEditor = ({block, value, onChange, resolveAndChange}: PropertyEditorProps<{width: number}>) => (
-      <>
-        <button type="button" data-editor-subject={block instanceof Block ? block.id : undefined}
-          onClick={() => onChange({width: value.width + 1})}>
-          Width {value.width}
-        </button>
-        <button type="button" onClick={() => void resolveAndChange?.(async tx => {
-          const next = {width: value.width + 1}
-          await tx.update(NOTE, {content: `Resolved width ${next.width}`})
-          return next
-        })}>
-          Resolve width
-        </button>
-      </>
+    const InlineEditor = ({block, value, onChange}: PropertyEditorProps<{width: number}>) => (
+      <button type="button" data-editor-subject={block instanceof Block ? block.id : undefined}
+        onClick={() => onChange({width: value.width + 1})}>
+        Width {value.width}
+      </button>
     )
     addExtensions(valuePresetCoresFacet.of(core), definitionSeedsFacet.of(dimensions), valuePresetPresentationsFacet.of({
       id: presetId, label: 'Dimensions', hideFromPicker: true, InlineEditor, Editor: InlineEditor,
@@ -566,20 +552,14 @@ describe('editing through a property row', () => {
     expect((await repo.load(valueId))?.content).toBe('{"width":5}')
     expect(owner.peekProperty(dimensions)).toEqual({width: 5})
 
-    fireEvent.click(screen.getByRole('button', {name: 'Resolve width'}))
-    expect(await screen.findByRole('button', {name: 'Width 6'})).toBe(button)
-    expect((await repo.load(valueId))?.content).toBe('{"width":6}')
-    expect((await repo.load(NOTE))?.content).toBe('Resolved width 6')
-    expect(owner.peekProperty(dimensions)).toEqual({width: 6})
-
     await act(() => owner.set(showPropertiesProp, true))
     const panel = document.querySelector<HTMLElement>('.tm-property-fields')!
-    const panelButton = await within(panel).findByRole('button', {name: 'Resolve width'})
+    const panelButton = await within(panel).findByRole('button', {name: 'Width 5'})
+    expect(panelButton).toHaveAttribute('data-editor-subject', owner.id)
     fireEvent.click(panelButton)
-    await within(panel).findByRole('button', {name: 'Width 7'})
-    expect((await repo.load(valueId))?.content).toBe('{"width":7}')
-    expect((await repo.load(NOTE))?.content).toBe('Resolved width 7')
-    expect(owner.peekProperty(dimensions)).toEqual({width: 7})
+    await within(panel).findByRole('button', {name: 'Width 6'})
+    expect((await repo.load(valueId))?.content).toBe('{"width":6}')
+    expect(owner.peekProperty(dimensions)).toEqual({width: 6})
   })
 
   it('renders a typed day value as an ordinary wikilink and edits it in CodeMirror', async () => {
@@ -606,7 +586,6 @@ describe('editing through a property row', () => {
     expect(link).toHaveClass('wikilink')
     expect(link).toHaveAttribute('href', `#${WS}/${initial.id}`)
     expect(row.querySelector('[data-property-value-row]')).toBeNull()
-    expect(within(row).queryByRole('button', {name: 'Change day'})).toBeNull()
     await act(() => focusBlock(repo.block(PANEL), value.id, {edit: true}))
     const editor = await editorFor(value.id)
     expect(editor.state.doc.toString()).toBe('[[May 4th, 2026]]')

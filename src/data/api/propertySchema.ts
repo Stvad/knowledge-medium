@@ -1,7 +1,6 @@
 import type { ComponentType, JSX } from 'react'
 import type { Codec } from './codecs'
 import type { ChangeScope } from './changeScope'
-import type { Tx } from './tx'
 
 /** Data-layer schema. Pure data — usable from non-React surfaces (server,
  *  CLI, headless tests, future non-React UIs). React presentation lives
@@ -127,9 +126,6 @@ export interface PropertyEditorOverride<T = unknown> {
 export interface PropertyEditorProps<T> {
   value: T
   onChange: (next: T) => void
-  /** Resolve the value and write it in the same transaction. The editor
-   *  host returns false when it refuses the write before calling resolve. */
-  resolveAndChange?: (resolve: (tx: Tx) => Promise<T>) => Promise<boolean>
   /** Schema being edited. Present for schema-backed property panel
    *  renderers; optional so older UI contributions that only need
    *  value/onChange/block keep their existing shape. */

@@ -1,6 +1,6 @@
 import { useContext } from 'react'
 import { Clock3 } from 'lucide-react'
-import { ChangeScope, type AnyPropertySchema, type PropertyEditorProps } from '@/data/api'
+import { ChangeScope, type AnyPropertySchema } from '@/data/api'
 import { referenceWarningMessage } from './referenceWarning'
 import { propertyValueTargetTypes } from './valueSchema'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
@@ -58,37 +58,33 @@ const InlineValue = ({block, Inner, fieldRowId, schema}: {
     ? <ReferenceWarning block={block} schema={schema} targetId={value}/> : null
   if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return warning
     ? <div className="flex min-w-0 items-center gap-1">{warning}<Inner block={block}/></div> : <Inner block={block}/>
-  const resolveAndChange: PropertyEditorProps<unknown>['resolveAndChange'] = async resolve => {
+  const changeValue = (next: unknown) => {
     // Defence in depth for custom renderer contexts: only a resolved definition identifies the field.
-    if (block.repo.isReadOnly || !isResolvedPropertySchema(schema) || isPropertyPanelReadOnlyProperty(schema.name)) return false
-    return block.repo.tx(async tx => {
+    if (block.repo.isReadOnly || !isResolvedPropertySchema(schema) || isPropertyPanelReadOnlyProperty(schema.name)) return
+    void block.repo.tx(async tx => {
       const row = await tx.get(block.id)
-      if (row?.deleted !== false || row.isFieldForm || row.parentId !== fieldRowId) return false
+      if (row?.deleted !== false || row.isFieldForm || row.parentId !== fieldRowId) return
       // Defence in depth for synced moves across graphs before workspace write admission.
-      if (row.workspaceId !== schema.workspaceId) return false
+      if (row.workspaceId !== schema.workspaceId) return
       const field = await tx.get(fieldRowId)
-      if (field?.deleted !== false || !isPropertyFieldInstance(field, fieldId => fieldId === schema.fieldId)) return false
+      if (field?.deleted !== false || !isPropertyFieldInstance(field, fieldId => fieldId === schema.fieldId)) return
       // A single-block delete can leave its field and value children live.
       const owner = await tx.get(field.parentId!)
-      if (owner?.deleted !== false) return false
+      if (owner?.deleted !== false) return
       const currentSchema = tx.resolvePropertyFieldSchema(row.workspaceId, schema.fieldId)
-      if (currentSchema?.codec !== schema.codec) return false
+      if (currentSchema?.codec !== schema.codec) return
       // Defence in depth: a queued edit must still respect the current field and repo write policy.
-      if (isPropertyPanelReadOnlyProperty(currentSchema.name) || block.repo.isReadOnly) return false
+      if (isPropertyPanelReadOnlyProperty(currentSchema.name) || block.repo.isReadOnly) return
       tx.assertWritableWorkspace(row.workspaceId)
-      const next = await resolve(tx)
       const [valueRow] = await tx.propertyValueChildContents(currentSchema, currentSchema.codec.encode(next), row.workspaceId)
       await tx.update(block.id, valueRow!)
-      return true
     }, {scope: ChangeScope.BlockDefault, description: `set content on ${block.id}`})
   }
   return (
     <div data-property-value-row="true" data-property-name={schema.name}
       onFocus={focusHandlers.onFocus} onBlur={focusHandlers.onBlur}>
       {warning}
-      <Editor block={block} schema={schema} value={value} resolveAndChange={resolveAndChange} onChange={next => {
-        void resolveAndChange(async () => next)
-      }}/>
+      <Editor block={block} schema={schema} value={value} onChange={changeValue}/>
     </div>
   )
 }

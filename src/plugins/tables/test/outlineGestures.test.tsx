@@ -278,8 +278,6 @@ it.each([
   })
   const text = await cells.findByText(oldInstant)
   expect(text.closest('a')).toBeNull()
-  expect(cells.queryByRole('button', {name: 'Relink day'})).toBeNull()
-  expect(cells.queryByRole('button', {name: 'Change day'})).toBeNull()
   expect(await repo.load(dailyNoteBlockId(WS, '2026-02-03'))).toBeNull()
   expect(row.peek()?.properties).toMatchObject(properties)
   if (childBacked) {

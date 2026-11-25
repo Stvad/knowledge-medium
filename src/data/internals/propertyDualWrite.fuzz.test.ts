@@ -514,7 +514,7 @@ const projectFromChildren = (state: DbState, ownerId: string, kind: Kind): unkno
   const perFieldRow = fieldRows.map(fieldRow =>
     (state.liveChildren.get(fieldRow.id) ?? []).filter(child => child.is_field_form !== 1))
   return childContentsToEncodedPropertyValue(
-    schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content))
+    schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content), undefined)
 }
 
 const sameValue = (a: unknown, b: unknown): boolean =>
@@ -1100,7 +1100,7 @@ const applyRawOpIn = async (lock: Lock, state: DbState, op: RawOp, waivers: Waiv
       for (const [i, content] of contents.entries()) await rawInsert(lock, state, waivers, fieldRowId, keys[i]!, content)
       if (op.peerCell) {
         // The peer's own cell: what ITS children project to, alone.
-        await rawSetCell(lock, ownerId, schema.name, childContentsToEncodedPropertyValue(schema, contents))
+        await rawSetCell(lock, ownerId, schema.name, childContentsToEncodedPropertyValue(schema, contents, undefined))
       }
       // `rawInsert` already waived the pair; the peer's cell, when it
       // arrives too, says what only ITS field row projects to.

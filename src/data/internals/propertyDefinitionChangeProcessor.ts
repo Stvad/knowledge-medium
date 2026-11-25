@@ -879,7 +879,7 @@ const applyToParent = async (
     }
     if (change.conversion && !childBacked) {
       const projected = childContentsToEncodedPropertyValue(change.beforeSchema,
-        unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow))
+        unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow), undefined)
       if (!jsonValuesEqual(storedPropertyValue(parent.properties, change.oldName), projected)) {
         recordRefusal(refusals, change.fieldId, parentId, 'stored cell and field rows disagree')
         continue

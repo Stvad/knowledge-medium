@@ -20,11 +20,12 @@ import { useAnchoredFloating } from '@/components/ui/anchored-floating.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useRepo } from '@/context/repo.js'
 import { useIsMobile } from '@/utils/react.js'
+import { parseIsoDay } from '@/utils/dailyPage.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import { addDaysIso, todayIso } from './dailyNotes.ts'
 import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 import { CalendarGrid } from './CalendarGrid.tsx'
-import { firstOfMonth, formatDayLabel, fromIso } from './calendar.ts'
+import { firstOfMonth, formatDayLabel } from './calendar.ts'
 
 export interface ReschedulePickerAnchorRect {
   bottom: number
@@ -75,7 +76,7 @@ const buildStripCells = (anchorIso: string): StripCell[] => {
   const cells: StripCell[] = []
   for (let offset = -STRIP_PAST_DAYS; offset <= STRIP_FUTURE_DAYS; offset++) {
     const iso = addDaysIso(anchorIso, offset)
-    const date = fromIso(iso)
+    const date = parseIsoDay(iso)
     if (!date) continue
     cells.push({
       iso,
@@ -194,7 +195,7 @@ function DatePickerSheet({session: {initialIso, write}, anchorRect, label, title
   finish: (written: boolean) => void
 }) {
   const isMobile = useIsMobile()
-  const [visibleMonth, setVisibleMonth] = useState(() => firstOfMonth(fromIso(initialIso) ?? new Date()))
+  const [visibleMonth, setVisibleMonth] = useState(() => firstOfMonth(parseIsoDay(initialIso) ?? new Date()))
   const [previewIso, setPreviewIso] = useState(initialIso)
   const [pending, setPending] = useState(false)
   const sheetRef = useRef<HTMLDivElement | null>(null)
@@ -260,7 +261,7 @@ function DatePickerSheet({session: {initialIso, write}, anchorRect, label, title
     finish(wrote)
   }
 
-  const previewDate = fromIso(previewIso)
+  const previewDate = parseIsoDay(previewIso)
   const previewLabel = previewDate ? formatDayLabel(previewDate) : '—'
 
   const sheetClassName = isMobile

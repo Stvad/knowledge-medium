@@ -4,7 +4,6 @@ import {
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
   scopePoliciesEquivalent,
-  type Tx,
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
@@ -20,10 +19,10 @@ const canWriteProperty = (block: Block, schema: AnyPropertySchema): boolean =>
   && !isPropertyPanelReadOnlyProperty(schema.name)
   && !declarationOnlyDefinitionForName(schema.name, block.repo.propertyDefinitions)
 
-export const resolveAndWriteProperty = async (
+export const writeProperty = async (
   block: Block,
   schema: AnyPropertySchema,
-  resolve: (tx: Tx) => Promise<unknown>,
+  value: unknown,
 ): Promise<boolean> => {
   if (!canWriteProperty(block, schema)) return false
   return block.repo.tx(async tx => {
@@ -33,13 +32,10 @@ export const resolveAndWriteProperty = async (
     if (currentSchema.codec !== schema.codec || !scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
       || !canWriteProperty(block, currentSchema)) return false
     tx.assertWritableWorkspace(owner.workspaceId)
-    await tx.setProperty(block.id, currentSchema, await resolve(tx))
+    await tx.setProperty(block.id, currentSchema, value)
     return true
   }, {scope: schema.changeScope, description: `set property ${schema.name} on ${block.id}`})
 }
-
-export const writeProperty = (block: Block, schema: AnyPropertySchema, value: unknown): Promise<boolean> =>
-  resolveAndWriteProperty(block, schema, async () => value)
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a

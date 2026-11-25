@@ -3557,7 +3557,7 @@ describe('propertyCellValueRejection asks what the projection will ask', () => {
     // The symptom the disagreement produced: this is what the cell would have
     // become if the write above had been accepted.
     const contents = encodedPropertyValueToChildContents(choiceListSchema, ['a', 'b'])
-    expect(childContentsToEncodedPropertyValue(choiceListSchema, contents)).toEqual(['a', 'b'])
+    expect(childContentsToEncodedPropertyValue(choiceListSchema, contents, undefined)).toEqual(['a', 'b'])
   })
 })
 
@@ -3844,7 +3844,7 @@ describe('content <-> value codecs: a JSON-spelled value child carries no span (
     for (const value of VALUES) {
       const legacy = JSON.stringify(value)
       expect(valueChildContentToEncoded(jsonSchema, legacy)).toEqual(value)
-      expect(childContentsToEncodedPropertyValue(listSchema, [legacy])).toEqual([value])
+      expect(childContentsToEncodedPropertyValue(listSchema, [legacy], undefined)).toEqual([value])
     }
   })
 

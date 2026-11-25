@@ -30,7 +30,6 @@ import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
   deleteProperty,
-  resolveAndWriteProperty,
   writeProperty,
 } from './propertyPanel/actions'
 import {
@@ -251,11 +250,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         onConfigure={() => void handleConfigure(row)}
         onChange={(next) => {
           void writeProperty(block, row.schema, next).then(written => { if (written) clearSyntheticProperty() })
-        }}
-        resolveAndChange={async resolve => {
-          const written = await resolveAndWriteProperty(block, row.schema, resolve)
-          if (written) clearSyntheticProperty()
-          return written
         }}
         onDelete={() => void deleteProperty({
           block,

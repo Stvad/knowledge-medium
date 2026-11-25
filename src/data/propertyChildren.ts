@@ -153,12 +153,7 @@ export const propertyFieldContent = (fieldId: string): string =>
 
 const finiteNumberFromContent = (content: string): number => {
   const trimmed = content.trim()
-  // `Number('')` and `Number('   ')` are 0, not NaN, so the isFinite guard
-  // below waves blank content through as a real zero — a cleared value row
-  // would silently project 0 over the cell. Blank is not the
-  // encoding of any number (`encodedValueToContent` writes `String(n)`, and
-  // reserves '' for undefined), so it's unparseable: throwing preserves the
-  // row's text and surfaces the count, rather than inventing a value.
+  // Number converts whitespace to zero. Only the optional codec's exact empty spelling denotes unset.
   if (trimmed === '') throw new CodecError('finite number content', content)
   const value = Number(trimmed)
   if (!Number.isFinite(value)) throw new CodecError('finite number content', content)
@@ -743,8 +738,8 @@ export const valueChildContentToEncoded = (
  *  Deliberately NOT a verdict on whether anything was LOST. One unreadable row
  *  is not a loss — the projection may never have read it, or a sibling may
  *  carry the same member — and only the aggregate can say. That question has
- *  one owner, {@link projectedValueCount}, at the grain it is asked about. */
-// A newly spelled value carries its encoding so a transaction can choose its target's named link.
+ *  one owner, {@link projectedValueCount}, at the grain it is asked about.
+ *  A converted row can carry its encoding for a transaction to choose the target's named link. */
 export type ValueChildConversion =
   | {readonly outcome: 'converted'; readonly content: string; readonly encoded?: unknown}
   | {readonly outcome: 'unreadable'}
@@ -998,7 +993,7 @@ export const encodedPropertyValueToChildContents = (
 export const childContentsToEncodedPropertyValue = (
   schema: AnyPropertySchema,
   contents: Iterable<ValueChildContent>,
-  storedWhileAwaiting?: unknown,
+  storedWhileAwaiting: unknown,
 ): unknown | undefined => {
   if (memberCodecOf(schema.codec) === undefined) {
     return firstScalarValue(schema, contents, {storedWhileAwaiting})?.value
@@ -1018,7 +1013,7 @@ export const childContentsToEncodedPropertyValue = (
  *  winner when the name resolves. Other unreadable text stays available for editing in the outline. */
 const firstScalarValue = <T extends ValueChildContent>(
   schema: AnyPropertySchema, contents: Iterable<T>, {writing, storedWhileAwaiting}: {
-    writing?: string; storedWhileAwaiting?: unknown
+    writing?: string; storedWhileAwaiting: unknown
   },
 ): {row: T; value: unknown} | undefined => {
   let blank: T | undefined
@@ -1046,7 +1041,7 @@ const firstScalarValue = <T extends ValueChildContent>(
 export const scalarValueRow = <T extends ProposedValueChild>(
   schema: AnyPropertySchema, values: readonly T[], writing?: string,
 ): T | undefined =>
-  firstScalarValue(schema, values, {writing})?.row ?? (values.length === 1 ? values[0] : undefined)
+  firstScalarValue(schema, values, {writing, storedWhileAwaiting: undefined})?.row ?? (values.length === 1 ? values[0] : undefined)
 
 export const scalarDuplicates = (
   values: readonly BlockData[], primary: BlockData | undefined, content: string,
@@ -1191,7 +1186,7 @@ export const fieldRowValues = async (
 
 export const rowsProjectToValue = (
   schema: AnyPropertySchema, rows: readonly ValueChildContent[], encoded: unknown,
-): boolean => jsonValuesEqual(childContentsToEncodedPropertyValue(schema, rows), encoded)
+): boolean => jsonValuesEqual(childContentsToEncodedPropertyValue(schema, rows, undefined), encoded)
 
 /**
  * Does `encoded` come back UNCHANGED through the value-child machinery?

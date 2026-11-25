@@ -39,8 +39,6 @@ export const firstOfMonth = (date: Date): Date =>
 export const addMonths = (date: Date, months: number): Date =>
   localDate(date.getFullYear(), date.getMonth() + months, 1)
 
-export {parseIsoDay as fromIso}
-
 /** Resolve a Date to seed the calendar's "visible month" state from
  *  an optional ISO string. Falls back to "now" if absent or invalid. */
 export const initialDateFromIso = (iso: string | undefined): Date => {
