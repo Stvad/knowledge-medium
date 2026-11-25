@@ -1,0 +1,1 @@
+export{fR as gestureBindingDescriptor,pR as matchesGestureEvent}from"../../chunks/app-BGIYDMNR.js";

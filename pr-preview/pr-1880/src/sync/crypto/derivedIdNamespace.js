@@ -1,0 +1,1 @@
+export{Fft as deriveWorkspaceIdNamespace}from"../../../chunks/app-BGIYDMNR.js";

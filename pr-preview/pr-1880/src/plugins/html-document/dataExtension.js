@@ -1,0 +1,1 @@
+export{KQ as htmlDocumentDataExtension}from"../../../chunks/app-BGIYDMNR.js";

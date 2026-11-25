@@ -1,0 +1,1 @@
+export{p3 as pluginPrefsExtension,m3 as pluginUIStateExtension}from"../../chunks/app-BGIYDMNR.js";

@@ -1,0 +1,1 @@
+export{FX as omnilinerNamespace}from"../../chunks/app-BGIYDMNR.js";

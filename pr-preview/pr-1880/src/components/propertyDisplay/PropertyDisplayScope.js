@@ -1,0 +1,1 @@
+export{iB as PropertyDisplayScope}from"../../../chunks/app-BGIYDMNR.js";

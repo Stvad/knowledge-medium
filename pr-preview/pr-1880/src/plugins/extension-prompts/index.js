@@ -1,0 +1,1 @@
+export{AL as ExtensionPromptSurface,jL as extensionPromptsExtension}from"../../../chunks/app-BGIYDMNR.js";

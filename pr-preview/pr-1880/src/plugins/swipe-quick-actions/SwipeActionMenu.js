@@ -1,0 +1,1 @@
+export{MF as SwipeActionMenu}from"../../../chunks/app-BGIYDMNR.js";

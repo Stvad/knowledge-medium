@@ -1,0 +1,1 @@
+export{KS as blockrefCompletionSource}from"../../chunks/app-BGIYDMNR.js";

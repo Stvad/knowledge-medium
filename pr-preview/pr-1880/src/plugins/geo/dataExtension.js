@@ -1,0 +1,1 @@
+export{x$ as geoDataExtension}from"../../../chunks/app-BGIYDMNR.js";

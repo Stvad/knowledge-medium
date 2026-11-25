@@ -1,0 +1,1 @@
+export{en as AppRuntimeProvider}from"../../chunks/app-BGIYDMNR.js";

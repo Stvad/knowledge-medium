@@ -1,0 +1,1 @@
+export{zS as EmbedComponent,BS as referenceTargetOf}from"../../../../chunks/app-BGIYDMNR.js";

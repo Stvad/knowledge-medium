@@ -1,0 +1,1 @@
+export{uz as LazyBlockComponent}from"../../chunks/app-BGIYDMNR.js";

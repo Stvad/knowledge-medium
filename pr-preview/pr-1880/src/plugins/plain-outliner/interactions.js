@@ -1,0 +1,1 @@
+export{tk as blockEditingContentRenderer}from"../../../chunks/app-BGIYDMNR.js";

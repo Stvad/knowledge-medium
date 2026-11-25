@@ -1,0 +1,1 @@
+export{Ret as Block,zet as requireLoadedBlock}from"../../chunks/app-BGIYDMNR.js";

@@ -1,0 +1,1 @@
+export{vx as blockInfoPlugin}from"../../../chunks/app-BGIYDMNR.js";

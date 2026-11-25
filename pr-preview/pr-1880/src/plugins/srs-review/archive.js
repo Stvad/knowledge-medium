@@ -1,0 +1,1 @@
+export{Id as archiveSrsCard}from"../../../chunks/app-BGIYDMNR.js";

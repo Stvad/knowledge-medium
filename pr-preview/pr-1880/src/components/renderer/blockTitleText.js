@@ -1,0 +1,1 @@
+export{MU as BLOCK_TITLE_TEXT_CLASS,NU as useBlockTitleTextClass}from"../../../chunks/app-BGIYDMNR.js";

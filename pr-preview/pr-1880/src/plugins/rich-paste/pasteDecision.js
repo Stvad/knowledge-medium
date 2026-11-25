@@ -1,0 +1,1 @@
+export{QC as richPasteDecisionContribution}from"../../../chunks/app-BGIYDMNR.js";

@@ -1,0 +1,1 @@
+export{Az as DialogHost,jz as dialogAppMountExtension}from"../../chunks/app-BGIYDMNR.js";

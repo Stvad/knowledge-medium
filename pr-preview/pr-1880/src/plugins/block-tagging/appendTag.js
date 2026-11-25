@@ -1,0 +1,1 @@
+export{np as appendTagToBlocks,rp as appendTagToContent}from"../../../chunks/app-BGIYDMNR.js";

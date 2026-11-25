@@ -1,0 +1,1 @@
+export{Kgt as definePostCommitProcessor}from"../../../chunks/app-BGIYDMNR.js";

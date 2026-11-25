@@ -1,0 +1,1 @@
+export{ZC as richPastePlugin}from"../../../chunks/app-BGIYDMNR.js";

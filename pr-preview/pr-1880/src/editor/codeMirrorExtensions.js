@@ -1,0 +1,1 @@
+export{g1 as codeMirrorExtensionsFacet}from"../../chunks/app-BGIYDMNR.js";

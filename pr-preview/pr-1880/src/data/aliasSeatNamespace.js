@@ -1,0 +1,1 @@
+export{tft as aliasSeatNamespacesInTx,nft as resolveAliasSeatNamespaces}from"../../chunks/app-BGIYDMNR.js";

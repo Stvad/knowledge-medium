@@ -1,0 +1,1 @@
+export{Aj as useMinuteClock}from"../../chunks/app-BGIYDMNR.js";

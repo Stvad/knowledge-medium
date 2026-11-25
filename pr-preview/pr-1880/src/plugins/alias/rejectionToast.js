@@ -1,0 +1,1 @@
+export{KC as aliasCollisionRejectionToast}from"../../../chunks/app-BGIYDMNR.js";

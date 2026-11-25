@@ -1,0 +1,1 @@
+export{wV as BlockInfoDialog}from"../../../chunks/app-BGIYDMNR.js";

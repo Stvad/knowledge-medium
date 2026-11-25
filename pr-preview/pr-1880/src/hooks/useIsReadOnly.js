@@ -1,0 +1,1 @@
+export{SC as useIsReadOnly}from"../../chunks/app-BGIYDMNR.js";

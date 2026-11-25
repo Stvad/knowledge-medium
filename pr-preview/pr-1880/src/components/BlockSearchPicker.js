@@ -1,0 +1,1 @@
+export{BC as BlockSearchPicker}from"../../chunks/app-BGIYDMNR.js";

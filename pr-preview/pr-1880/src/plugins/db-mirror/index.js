@@ -1,0 +1,1 @@
+export{ol as OPEN_DB_MIRROR_SETTINGS_ACTION_ID,il as dbMirrorPlugin}from"../../../chunks/app-BGIYDMNR.js";

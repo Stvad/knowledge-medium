@@ -1,0 +1,1 @@
+export{n4 as contributorsDataExtension}from"../../../chunks/app-BGIYDMNR.js";

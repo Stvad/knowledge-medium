@@ -1,0 +1,1 @@
+export{AW as BlockProperties}from"../../chunks/app-BGIYDMNR.js";

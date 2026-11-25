@@ -1,0 +1,1 @@
+export{Fm as annotationsPlugin}from"../../../chunks/app-BGIYDMNR.js";

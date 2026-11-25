@@ -1,0 +1,1 @@
+export{Rtt as KERNEL_PROCESSORS}from"../../../chunks/app-BGIYDMNR.js";

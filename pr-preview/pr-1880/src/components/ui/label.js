@@ -1,0 +1,1 @@
+export{FM as Label}from"../../../chunks/app-BGIYDMNR.js";

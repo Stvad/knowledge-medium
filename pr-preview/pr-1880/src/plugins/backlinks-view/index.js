@@ -1,0 +1,1 @@
+export{Dx as backlinksViewPlugin}from"../../../chunks/app-BGIYDMNR.js";

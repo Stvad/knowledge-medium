@@ -1,0 +1,1 @@
+export{yV as __resetDialogsForTests,bV as getDialogQueue,xV as isDialogOpenForWorkspace,SV as openDialog,CV as subscribeDialogs}from"../../chunks/app-BGIYDMNR.js";

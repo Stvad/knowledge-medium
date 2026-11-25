@@ -1,0 +1,1 @@
+export{K5 as ProjectorRuntime}from"../../chunks/app-BGIYDMNR.js";

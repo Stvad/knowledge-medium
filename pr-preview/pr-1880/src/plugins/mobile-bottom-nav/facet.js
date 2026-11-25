@@ -1,0 +1,1 @@
+export{VO as mobileBottomNavItemsFacet}from"../../../chunks/app-BGIYDMNR.js";

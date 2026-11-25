@@ -1,0 +1,1 @@
+export{MQ as preferredSpanReplacement}from"../../../chunks/app-BGIYDMNR.js";

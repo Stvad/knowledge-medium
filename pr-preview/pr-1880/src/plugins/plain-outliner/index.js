@@ -1,0 +1,1 @@
+export{QO as plainOutlinerPlugin}from"../../../chunks/app-BGIYDMNR.js";

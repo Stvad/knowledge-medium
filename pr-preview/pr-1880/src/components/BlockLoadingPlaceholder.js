@@ -1,0 +1,1 @@
+export{vz as BlockLoadingPlaceholder}from"../../chunks/app-BGIYDMNR.js";

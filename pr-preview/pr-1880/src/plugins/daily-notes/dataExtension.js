@@ -1,0 +1,1 @@
+export{A1 as dailyNotesDataExtension}from"../../../chunks/app-BGIYDMNR.js";

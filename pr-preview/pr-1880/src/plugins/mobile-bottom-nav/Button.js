@@ -1,0 +1,1 @@
+export{BO as MobileBottomNavButton}from"../../../chunks/app-BGIYDMNR.js";

@@ -1,0 +1,1 @@
+export{S4 as characterCounterDataExtension}from"../../../chunks/app-BGIYDMNR.js";

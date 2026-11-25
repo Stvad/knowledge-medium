@@ -1,0 +1,1 @@
+export{Vet as kernelDataExtension}from"../../chunks/app-BGIYDMNR.js";

@@ -1,0 +1,1 @@
+export{TR as ClientLocalSettings,ER as clientLocalSettings}from"../../chunks/app-BGIYDMNR.js";

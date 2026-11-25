@@ -1,0 +1,1 @@
+export{Tk as WorkspaceSettingsDialog}from"../../../chunks/app-BGIYDMNR.js";

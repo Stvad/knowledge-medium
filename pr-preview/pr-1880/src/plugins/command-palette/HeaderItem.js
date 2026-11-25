@@ -1,0 +1,1 @@
+export{xF as CommandPaletteHeaderItem}from"../../../chunks/app-BGIYDMNR.js";
