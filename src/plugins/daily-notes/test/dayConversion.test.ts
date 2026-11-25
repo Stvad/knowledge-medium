@@ -32,6 +32,7 @@ import { SRS_SM25_TYPE, srsNextReviewDateProp } from '@/plugins/srs-rescheduling
 import { buildDueCardsQuery } from '@/plugins/srs-review/dueQuery'
 import { dailyNoteBlockId, getOrCreateDailyNote, getOrCreateDailyNoteInTx } from '../dailyNotes'
 import { dailyNotesDataExtension } from '../dataExtension'
+import { dayIdReferenceAdapter } from '../dayIdReferenceAdapter'
 import { referenceDateAdapter } from '../referenceDateAdapter'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '../schema'
 
@@ -348,6 +349,72 @@ describe('child-backed daily-note references', () => {
     expect((await storedProperties('owner'))[NAME]).toBe(next)
     expect(await repo.query.aliasLookup({workspaceId: WS, alias: NEW_DAY_TITLE}).load()).toMatchObject({id: claimant ?? next})
   })
+
+  it('reschedules legacy and title-conflict ID day values in place', async () => {
+    const {repo, schema} = await childBackedDay(['owner'])
+    const initial = await getOrCreateDailyNote(repo, WS, EXISTING_DAY)
+    const claimant = await createAliasOwner(repo)
+    await repo.tx(tx => tx.setProperty('owner', schema, initial.id), SCOPE)
+    const value = (await readValueChild('owner'))!
+    const block = repo.block(value.id)
+    const original = `((${initial.id}))`
+    await block.setContent(original)
+    await repo.block(value.parent_id).load()
+    await repo.tx(tx => tx.create({id: 'plain-ref', parentId: 'owner', workspaceId: WS,
+      orderKey: 'zz', content: original}), SCOPE)
+    const plain = repo.block('plain-ref')
+    await plain.load()
+    expect(dayIdReferenceAdapter.canHandle(plain)).toBe(false)
+    expect(await dayIdReferenceAdapter.getCurrentIso(plain)).toBeNull()
+    expect(await dayIdReferenceAdapter.setIso(plain, NEW_DAY)).toBe(false)
+    const nextId = dailyNoteBlockId(WS, NEW_DAY)
+    expect(await repo.load(nextId)).toBeNull()
+
+    expect(dayIdReferenceAdapter.canHandle(block)).toBe(true)
+    expect(await dayIdReferenceAdapter.getCurrentIso(block)).toBe(EXISTING_DAY)
+    expect(await dayIdReferenceAdapter.setIso(block, EXISTING_DAY)).toBe(false)
+    expect(await readValueChild('owner')).toEqual({...value, content: original})
+    expect(await dayIdReferenceAdapter.setIso(block, NEW_DAY)).toBe(true)
+    expect(await readValueChild('owner')).toEqual({...value, content: `((${nextId}))`, reference_target_id: nextId})
+    expect((await storedProperties('owner'))[NAME]).toBe(nextId)
+    expect(await propertyBacklinks(claimant)).toEqual([])
+
+    expect(dayIdReferenceAdapter.canHandle(block)).toBe(true)
+    expect(await dayIdReferenceAdapter.getCurrentIso(block)).toBe(NEW_DAY)
+    expect(await dayIdReferenceAdapter.setIso(block, DEFAULT_DAY)).toBe(true)
+    const finalId = dailyNoteBlockId(WS, DEFAULT_DAY)
+    expect(await readValueChild('owner')).toEqual({...value, content: '[[February 4th, 2026]]', reference_target_id: finalId})
+    expect((await storedProperties('owner'))[NAME]).toBe(finalId)
+  })
+
+  it.each(['moved value', 'deleted field', 'deleted owner', 'deleted target'] as const)(
+    'refuses a retained ID day gesture after a %s', async stale => {
+      const {repo, schema} = await childBackedDay(['owner'])
+      const note = await getOrCreateDailyNote(repo, WS, EXISTING_DAY)
+      await repo.tx(tx => tx.setProperty('owner', schema, note.id), SCOPE)
+      const value = (await readValueChild('owner'))!
+      const block = repo.block(value.id)
+      const content = `((${note.id}))`
+      await block.setContent(content)
+      await repo.block(value.parent_id).load()
+      expect(dayIdReferenceAdapter.canHandle(block)).toBe(true)
+      expect(await dayIdReferenceAdapter.getCurrentIso(block)).toBe(EXISTING_DAY)
+
+      // Simulate a sync arrival while the gesture has retained its old view.
+      await testDb.db.writeTransaction(async db => {
+        if (stale === 'moved value') {
+          await db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', ['owner', value.id])
+        } else {
+          const id = stale === 'deleted field' ? value.parent_id : stale === 'deleted owner' ? 'owner' : note.id
+          await db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [id])
+        }
+      })
+      expect(await dayIdReferenceAdapter.setIso(block, NEW_DAY)).toBe(false)
+      expect(await testDb.db.get('SELECT content FROM blocks WHERE id = ?', [value.id])).toEqual({content})
+      expect((await storedProperties('owner'))[NAME]).toBe(note.id)
+      expect(await repo.load(dailyNoteBlockId(WS, NEW_DAY))).toBeNull()
+    },
+  )
 
   it.each(['typed write', 'value block edit'] as const)('clears a day to a blank on the same value row through a %s', async edit => {
     const {repo, schema} = await childBackedDay(['owner'])

@@ -14,6 +14,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core'
+import { DialogHost } from '@/extensions/dialogAppMount'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { ActiveContextsProvider, useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts'
@@ -42,6 +43,7 @@ import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes'
 import { DAILY_NOTE_TYPE, dayValuePresetCore } from '@/plugins/daily-notes/schema'
 import * as toast from '@/utils/toast'
+import { __resetDialogsForTests } from '@/utils/dialogs'
 import { disarmCut, getArmedCut } from '@/paste/armedCut'
 import { pasteArmedCut } from '@/paste/operations'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
@@ -94,6 +96,7 @@ afterEach(async () => {
   window.removeEventListener('selectionchange', swallowSelectionChange, true)
   vi.restoreAllMocks()
   cleanup()
+  __resetDialogsForTests()
   // An unmounted cell editor finishes its edit on a timer; let it write before the reset.
   await act(() => new Promise(resolve => setTimeout(resolve)))
   vi.unstubAllGlobals()
@@ -137,11 +140,12 @@ const ContextProbe = () => {
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
 
-const mount = (childBacked = true) => render(
+const mount = (childBacked = true, showDialogs = false) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
         <HotkeyReconciler/>
+        {showDialogs && <DialogHost/>}
         <ContextProbe/>
         <Suspense fallback={null}>
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: PARENT_SCOPE, scopeRootId: HOST}}>
@@ -266,7 +270,7 @@ it.each([
   expect(row.peek()?.properties).toMatchObject(properties)
   repo.setReadOnly(readOnly)
 
-  mount(childBacked)
+  await act(async () => { mount(childBacked, childBacked && !readOnly) })
   const cells = await waitFor(() => {
     const cells = document.querySelector<HTMLElement>('[data-table-row="row-0"]')
     expect(cells).not.toBeNull()
@@ -276,6 +280,23 @@ it.each([
     const links = cells.getAllByRole('link', {name: 'Trip planning'})
     expect(links.map(link => link.getAttribute('href'))).toEqual([`#${WS}/${target.id}`, `#${WS}/${target.id}`])
   })
+  if (childBacked && !readOnly) {
+    const link = cells.getAllByRole('link', {name: 'Trip planning'})[0]!
+    const value = link.closest<HTMLElement>('[data-table-value]')!
+    const id = value.dataset.blockId!
+    const button = await within(value).findByRole('button', {name: 'Reschedule date'})
+    expect(await repo.load(id)).toMatchObject({content: `((${target.id}))`, referenceTargetId: target.id})
+    fireEvent.click(button)
+    const picker = await within(document.body).findByRole('dialog', {name: 'Reschedule block'})
+    expect(within(picker).getByRole('button', {name: /Jan(?:uary)? 6, 2026/})).toHaveAttribute('aria-pressed', 'true')
+    const next = dailyNoteBlockId(WS, '2026-01-07')
+    expect(await repo.load(next)).toBeNull()
+    await act(async () => fireEvent.click(within(picker).getByRole('button', {name: /Jan(?:uary)? 7, 2026/})))
+    await waitFor(async () => expect(await repo.load(id)).toMatchObject({content: '[[January 7th, 2026]]', referenceTargetId: next}))
+    properties[day.name] = next
+  } else {
+    expect(cells.queryByRole('button', {name: 'Reschedule date'})).toBeNull()
+  }
   const text = await cells.findByText(oldInstant)
   expect(text.closest('a')).toBeNull()
   expect(await repo.load(dailyNoteBlockId(WS, '2026-02-03'))).toBeNull()

@@ -5,7 +5,7 @@
  * of the old date-shift actions but exposes get/set in absolute-ISO
  * form for the calendar sheet and scrub gestures.
  */
-import { ChangeScope, type ProposedValueChild } from '@/data/api'
+import { ChangeScope, type AnyPropertySchema, type BlockData, type Tx } from '@/data/api'
 import type { Block } from '@/data/block'
 import { hasSourceContent, takesTextEdit } from '@/data/blockTypes'
 import { resolvePropertyValueFieldSchema } from '@/data/propertyChildren'
@@ -61,6 +61,15 @@ export const replaceSingleDateReferenceContent = (
 
 const REFERENCE_DATE_ADAPTER_ID = 'daily-notes.reference'
 
+export const writeDayReferenceValue = async (
+  block: Block, tx: Tx, row: Pick<BlockData, 'id' | 'workspaceId'>, schema: AnyPropertySchema, iso: string,
+) => {
+  tx.assertWritableWorkspace(row.workspaceId)
+  const id = await getOrCreateDailyNoteInTx(tx, block.repo.snapshotTypeRegistries(), row.workspaceId, iso)
+  const [value] = await tx.propertyValueChildContents(schema, id, row.workspaceId)
+  await tx.update(row.id, value!)
+}
+
 export const referenceDateAdapter: BlockDateAdapter = {
   id: REFERENCE_DATE_ADAPTER_ID,
   canHandle: (block: Block) => {
@@ -83,17 +92,15 @@ export const referenceDateAdapter: BlockDateAdapter = {
       if (!takesTextEdit(row)) return
       const nextContent = replaceSingleDateReferenceContent(row.content, iso)
       if (nextContent === null || nextContent === row.content) return
-      let patch: ProposedValueChild = {content: nextContent}
       if (parseExactReferenceBlockContent(nextContent)?.kind === 'alias') {
         const schema = await resolvePropertyValueFieldSchema(tx, row)
         if (schema && isDayReferenceSchema(schema)) {
-          tx.assertWritableWorkspace(row.workspaceId)
-          const id = await getOrCreateDailyNoteInTx(tx, block.repo.snapshotTypeRegistries(), row.workspaceId, iso)
-          const [value] = await tx.propertyValueChildContents(schema, id, row.workspaceId)
-          patch = value!
+          await writeDayReferenceValue(block, tx, row, schema, iso)
+          written = true
+          return
         }
       }
-      await tx.update(block.id, patch)
+      await tx.update(block.id, {content: nextContent})
       written = true
     }, {scope: ChangeScope.BlockDefault, description: 'set date reference'})
     return written
