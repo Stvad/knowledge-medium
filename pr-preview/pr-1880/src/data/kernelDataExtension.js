@@ -1,1 +1,0 @@
-export{Get as kernelDataExtension}from"../../chunks/app-DrOkKzpk.js";

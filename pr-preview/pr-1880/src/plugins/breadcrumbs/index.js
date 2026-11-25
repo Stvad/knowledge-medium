@@ -1,1 +1,0 @@
-export{$O as BreadcrumbList,XO as BreadcrumbRenderer,QO as Breadcrumbs,YO as PromotableBreadcrumbList,KO as breadcrumbRendererContribution,qO as breadcrumbsPlugin,ZO as getBreadcrumbContentPreview,JO as usePromotableBreadcrumb}from"../../../chunks/app-DrOkKzpk.js";

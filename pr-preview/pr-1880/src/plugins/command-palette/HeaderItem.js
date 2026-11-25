@@ -1,1 +1,0 @@
-export{wF as CommandPaletteHeaderItem}from"../../../chunks/app-DrOkKzpk.js";

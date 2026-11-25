@@ -1,1 +1,0 @@
-export{TY as usePropertySchemas}from"../../chunks/app-DrOkKzpk.js";

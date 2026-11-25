@@ -1,1 +1,0 @@
-"use client";export{kW as Collapsible,AW as CollapsibleContent,jW as CollapsibleTrigger}from"../../../chunks/app-DrOkKzpk.js";

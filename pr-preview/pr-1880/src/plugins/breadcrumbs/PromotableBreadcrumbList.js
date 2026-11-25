@@ -1,1 +1,0 @@
-export{YO as PromotableBreadcrumbList}from"../../../chunks/app-DrOkKzpk.js";

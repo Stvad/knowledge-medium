@@ -1,1 +1,0 @@
-export{$C as richPastePlugin}from"../../../chunks/app-DrOkKzpk.js";

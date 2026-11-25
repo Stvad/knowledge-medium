@@ -1,1 +1,0 @@
-export{dg as confirmThreadDeletion}from"../../../chunks/app-DrOkKzpk.js";

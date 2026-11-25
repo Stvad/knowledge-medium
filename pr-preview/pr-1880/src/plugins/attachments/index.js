@@ -1,1 +1,0 @@
-export{rw as attachmentsPlugin}from"../../../chunks/app-DrOkKzpk.js";

@@ -1,1 +1,0 @@
-export{RS as Wikilink}from"../../../../../chunks/app-DrOkKzpk.js";

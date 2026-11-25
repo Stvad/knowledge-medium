@@ -1,1 +1,0 @@
-export{vnt as agree,ynt as pluralize}from"../../chunks/app-DrOkKzpk.js";

@@ -1,1 +1,0 @@
-export{LS as wikilinkMarkdownExtension}from"../../../../../chunks/app-DrOkKzpk.js";

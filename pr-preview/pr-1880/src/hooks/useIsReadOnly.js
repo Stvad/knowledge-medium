@@ -1,1 +1,0 @@
-export{wC as useIsReadOnly}from"../../chunks/app-DrOkKzpk.js";

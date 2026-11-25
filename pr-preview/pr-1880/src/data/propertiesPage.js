@@ -1,1 +1,0 @@
-export{nft as getOrCreatePropertiesPage,rft as propertiesPageBlockId,ift as propertiesPageSpec}from"../../chunks/app-DrOkKzpk.js";
