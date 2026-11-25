@@ -5,12 +5,12 @@ import { requireTypeContribution } from '@/data/typeTagger'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
-import { aliasesProp, hasBlockType, typesProp } from '@/data/properties'
+import { aliasesProp, getAliases, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock, partitionClaimableAliases, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
-import { decodeRowProperty } from '@/data/rowProperty'
+import { decodeRowProperty, safeDecodeRowProperty } from '@/data/rowProperty'
 import { formatRoamDate, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
 
@@ -79,8 +79,9 @@ const dailyNoteCreatedAt = (iso: string): number => {
 }
 
 export const addDaysIso = (iso: string, days: number): string => {
-  const {year, month, day} = parseIsoParts(iso)
-  return formatIsoDate(new Date(year, month - 1, day + days))
+  const date = dailyNoteDateValue(iso)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().split('T')[0]!
 }
 
 const stringListProperty = (value: unknown): string[] =>
@@ -252,27 +253,16 @@ export const isValidDateAlias = (alias: string): boolean => {
   return new Date(ms).toISOString().slice(0, 10) === alias
 }
 
-/** "Which daily note is this?" from a block's alias list — the ISO alias
- *  `getOrCreateDailyNote` writes via `dailyPageAliases`, or `null` for a block
- *  that isn't a daily note. The one definition of that read, shared by the
- *  prev/next keyboard actions (which peek it off a Block) and the title
- *  date-nav arrows (which get it from a reactive `aliases` hook).
- *
- *  `isValidDateAlias`, NOT `isDateAlias`: a date-SHAPED alias that isn't a
- *  calendar day (`2026-02-30`) belongs to an ordinary alias-target page — the
- *  references processor routes it to `ensureAliasTarget` precisely because
- *  `parseLiteralDailyPageTitle` rejects it. Treating such an alias as the
- *  block's date hands a normal page the daily-note affordances, and
- *  `addDaysIso` then reads it as March 2nd — so "previous day" lands on
- *  2026-03-01, forward by a month. Callers fall back to today instead, the
- *  same as on any other non-daily page.
- *
- *  Deliberately NOT a `DAILY_NOTE_TYPE` check: the ISO alias is the marker
- *  every daily-note writer sets, and gating on the type instead would couple
- *  these read paths to type-tagging having reached every historical row. */
+/** A valid ISO alias also identifies a legacy daily note that predates date anchors. */
 export const dailyNoteIsoFromAliases = (
   aliases: readonly string[],
 ): string | null => aliases.find(isValidDateAlias) ?? null
+
+/** A canonical note can yield its ISO alias to another page. Its UTC anchor still identifies the day. */
+export const dailyNoteIsoFromRow = (row: Pick<BlockData, 'properties'> | null | undefined): string | null => {
+  if (!row) return null
+  return safeDecodeRowProperty(row, dailyNoteDateProp)?.toISOString().slice(0, 10) ?? dailyNoteIsoFromAliases(getAliases(row))
+}
 
 /** Ensure a daily-note **target seat** block exists for ISO date `date`
  *  in `workspaceId`. The seat is a reference target materialised at

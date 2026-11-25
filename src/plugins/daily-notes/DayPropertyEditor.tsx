@@ -2,8 +2,6 @@ import { useState, type FormEvent } from 'react'
 import { CalendarDays } from 'lucide-react'
 import type { PropertyEditorProps } from '@/data/api'
 import { Block } from '@/data/block'
-import { getAliases } from '@/data/properties'
-import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -13,9 +11,8 @@ import { isImeKeyEvent } from '@/shortcuts/utils'
 import { useOpenBlock } from '@/utils/navigation'
 import { CalendarGrid } from './CalendarGrid'
 import { firstOfMonth, initialDateFromIso } from './calendar'
-import { dailyNoteIsoFromAliases, getOrCreateDailyNoteInTx } from './dailyNotes'
+import { dailyNoteIsoFromRow, getOrCreateDailyNoteInTx } from './dailyNotes'
 import { resolveDayInput } from './dayProperty'
-import { dailyNoteDateProp } from './schema'
 
 function SavedDay({targetId, workspaceId, label}: {targetId: string; workspaceId: string; label: string}) {
   const href = useAppHashInContext(workspaceId, targetId)
@@ -106,9 +103,8 @@ function BoundDayPropertyEditor({
   const saved = useHandle(target ?? block, {
     selector: row => {
       if (!target || !row || row.workspaceId !== workspaceId) return null
-      const day = safeDecodeRowProperty(row, dailyNoteDateProp)
       return {
-        iso: day?.toISOString().slice(0, 10) ?? dailyNoteIsoFromAliases(getAliases(row)),
+        iso: dailyNoteIsoFromRow(row),
         content: row.content,
       }
     },

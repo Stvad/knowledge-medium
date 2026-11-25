@@ -95,6 +95,10 @@ describe('addDaysIso', () => {
     expect(addDaysIso('2026-12-31', 1)).toBe('2027-01-01')
   })
 
+  it('keeps early UTC years when moving to the neighbouring note', () => {
+    expect(addDaysIso('0099-12-31', 1)).toBe('0100-01-01')
+  })
+
   it('handles leap days', () => {
     expect(addDaysIso('2024-02-28', 1)).toBe('2024-02-29')
     expect(addDaysIso('2024-03-01', -1)).toBe('2024-02-29')
