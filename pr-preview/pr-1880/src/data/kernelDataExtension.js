@@ -1,1 +1,1 @@
-export{Vet as kernelDataExtension}from"../../chunks/app-BGIYDMNR.js";
+export{Vet as kernelDataExtension}from"../../chunks/app-0K6X37p7.js";

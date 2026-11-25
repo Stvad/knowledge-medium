@@ -1,1 +1,1 @@
-export{Vx as inlineBacklinksApplies}from"../../../../chunks/app-BGIYDMNR.js";
+export{Vx as inlineBacklinksApplies}from"../../../../chunks/app-0K6X37p7.js";
