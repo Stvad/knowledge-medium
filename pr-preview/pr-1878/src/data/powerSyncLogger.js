@@ -1,1 +1,1 @@
-export{b8 as powerSyncLogger}from"../../chunks/app-CAUeBPwl.js";
+export{S8 as powerSyncLogger}from"../../chunks/app-DGGB3esD.js";

@@ -1,1 +1,1 @@
-export{Tft as deriveWorkspaceIdNamespace}from"../../../chunks/app-CAUeBPwl.js";
+export{Dft as deriveWorkspaceIdNamespace}from"../../../chunks/app-DGGB3esD.js";

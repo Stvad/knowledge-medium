@@ -1,1 +1,1 @@
-export{RP as shortcutHelpToggle}from"../../../chunks/app-CAUeBPwl.js";
+export{BP as shortcutHelpToggle}from"../../../chunks/app-DGGB3esD.js";

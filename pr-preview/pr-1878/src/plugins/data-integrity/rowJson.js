@@ -1,1 +1,1 @@
-export{gu as parsePropertiesJson}from"../../../chunks/app-CAUeBPwl.js";
+export{gu as parsePropertiesJson}from"../../../chunks/app-DGGB3esD.js";

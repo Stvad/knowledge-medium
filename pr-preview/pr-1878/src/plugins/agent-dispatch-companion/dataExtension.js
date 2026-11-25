@@ -1,1 +1,1 @@
-export{P6 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CAUeBPwl.js";
+export{I6 as agentDispatchCompanionDataExtension}from"../../../chunks/app-DGGB3esD.js";

@@ -1,1 +1,1 @@
-export{GP as CommandPalette}from"../../../chunks/app-CAUeBPwl.js";
+export{qP as CommandPalette}from"../../../chunks/app-DGGB3esD.js";
