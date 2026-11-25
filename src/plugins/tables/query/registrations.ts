@@ -1,6 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
-import { isRefCodec, memberCodecOf, type AnyPropertySchema } from '@/data/api'
+import type { AnyPropertySchema } from '@/data/api'
 import { queryableFieldsFacet, refTargetComparablePropertiesFacet } from '@/data/facets'
+import { resolveRefTargetComparableProperty } from '@/data/refTargetComparableProperty'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import type { FacetRuntime } from '@/facets/facet'
 
@@ -37,17 +38,7 @@ export const useTableQueryFacets = (workspaceId: string): TableQueryFacets => {
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
 }
 
-/** A scalar reference can compare through one property shared by its target types. */
 export const refValueTarget = (
   schema: AnyPropertySchema, properties: ReadonlyMap<string, AnyPropertySchema> | null, facets: TableQueryFacets,
-): AnyPropertySchema | undefined => {
-  const {fields, targets} = facets
-  if (!targets || fields?.has(schema.name) || !isRefCodec(schema.codec) || memberCodecOf(schema.codec)) return undefined
-  const targetTypes = schema.codec.targetTypes
-  const firstType = targetTypes[0]
-  const property = firstType === undefined ? undefined : targets.get(firstType)?.property
-  if (property === undefined || !targetTypes.every(type => targets.get(type)?.property === property)) return undefined
-  if (fields?.has(property)) return undefined
-  const inner = properties?.get(property)
-  return inner?.codec.where && !memberCodecOf(inner.codec) ? inner : undefined
-}
+): AnyPropertySchema | undefined =>
+  resolveRefTargetComparableProperty(schema, properties, {...facets, allowLists: false})

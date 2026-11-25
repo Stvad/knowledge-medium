@@ -149,7 +149,7 @@ const LABELLED_BLOCK_REF = new RegExp(aliasedBlockRefSpanSource(UUID_RE_SOURCE),
 const BLOCK_REF = new RegExp(blockRefSpanSource(UUID_RE_SOURCE), 'iy')
 
 class TermError extends Error {
-  constructor(readonly start: number, readonly end: number, message: string) { super(message) }
+  constructor(readonly start: number, readonly end: number, message: string, readonly resumeAt?: number) { super(message) }
 }
 
 /** Where a quote opened at `start` closes, past its `\"` and `\\` escapes; -1 if it never does. */
@@ -231,6 +231,20 @@ class Reader {
     return undefined
   }
 
+  /** Reject the whole operand without resolving its alias or splitting it at spaces and parentheses. */
+  rejectReferenceOperand(message: string): void {
+    const start = this.i
+    let end: number | undefined
+    if (this.startsWith('[[')) {
+      const ref = this.wikilinkAt(start)
+      if (ref) end = start + ref.endIndex
+    } else if (this.startsWith('((')) {
+      BLOCK_REF.lastIndex = start
+      if (BLOCK_REF.test(this.text)) end = BLOCK_REF.lastIndex
+    }
+    if (end !== undefined) throw new TermError(start, end, message, end)
+  }
+
   /** The `[[…]]` starting at `start`, read by the reference grammar over the
    *  shortest slice that can hold it: up to each `]]` run in turn, so a nested
    *  link grows the slice and nothing past the link is scanned. */
@@ -256,8 +270,8 @@ class Reader {
 
   /** Puts the cursor past a term that failed, without consuming the `|` or `)`
    *  that ends it. A closed quote is stepped over whole; an unclosed one is one character. */
-  recover(termStart: number) {
-    this.i = termStart
+  recover(termStart: number, resumeAt = termStart) {
+    this.i = resumeAt
     while (!this.done && !TERM_END.test(this.peek())) {
       const close = this.peek() === '"' ? closingQuote(this.text, this.i) : -1
       this.i = close < 0 ? this.i + 1 : close + 1
@@ -476,6 +490,10 @@ const readCompare = (reader: Reader, property: QueryProperty, op: CompareOp, sta
   }
   const schema = target ?? property.schema
   const {codec} = schema
+  if (target && !equality) {
+    const example = codec.where?.storage === 'iso-date' ? 'a date like 2026-01-05' : 'a number'
+    reader.rejectReferenceOperand(`Compare ${property.name} with ${example}`)
+  }
   if (!target && (reader.startsWith('[[') || reader.startsWith('(('))) {
     reader.fail(operandStart, `${property.name} is not a reference property; quote the text to compare it`, reader.i + 2)
   }
@@ -590,7 +608,7 @@ const readItem = (reader: Reader, errors: QueryTermError[]): QueryTerm | undefin
       if (!(error instanceof TermError)) throw error
       errors.push({start: error.start, end: error.end, message: error.message})
       failed = true
-      reader.recover(termStart)
+      reader.recover(termStart, error.resumeAt)
     }
     const beforeSpace = reader.i
     reader.skipSpace()
