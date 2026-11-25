@@ -15,6 +15,7 @@ verification and the inner loop (keep the edit→verify cycle tight):
 - Codex sandbox: bridge/server tests that bind `127.0.0.1` fail with `listen EPERM`; run them with elevated permissions. The gate can't write its shared line there, so it runs uncapped.
 - the agent bridge inspects the LIVE client with no rebuild: `pnpm agent <verb> --profile <name>`. Pass the profile unless your shell exports `AGENT_RUNTIME_PROFILE`; a token error prints your token store and the selected profile, so read that before concluding the bridge is down. Read verbs (`runtime-summary`, `describe-runtime`, `sql all`, `get-block`, `subtree`) are free. Mutating verbs (`eval`, `sql execute`, `create-block`/`update-block`, `run-action`, `reload`, `navigate`) act on the user's live client: prefer a scratch page. Full surface and pairing: `packages/agent-cli/README.md`.
 - for `src/` work prefer a LOCAL dev server over the live client (`pnpm dev`, the local-only login, a `localdev-<port>` CLI profile), where mutating verbs are free. Use only your own server (`pnpm dev:who <port>`). Setup, reload vs restart, and the dev-vs-production mismatch list: `.claude/skills/local-dev-loop/SKILL.md`.
+- UI checks run in HEADLESS Playwright Chromium against your own dev server; a window only for a real Cmd+V (`bd recall reference_inbrowser_qa_playwright`). Never Computer Use or the user's own Chrome: their permission prompts stall an unattended run.
 - the data layer lives in `src/data/`; prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
 
 shell (zsh on macOS):
