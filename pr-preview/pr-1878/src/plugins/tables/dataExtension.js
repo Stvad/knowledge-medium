@@ -1,1 +1,1 @@
-export{hZ as tablesDataExtension}from"../../../chunks/app-DjHbCwY7.js";
+export{_Z as tablesDataExtension}from"../../../chunks/app-CAUeBPwl.js";

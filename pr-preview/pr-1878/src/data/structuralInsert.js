@@ -1,1 +1,1 @@
-export{qI as insertDrawnBlock}from"../../chunks/app-DjHbCwY7.js";
+export{YI as insertDrawnBlock}from"../../chunks/app-CAUeBPwl.js";
