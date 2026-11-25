@@ -1,1 +1,1 @@
-export{oG as typePropertyGroups}from"../../chunks/app-DlFEfcGd.js";
+export{sG as typePropertyGroups}from"../../chunks/app-BH24-13C.js";

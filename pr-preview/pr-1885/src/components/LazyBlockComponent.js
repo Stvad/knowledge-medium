@@ -1,1 +1,1 @@
-export{hz as LazyBlockComponent}from"../../chunks/app-DlFEfcGd.js";
+export{gz as LazyBlockComponent}from"../../chunks/app-BH24-13C.js";

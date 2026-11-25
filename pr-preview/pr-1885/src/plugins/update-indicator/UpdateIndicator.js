@@ -1,1 +1,1 @@
-export{Cx as UpdateIndicator}from"../../../chunks/app-DlFEfcGd.js";
+export{wx as UpdateIndicator}from"../../../chunks/app-BH24-13C.js";

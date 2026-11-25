@@ -1,1 +1,1 @@
-export{YL as appUpdatePromptExtension}from"../../../chunks/app-DlFEfcGd.js";
+export{XL as appUpdatePromptExtension}from"../../../chunks/app-BH24-13C.js";

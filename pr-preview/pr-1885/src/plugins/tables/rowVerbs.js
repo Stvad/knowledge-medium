@@ -1,1 +1,1 @@
-export{os as tableRowVerbs}from"../../../chunks/app-DlFEfcGd.js";
+export{os as tableRowVerbs}from"../../../chunks/app-BH24-13C.js";

@@ -1,1 +1,1 @@
-export{EC as useIsReadOnly}from"../../chunks/app-DlFEfcGd.js";
+export{DC as useIsReadOnly}from"../../chunks/app-BH24-13C.js";

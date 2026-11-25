@@ -1,0 +1,1 @@
+export{Ys as QueryText}from"../../../../chunks/app-BH24-13C.js";

@@ -1,1 +1,1 @@
-export{FC as unselectMovedBlocks}from"../../../chunks/app-DlFEfcGd.js";
+export{IC as unselectMovedBlocks}from"../../../chunks/app-BH24-13C.js";

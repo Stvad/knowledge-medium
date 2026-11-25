@@ -1,1 +1,1 @@
-export{S3 as pluginPrefsExtension,C3 as pluginUIStateExtension}from"../../chunks/app-DlFEfcGd.js";
+export{C3 as pluginPrefsExtension,w3 as pluginUIStateExtension}from"../../chunks/app-BH24-13C.js";

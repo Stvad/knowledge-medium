@@ -1,1 +1,1 @@
-export{Vp as computePromotedFromChildren,Hp as detectInlineAttribute}from"../../../chunks/app-DlFEfcGd.js";
+export{Hp as computePromotedFromChildren,Up as detectInlineAttribute}from"../../../chunks/app-BH24-13C.js";

@@ -1,1 +1,1 @@
-export{H5 as FacetBridge}from"../../chunks/app-DlFEfcGd.js";
+export{U5 as FacetBridge}from"../../chunks/app-BH24-13C.js";

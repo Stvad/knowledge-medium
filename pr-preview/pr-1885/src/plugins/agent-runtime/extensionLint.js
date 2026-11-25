@@ -1,1 +1,1 @@
-export{Hv as lintExtensionSource}from"../../../chunks/app-DlFEfcGd.js";
+export{Uv as lintExtensionSource}from"../../../chunks/app-BH24-13C.js";

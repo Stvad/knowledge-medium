@@ -1,1 +1,1 @@
-export{ip as appendTagToBlocks,ap as appendTagToContent}from"../../../chunks/app-DlFEfcGd.js";
+export{ap as appendTagToBlocks,op as appendTagToContent}from"../../../chunks/app-BH24-13C.js";

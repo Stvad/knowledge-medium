@@ -1,1 +1,1 @@
-export{EF as CommandPaletteHeaderItem}from"../../../chunks/app-DlFEfcGd.js";
+export{DF as CommandPaletteHeaderItem}from"../../../chunks/app-BH24-13C.js";

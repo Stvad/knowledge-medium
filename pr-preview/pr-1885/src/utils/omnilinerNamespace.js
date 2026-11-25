@@ -1,1 +1,1 @@
-export{BX as omnilinerNamespace}from"../../chunks/app-DlFEfcGd.js";
+export{VX as omnilinerNamespace}from"../../chunks/app-BH24-13C.js";
