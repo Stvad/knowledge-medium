@@ -1,1 +1,1 @@
-export{zft as deriveWorkspaceIdNamespace}from"../../../chunks/app-BcDSW_65.js";
+export{Gft as deriveWorkspaceIdNamespace}from"../../../chunks/app-xoDwVA4C.js";

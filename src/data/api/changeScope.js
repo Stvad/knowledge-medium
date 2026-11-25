@@ -1,1 +1,1 @@
-export{F_t as CHANGE_SCOPE_POLICIES,I_t as ChangeScope,L_t as isChangeScope,R_t as policyForScope,z_t as scopeAllowedInReadOnly,B_t as scopeIsUndoable,V_t as scopePoliciesEquivalent,H_t as scopeUploadsToServer,U_t as sourceForScope}from"../../../chunks/app-BcDSW_65.js";
+export{V_t as CHANGE_SCOPE_POLICIES,H_t as ChangeScope,U_t as isChangeScope,W_t as policyForScope,G_t as scopeAllowedInReadOnly,K_t as scopeIsUndoable,q_t as scopePoliciesEquivalent,J_t as scopeUploadsToServer,Y_t as sourceForScope}from"../../../chunks/app-xoDwVA4C.js";

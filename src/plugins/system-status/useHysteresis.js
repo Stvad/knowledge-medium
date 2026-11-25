@@ -1,1 +1,1 @@
-export{td as useHysteresis}from"../../../chunks/app-BcDSW_65.js";
+export{id as useHysteresis}from"../../../chunks/app-xoDwVA4C.js";

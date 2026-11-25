@@ -1,1 +1,1 @@
-export{tq as copyBlockIdsToClipboard,nq as copyBlockToClipboard,rq as copySelectedBlocksToClipboard,iq as cutBlockIdsToClipboard,aq as serializeBlock,oq as serializeSelectedBlocks,sq as writeTextToClipboard}from"../../chunks/app-BcDSW_65.js";
+export{iq as copyBlockIdsToClipboard,aq as copyBlockToClipboard,oq as copySelectedBlocksToClipboard,sq as cutBlockIdsToClipboard,cq as serializeBlock,lq as serializeSelectedBlocks,uq as writeTextToClipboard}from"../../chunks/app-xoDwVA4C.js";

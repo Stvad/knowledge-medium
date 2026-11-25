@@ -1,1 +1,1 @@
-export{GP as shortcutHelpToggle}from"../../../chunks/app-BcDSW_65.js";
+export{JP as shortcutHelpToggle}from"../../../chunks/app-xoDwVA4C.js";
