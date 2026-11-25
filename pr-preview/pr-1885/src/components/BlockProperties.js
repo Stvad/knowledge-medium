@@ -1,0 +1,1 @@
+export{FW as BlockProperties}from"../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{AQ as RENAME_BACKLINKS_PRECEDENCE,jQ as RENAME_BACKLINKS_PROCESSOR,MQ as applyRefRewrites,NQ as renameBacklinksProcessor,PQ as renameSameTxProcessors,FQ as replacementFor,IQ as splitBySurvivingSpan}from"../../../chunks/app-DlFEfcGd.js";

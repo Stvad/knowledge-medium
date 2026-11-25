@@ -1,0 +1,1 @@
+export{Sk as getOrCreateShortcutsBlock,Ck as journalShortcutBlockId,wk as shortcutsBlockId}from"../../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{XC as aliasCollisionRejectionToast}from"../../../chunks/app-DlFEfcGd.js";

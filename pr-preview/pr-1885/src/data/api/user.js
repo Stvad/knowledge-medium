@@ -1,0 +1,1 @@
+export{zgt as SYSTEM_AUTHOR_PREFIX,Bgt as isSystemAuthor,Vgt as systemAuthor}from"../../../chunks/app-DlFEfcGd.js";

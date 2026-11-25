@@ -1,0 +1,1 @@
+export{kI as chipStyle}from"../../../chunks/app-DlFEfcGd.js";

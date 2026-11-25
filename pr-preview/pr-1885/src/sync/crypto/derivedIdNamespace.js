@@ -1,0 +1,1 @@
+export{Wft as deriveWorkspaceIdNamespace}from"../../../chunks/app-DlFEfcGd.js";

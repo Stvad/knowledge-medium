@@ -1,0 +1,1 @@
+export{Xet as kernelDataExtension}from"../../chunks/app-DlFEfcGd.js";

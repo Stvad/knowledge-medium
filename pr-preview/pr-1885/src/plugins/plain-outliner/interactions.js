@@ -1,0 +1,1 @@
+export{ak as blockEditingContentRenderer}from"../../../chunks/app-DlFEfcGd.js";

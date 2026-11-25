@@ -1,0 +1,1 @@
+export{fc as propertyRowsPlugin}from"../../../chunks/app-DlFEfcGd.js";

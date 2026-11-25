@@ -1,0 +1,1 @@
+export{iR as checkForAppUpdate,aR as registerServiceWorker}from"../chunks/app-DlFEfcGd.js";

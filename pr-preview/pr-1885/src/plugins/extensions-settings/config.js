@@ -1,0 +1,1 @@
+export{vv as extensionsOverridesPresetCore,yv as extensionsOverridesProp,bv as extensionsPrefsType,xv as overridesCodec}from"../../../chunks/app-DlFEfcGd.js";

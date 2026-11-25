@@ -1,0 +1,1 @@
+export{ME as DEFAULT_VIDEO_NOTES_PANE_RATIO,NE as VIDEO_NOTES_VIEW_MODE,PE as videoNotesPaneRatioProp}from"../../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{oR as appUpdate,sR as useAppUpdateAvailable}from"../chunks/app-DlFEfcGd.js";

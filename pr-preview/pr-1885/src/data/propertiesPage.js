@@ -1,0 +1,1 @@
+export{sft as getOrCreatePropertiesPage,cft as propertiesPageBlockId,lft as propertiesPageSpec}from"../../chunks/app-DlFEfcGd.js";

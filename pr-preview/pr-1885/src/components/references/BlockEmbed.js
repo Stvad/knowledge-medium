@@ -1,0 +1,1 @@
+export{yI as BlockEmbed}from"../../../chunks/app-DlFEfcGd.js";

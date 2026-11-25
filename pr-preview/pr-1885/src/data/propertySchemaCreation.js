@@ -1,0 +1,1 @@
+export{MY as adoptOrCreatePropertySchema}from"../../chunks/app-DlFEfcGd.js";

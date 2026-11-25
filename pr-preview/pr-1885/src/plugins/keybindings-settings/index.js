@@ -1,0 +1,1 @@
+export{UP as keybindingOverridesProp,WP as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-DlFEfcGd.js";

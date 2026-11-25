@@ -1,0 +1,1 @@
+export{QQ as htmlDocumentTypeSeed}from"../../../chunks/app-DlFEfcGd.js";

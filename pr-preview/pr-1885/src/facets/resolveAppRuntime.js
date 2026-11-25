@@ -1,0 +1,1 @@
+export{MR as resolveAppRuntime,NR as resolveAppRuntimeSync}from"../../chunks/app-DlFEfcGd.js";

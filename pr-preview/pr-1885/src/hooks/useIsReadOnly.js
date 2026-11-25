@@ -1,0 +1,1 @@
+export{EC as useIsReadOnly}from"../../chunks/app-DlFEfcGd.js";

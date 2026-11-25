@@ -1,0 +1,1 @@
+export{FL as ExtensionPromptSurface,IL as extensionPromptsExtension}from"../../../chunks/app-DlFEfcGd.js";

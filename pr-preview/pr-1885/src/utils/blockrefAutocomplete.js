@@ -1,0 +1,1 @@
+export{XS as blockrefCompletionSource}from"../../chunks/app-DlFEfcGd.js";

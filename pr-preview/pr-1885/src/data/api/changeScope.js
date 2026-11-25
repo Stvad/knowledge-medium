@@ -1,0 +1,1 @@
+export{B_t as CHANGE_SCOPE_POLICIES,V_t as ChangeScope,H_t as isChangeScope,U_t as policyForScope,W_t as scopeAllowedInReadOnly,G_t as scopeIsUndoable,K_t as scopePoliciesEquivalent,q_t as scopeUploadsToServer,J_t as sourceForScope}from"../../../chunks/app-DlFEfcGd.js";

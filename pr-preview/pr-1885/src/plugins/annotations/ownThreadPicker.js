@@ -1,0 +1,1 @@
+export{mh as moveCommentToOwnThread}from"../../../chunks/app-DlFEfcGd.js";

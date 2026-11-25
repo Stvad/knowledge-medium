@@ -1,0 +1,1 @@
+export{SV as useIsMobile,CV as usePointerCoarse}from"../../chunks/app-DlFEfcGd.js";

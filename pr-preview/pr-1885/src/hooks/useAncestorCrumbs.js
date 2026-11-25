@@ -1,0 +1,1 @@
+export{cM as useAncestorCrumbs}from"../../chunks/app-DlFEfcGd.js";

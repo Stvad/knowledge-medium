@@ -1,0 +1,1 @@
+export{oG as typePropertyGroups}from"../../chunks/app-DlFEfcGd.js";

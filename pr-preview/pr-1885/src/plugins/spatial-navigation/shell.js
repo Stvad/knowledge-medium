@@ -1,0 +1,1 @@
+export{DD as spatialNavigationShellDecorator}from"../../../chunks/app-DlFEfcGd.js";

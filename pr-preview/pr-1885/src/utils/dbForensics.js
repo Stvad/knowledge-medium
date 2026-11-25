@@ -1,0 +1,1 @@
+export{GX as DbForensics,KX as dbForensics}from"../../chunks/app-DlFEfcGd.js";

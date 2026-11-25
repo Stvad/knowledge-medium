@@ -1,0 +1,1 @@
+export{VS as remarkWikilinks}from"../../../../../chunks/app-DlFEfcGd.js";

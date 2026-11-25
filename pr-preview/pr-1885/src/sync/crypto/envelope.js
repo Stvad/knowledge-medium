@@ -1,0 +1,1 @@
+export{Vat as ENVELOPE_PREFIX,Hat as GCM_TAG_BYTES,Uat as NONCE_BYTES,Wat as SCHEMA_VERSION,Gat as decodeEnvelope,Kat as encodeEnvelope,qat as hasEnvelopePrefix}from"../../../chunks/app-DlFEfcGd.js";

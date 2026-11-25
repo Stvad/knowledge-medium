@@ -1,0 +1,1 @@
+export{AR as ClientLocalSettings,jR as clientLocalSettings}from"../../chunks/app-DlFEfcGd.js";

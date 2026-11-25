@@ -1,0 +1,1 @@
+export{Gv as BLOCK_HISTORY_CONTENT_CHARS,Kv as LISTED_PROPERTY_NAMES,qv as MAX_LISTED_CHANGES,Jv as blockHistory,Yv as recentChanges}from"../../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{zm as quotedInFooterContribution}from"../../../chunks/app-DlFEfcGd.js";

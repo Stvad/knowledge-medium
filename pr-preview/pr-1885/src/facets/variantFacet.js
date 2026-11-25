@@ -1,0 +1,1 @@
+export{bW as defineVariant,xW as defineVariantFacet}from"../../chunks/app-DlFEfcGd.js";

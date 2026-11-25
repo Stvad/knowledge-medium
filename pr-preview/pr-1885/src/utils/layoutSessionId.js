@@ -1,0 +1,1 @@
+export{Aut as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,jut as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Mut as __resetLayoutSessionIdForTesting,Nut as getLayoutSessionId,Put as isInstalledAppDisplayMode,Fut as readOrCreateLayoutSessionId}from"../../chunks/app-DlFEfcGd.js";

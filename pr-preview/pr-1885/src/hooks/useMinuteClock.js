@@ -1,0 +1,1 @@
+export{Pj as useMinuteClock}from"../../chunks/app-DlFEfcGd.js";

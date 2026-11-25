@@ -1,0 +1,1 @@
+export{bx as blockInfoPlugin}from"../../../chunks/app-DlFEfcGd.js";

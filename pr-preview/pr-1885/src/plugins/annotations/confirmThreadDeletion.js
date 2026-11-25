@@ -1,0 +1,1 @@
+export{pg as confirmThreadDeletion}from"../../../chunks/app-DlFEfcGd.js";

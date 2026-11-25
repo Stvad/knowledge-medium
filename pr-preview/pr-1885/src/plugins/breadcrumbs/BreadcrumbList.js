@@ -1,0 +1,1 @@
+export{tk as BreadcrumbList}from"../../../chunks/app-DlFEfcGd.js";

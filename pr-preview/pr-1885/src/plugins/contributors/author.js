@@ -1,0 +1,1 @@
+export{ay as authorIdOf}from"../../../chunks/app-DlFEfcGd.js";

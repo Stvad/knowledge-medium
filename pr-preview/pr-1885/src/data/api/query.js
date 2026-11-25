@@ -1,0 +1,1 @@
+export{qgt as defineQuery}from"../../../chunks/app-DlFEfcGd.js";

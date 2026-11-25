@@ -1,0 +1,1 @@
+export{gC as blockDragPlugin}from"../../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{SH as useShortcutSurfaceActivations}from"../../chunks/app-DlFEfcGd.js";

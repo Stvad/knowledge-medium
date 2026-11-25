@@ -1,0 +1,1 @@
+export{Ij as openRecentsPage}from"../../../chunks/app-DlFEfcGd.js";

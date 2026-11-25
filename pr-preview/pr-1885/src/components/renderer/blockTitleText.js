@@ -1,0 +1,1 @@
+export{LU as BLOCK_TITLE_TEXT_CLASS,RU as useBlockTitleTextClass}from"../../../chunks/app-DlFEfcGd.js";

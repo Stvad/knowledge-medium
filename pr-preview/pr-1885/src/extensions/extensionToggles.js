@@ -1,0 +1,1 @@
+export{BR as extensionDisplayName,VR as extensionName,HR as userExtensionShellToggle,UR as userExtensionToggle}from"../../chunks/app-DlFEfcGd.js";

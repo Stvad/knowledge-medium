@@ -1,0 +1,1 @@
+export{WC as BlockSearchPicker}from"../../chunks/app-DlFEfcGd.js";

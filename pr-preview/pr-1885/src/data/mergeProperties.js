@@ -1,0 +1,1 @@
+export{brt as mergeProperties}from"../../chunks/app-DlFEfcGd.js";

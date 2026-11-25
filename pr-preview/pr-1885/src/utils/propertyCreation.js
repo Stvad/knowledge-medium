@@ -1,0 +1,1 @@
+export{qV as canConvertEmptyChildBlockToProperty,JV as convertEmptyChildBlockToProperty}from"../../chunks/app-DlFEfcGd.js";

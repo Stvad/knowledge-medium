@@ -1,0 +1,1 @@
+export{tF as useCommandPaletteActions}from"../../../chunks/app-DlFEfcGd.js";

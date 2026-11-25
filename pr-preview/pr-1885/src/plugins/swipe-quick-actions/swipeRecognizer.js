@@ -1,0 +1,1 @@
+export{RF as SWIPE_QUICK_ACTIONS_GESTURE_ID,zF as SWIPE_TRIGGER_PX,BF as swipeRecognizer}from"../../../chunks/app-DlFEfcGd.js";

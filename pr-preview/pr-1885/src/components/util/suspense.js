@@ -1,0 +1,1 @@
+export{mX as SuspenseFallback}from"../../../chunks/app-DlFEfcGd.js";

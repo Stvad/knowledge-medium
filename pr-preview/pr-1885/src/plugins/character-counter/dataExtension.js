@@ -1,0 +1,1 @@
+export{O4 as characterCounterDataExtension}from"../../../chunks/app-DlFEfcGd.js";

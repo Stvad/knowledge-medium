@@ -1,0 +1,1 @@
+export{Att as emitKernelInvalidations,jtt as kernelInvalidationRule}from"../../../chunks/app-DlFEfcGd.js";

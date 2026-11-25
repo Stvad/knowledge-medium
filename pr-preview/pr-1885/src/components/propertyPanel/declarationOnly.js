@@ -1,0 +1,1 @@
+export{dG as declarationOnlyDefinitionForName,fG as declarationOnlyStatusText}from"../../../chunks/app-DlFEfcGd.js";

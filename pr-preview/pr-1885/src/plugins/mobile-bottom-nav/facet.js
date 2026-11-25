@@ -1,0 +1,1 @@
+export{GO as mobileBottomNavItemsFacet}from"../../../chunks/app-DlFEfcGd.js";

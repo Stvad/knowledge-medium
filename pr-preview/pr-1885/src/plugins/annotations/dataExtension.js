@@ -1,0 +1,1 @@
+export{r0 as annotationsDataExtension}from"../../../chunks/app-DlFEfcGd.js";

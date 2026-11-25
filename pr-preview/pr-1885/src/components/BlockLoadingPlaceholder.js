@@ -1,0 +1,1 @@
+export{Cz as BlockLoadingPlaceholder}from"../../chunks/app-DlFEfcGd.js";

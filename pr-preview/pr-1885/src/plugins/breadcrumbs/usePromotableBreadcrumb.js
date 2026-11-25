@@ -1,0 +1,1 @@
+export{XO as usePromotableBreadcrumb}from"../../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{mG as METADATA_ROW_GRID_STYLE,hG as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-DlFEfcGd.js";

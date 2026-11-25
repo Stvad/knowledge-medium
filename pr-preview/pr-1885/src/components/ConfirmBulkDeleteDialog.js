@@ -1,0 +1,1 @@
+export{FB as ConfirmBulkDeleteDialog}from"../../chunks/app-DlFEfcGd.js";

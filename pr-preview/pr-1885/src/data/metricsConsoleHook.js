@@ -1,0 +1,1 @@
+export{qI as ensureMetricsConsoleHook}from"../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{TY as floatingAnchorFromRect,EY as useAnchoredFloating}from"../../../chunks/app-DlFEfcGd.js";

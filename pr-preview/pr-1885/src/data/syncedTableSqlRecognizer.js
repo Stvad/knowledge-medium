@@ -1,0 +1,1 @@
+export{p8 as SYNCED_TABLES,m8 as syncedWriteTarget,h8 as writeTargets}from"../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{PI as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,FI as OPEN_PREFERENCES_ACTION_ID,II as RELOAD_IN_SAFE_MODE_ACTION_ID,LI as defaultActionContextsExtension,RI as defaultActionsExtension,zI as getDefaultActionGroups,BI as getDefaultActions}from"../../chunks/app-DlFEfcGd.js";

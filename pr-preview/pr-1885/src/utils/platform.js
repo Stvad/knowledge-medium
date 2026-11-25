@@ -1,0 +1,1 @@
+export{uJ as isIOS,dJ as isMacPlatform}from"../../chunks/app-DlFEfcGd.js";

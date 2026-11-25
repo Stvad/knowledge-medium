@@ -1,0 +1,1 @@
+export{R2 as COMMENTS_PAGE_ALIAS,z2 as commentsPageBlockId,B2 as commentsPageSpec,V2 as getOrCreateCommentsPage}from"../../../chunks/app-DlFEfcGd.js";

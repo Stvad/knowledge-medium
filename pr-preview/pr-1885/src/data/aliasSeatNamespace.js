@@ -1,0 +1,1 @@
+export{uft as aliasSeatNamespacesInTx,dft as resolveAliasSeatNamespaces}from"../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{xL as BlockPasteShellDecorator,SL as blockPasteShellDecorator}from"../../chunks/app-DlFEfcGd.js";

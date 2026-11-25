@@ -1,0 +1,1 @@
+export{hU as ExtensionRenderBoundary}from"../../chunks/app-DlFEfcGd.js";

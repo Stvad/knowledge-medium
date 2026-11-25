@@ -1,0 +1,1 @@
+export{nk as plainOutlinerPlugin}from"../../../chunks/app-DlFEfcGd.js";

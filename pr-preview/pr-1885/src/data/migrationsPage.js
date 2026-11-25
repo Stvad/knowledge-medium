@@ -1,0 +1,1 @@
+export{Kut as MIGRATIONS_PAGE_ALIAS,qut as getOrCreateMigrationsPage,Jut as migrationsPageBlockId,Yut as migrationsPageSpec}from"../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{SW as isFocalRender,CW as useIsFocalRender}from"../../chunks/app-DlFEfcGd.js";

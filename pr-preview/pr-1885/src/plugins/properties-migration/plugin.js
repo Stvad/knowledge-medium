@@ -1,0 +1,1 @@
+export{Gc as propertiesMigrationPlugin}from"../../../chunks/app-DlFEfcGd.js";

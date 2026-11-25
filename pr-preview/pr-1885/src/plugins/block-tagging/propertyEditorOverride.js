@@ -1,0 +1,1 @@
+export{sp as blockTagsConfigUi}from"../../../chunks/app-DlFEfcGd.js";

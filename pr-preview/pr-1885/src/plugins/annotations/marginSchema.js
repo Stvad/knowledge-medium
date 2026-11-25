@@ -1,0 +1,1 @@
+export{I2 as annotationMarginOpenProp,L2 as annotationMarginShareProp}from"../../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{kV as BlockInfoDialog}from"../../../chunks/app-DlFEfcGd.js";

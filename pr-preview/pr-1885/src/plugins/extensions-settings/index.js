@@ -1,0 +1,1 @@
+export{yv as extensionsOverridesProp,bv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DlFEfcGd.js";

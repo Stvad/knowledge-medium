@@ -1,0 +1,1 @@
+export{j4 as CHAR_COUNTER_TYPE,M4 as CHAR_COUNTER_TYPE_CONTRIBUTIONS,N4 as COUNTER_TYPES,P4 as WORD_COUNTER_TYPE,F4 as wordCounterInitialValues}from"../../../chunks/app-DlFEfcGd.js";

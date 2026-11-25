@@ -1,0 +1,1 @@
+export{c4 as contributorsDataExtension}from"../../../chunks/app-DlFEfcGd.js";

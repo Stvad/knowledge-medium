@@ -1,0 +1,1 @@
+export{MJ as withMoveTransition}from"../../chunks/app-DlFEfcGd.js";

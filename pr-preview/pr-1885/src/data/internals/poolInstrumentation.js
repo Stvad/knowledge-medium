@@ -1,0 +1,1 @@
+export{R8 as instrumentAdapter}from"../../../chunks/app-DlFEfcGd.js";

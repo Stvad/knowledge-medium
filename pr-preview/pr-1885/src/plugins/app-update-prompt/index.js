@@ -1,0 +1,1 @@
+export{YL as appUpdatePromptExtension}from"../../../chunks/app-DlFEfcGd.js";

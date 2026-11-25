@@ -1,0 +1,1 @@
+export{s_ as HIGHLIGHT_CLASS,c_ as MOVED_HIGHLIGHT_CLASS,l_ as SUGGESTION_HIGHLIGHT_CLASS,u_ as coveringStyle,d_ as highlightClasses,f_ as highlightField,p_ as highlightRange,m_ as highlightRanges,h_ as threadHighlights,g_ as threadHighlightsContribution}from"../../../chunks/app-DlFEfcGd.js";

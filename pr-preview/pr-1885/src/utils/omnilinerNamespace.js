@@ -1,0 +1,1 @@
+export{BX as omnilinerNamespace}from"../../chunks/app-DlFEfcGd.js";

@@ -1,0 +1,1 @@
+export{gj as DEFAULT_THEME_ID_DARK,_j as DEFAULT_THEME_ID_LIGHT,tj as defaultThemeContributions,ej as defaultThemesPlugin}from"../../../chunks/app-DlFEfcGd.js";

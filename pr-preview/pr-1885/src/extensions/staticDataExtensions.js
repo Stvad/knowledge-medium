@@ -1,0 +1,1 @@
+export{fZ as staticDataExtensions}from"../../chunks/app-DlFEfcGd.js";

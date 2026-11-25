@@ -1,0 +1,1 @@
+export{BS as Wikilink}from"../../../../../chunks/app-DlFEfcGd.js";

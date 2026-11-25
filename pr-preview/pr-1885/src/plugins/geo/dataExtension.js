@@ -1,0 +1,1 @@
+export{E$ as geoDataExtension}from"../../../chunks/app-DlFEfcGd.js";

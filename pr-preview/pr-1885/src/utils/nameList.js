@@ -1,0 +1,1 @@
+export{Tnt as NAMES_IN_A_SENTENCE,Ent as describeNames,Dnt as firstFew}from"../../chunks/app-DlFEfcGd.js";

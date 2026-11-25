@@ -1,0 +1,1 @@
+export{Sx as updateIndicatorPlugin}from"../../../chunks/app-DlFEfcGd.js";

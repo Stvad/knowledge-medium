@@ -1,0 +1,1 @@
+export{d2 as adoptTypedBlock,f2 as createTypedChild,ypt as derivedBlockId,p2 as getOrCreateTypedChild}from"../../chunks/app-DlFEfcGd.js";

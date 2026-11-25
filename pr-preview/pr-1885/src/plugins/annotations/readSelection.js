@@ -1,0 +1,1 @@
+export{_g as holdsSelection,vg as locateReadSelection,yg as mapReadSelection,bg as recordedTexts,xg as useHoldsReadSelection}from"../../../chunks/app-DlFEfcGd.js";

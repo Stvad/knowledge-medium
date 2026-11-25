@@ -1,0 +1,1 @@
+export{Kc as MigrationGate}from"../../../chunks/app-DlFEfcGd.js";

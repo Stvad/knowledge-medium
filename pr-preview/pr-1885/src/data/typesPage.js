@@ -1,0 +1,1 @@
+export{ift as getOrCreateTypesPage,aft as typesPageBlockId,oft as typesPageSpec}from"../../chunks/app-DlFEfcGd.js";

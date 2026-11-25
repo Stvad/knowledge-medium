@@ -1,0 +1,1 @@
+export{hz as LazyBlockComponent}from"../../chunks/app-DlFEfcGd.js";

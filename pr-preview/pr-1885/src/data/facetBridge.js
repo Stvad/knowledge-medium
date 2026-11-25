@@ -1,0 +1,1 @@
+export{H5 as FacetBridge}from"../../chunks/app-DlFEfcGd.js";

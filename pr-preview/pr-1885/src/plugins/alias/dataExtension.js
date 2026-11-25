@@ -1,0 +1,1 @@
+export{m6 as aliasDataExtension}from"../../../chunks/app-DlFEfcGd.js";

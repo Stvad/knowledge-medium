@@ -1,0 +1,1 @@
+export{I4 as RAW_CHARACTER_COUNT_PROFILE_ID,L4 as WORDS_COUNT_PROFILE_ID,R4 as charExcludeProp,z4 as charLimitProp,B4 as charProfileProp,V4 as charScopeProp}from"../../../chunks/app-DlFEfcGd.js";

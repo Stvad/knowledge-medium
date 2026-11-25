@@ -1,0 +1,1 @@
+export{wV as __resetDialogsForTests,TV as getDialogQueue,EV as isDialogOpenForWorkspace,DV as openDialog,OV as subscribeDialogs}from"../../chunks/app-DlFEfcGd.js";

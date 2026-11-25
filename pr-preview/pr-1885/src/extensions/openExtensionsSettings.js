@@ -1,0 +1,1 @@
+export{Wz as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,Gz as openExtensionsSettings}from"../../chunks/app-DlFEfcGd.js";
