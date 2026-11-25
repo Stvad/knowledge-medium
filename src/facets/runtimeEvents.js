@@ -1,1 +1,1 @@
-export{DY as appRuntimeUpdateEvent,OY as refreshAppRuntime}from"../../chunks/app-l5obYlc2.js";
+export{NY as appRuntimeUpdateEvent,PY as refreshAppRuntime}from"../../chunks/app-BPY1Fb_Z.js";

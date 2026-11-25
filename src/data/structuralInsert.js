@@ -1,1 +1,1 @@
-export{ZI as insertDrawnBlock}from"../../chunks/app-l5obYlc2.js";
+export{nL as insertDrawnBlock}from"../../chunks/app-BPY1Fb_Z.js";

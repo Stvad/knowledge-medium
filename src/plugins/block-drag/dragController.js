@@ -1,1 +1,1 @@
-export{hC as DRAGGING_ROW_ATTRIBUTE,gC as DRAG_ACTIVE_ATTRIBUTE,_C as createBlockDragController}from"../../../chunks/app-l5obYlc2.js";
+export{gC as DRAGGING_ROW_ATTRIBUTE,_C as DRAG_ACTIVE_ATTRIBUTE,vC as createBlockDragController}from"../../../chunks/app-BPY1Fb_Z.js";

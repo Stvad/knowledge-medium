@@ -1,1 +1,1 @@
-export{ek as ENTER_BLOCK_EDIT_MODE_ACTION_ID,tk as enterBlockEditModeOnClickAction}from"../../../chunks/app-l5obYlc2.js";
+export{tk as ENTER_BLOCK_EDIT_MODE_ACTION_ID,nk as enterBlockEditModeOnClickAction}from"../../../chunks/app-BPY1Fb_Z.js";

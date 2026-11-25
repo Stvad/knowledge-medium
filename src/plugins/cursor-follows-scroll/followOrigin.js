@@ -1,1 +1,1 @@
-export{pD as consumeFollowOnDispatch,mD as forgetFollow,hD as isFollowedLocation,gD as keepFollowOnlyAt,_D as rememberFollow}from"../../../chunks/app-l5obYlc2.js";
+export{mD as consumeFollowOnDispatch,hD as forgetFollow,gD as isFollowedLocation,_D as keepFollowOnlyAt,vD as rememberFollow}from"../../../chunks/app-BPY1Fb_Z.js";

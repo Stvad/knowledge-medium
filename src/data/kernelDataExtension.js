@@ -1,1 +1,1 @@
-export{Net as kernelDataExtension}from"../../chunks/app-l5obYlc2.js";
+export{Get as kernelDataExtension}from"../../chunks/app-BPY1Fb_Z.js";

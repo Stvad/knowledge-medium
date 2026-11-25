@@ -1,1 +1,1 @@
-export{yn as AnnotatedFrame,bn as gesturesPlacement}from"../../../chunks/app-l5obYlc2.js";
+export{yn as AnnotatedFrame,bn as gesturesPlacement}from"../../../chunks/app-BPY1Fb_Z.js";

@@ -1,1 +1,1 @@
-export{AF as SwipeActionMenu}from"../../../chunks/app-l5obYlc2.js";
+export{FF as SwipeActionMenu}from"../../../chunks/app-BPY1Fb_Z.js";
