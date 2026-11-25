@@ -19,6 +19,8 @@ import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
 import { useChildIdsForMode, useContent, useHandle, useWorkspaceId } from '@/hooks/block'
+import { StoredDayReference } from '@/plugins/daily-notes/DayPropertyEditor'
+import { isDayReferenceSchema } from '@/plugins/daily-notes/schema'
 import { isSingleValueProperty, resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
@@ -103,6 +105,7 @@ const StoredValue = ({row, properties, schema}: {
 }) => {
   const stored = properties && storedPropertyValue(properties, schema.name)
   const targetId = isRefCodec(schema.codec) ? decodeRefId(schema.codec, stored) : undefined
+  if (targetId && isDayReferenceSchema(schema)) return <StoredDayReference block={row} targetId={targetId}/>
   if (targetId) return <StoredReference row={row} targetId={targetId}/>
   const text = formatStored(stored)
   return text ? <span className="block truncate text-muted-foreground" title={text}>{text}</span> : null

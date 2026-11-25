@@ -20,14 +20,6 @@ const canWriteProperty = (block: Block, schema: AnyPropertySchema): boolean =>
   && !isPropertyPanelReadOnlyProperty(schema.name)
   && !declarationOnlyDefinitionForName(schema.name, block.repo.propertyDefinitions)
 
-export const writeProperty = async (
-  block: Block,
-  schema: AnyPropertySchema,
-  decodedValue: unknown,
-): Promise<void> => {
-  if (canWriteProperty(block, schema)) await block.set(schema, decodedValue)
-}
-
 export const resolveAndWriteProperty = async (
   block: Block,
   schema: AnyPropertySchema,
@@ -35,17 +27,19 @@ export const resolveAndWriteProperty = async (
 ): Promise<boolean> => {
   if (!canWriteProperty(block, schema)) return false
   return block.repo.tx(async tx => {
-    if (!canWriteProperty(block, schema)) return false
     const owner = await tx.get(block.id)
-    if (!owner || owner.deleted) return false
+    if (owner?.deleted !== false) return false
     const currentSchema = await tx.resolvePropertySchema(block.id, schema)
-    if (!scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
+    if (currentSchema.codec !== schema.codec || !scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
       || !canWriteProperty(block, currentSchema)) return false
     tx.assertWritableWorkspace(owner.workspaceId)
     await tx.setProperty(block.id, currentSchema, await resolve(tx))
     return true
   }, {scope: schema.changeScope, description: `set property ${schema.name} on ${block.id}`})
 }
+
+export const writeProperty = (block: Block, schema: AnyPropertySchema, value: unknown): Promise<boolean> =>
+  resolveAndWriteProperty(block, schema, async () => value)
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a

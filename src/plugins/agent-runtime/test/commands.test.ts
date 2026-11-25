@@ -90,7 +90,7 @@ describe('agent runtime commands', () => {
     })
     const root = await executeCommand({
       commandId: 'create-day-root', type: 'create-block', content: 'Parent',
-      properties: {[due.name]: '2028-03-15'},
+      properties: {[due.name]: '2028-03-15T00:00:00.000Z'},
     }, env.context) as BlockData
     const expectedRootDay = dailyNoteBlockId(WS, '2028-03-15')
     expect(root.properties[due.name]).toBe(expectedRootDay)
@@ -108,12 +108,13 @@ describe('agent runtime commands', () => {
       vi.useRealTimers()
     }
     expect(child.properties[due.name]).toBe(dailyNoteBlockId(WS, '2028-03-16'))
-    expect(child.properties[ref.name]).toBe('2028-03-17')
-    expect(await env.repo.load(dailyNoteBlockId(WS, '2028-03-17'))).toBeNull()
+    const expectedRefDay = dailyNoteBlockId(WS, '2028-03-17')
+    expect(child.properties[ref.name]).toBe(expectedRefDay)
+    expect((await env.repo.load(expectedRefDay))?.properties[dailyNoteDateProp.name]).toBe('2028-03-17T00:00:00.000Z')
 
     const updated = await executeCommand({
       commandId: 'update-day', type: 'update-block', id: child.id,
-      properties: {[due.name]: '2028-03-18'},
+      properties: {[due.name]: '2028-03-17T23:30:00-02:00'},
     }, env.context) as BlockData
     const expectedDay = dailyNoteBlockId(WS, '2028-03-18')
     expect(updated.properties[due.name]).toBe(expectedDay)
@@ -128,6 +129,16 @@ describe('agent runtime commands', () => {
     }, env.context) as BlockData
     expect(replaced.properties[due.name]).toBe(rawId)
     expect(replaced.properties[ref.name]).toBeUndefined()
+
+    const legacyId = 'legacy-day-id'
+    await env.repo.tx(tx => tx.create({id: legacyId, workspaceId: WS, parentId: null, orderKey: 'a'}),
+      {scope: ChangeScope.BlockDefault})
+    const legacy = await executeCommand({
+      commandId: 'update-legacy-day-id', type: 'update-block', id: child.id,
+      properties: {[due.name]: legacyId, [ref.name]: legacyId},
+    }, env.context) as BlockData
+    expect(legacy.properties[due.name]).toBe(legacyId)
+    expect(legacy.properties[ref.name]).toBe(legacyId)
   })
 
   it('retains note repairs when an agent sets a day reference on its own target', async () => {
@@ -158,8 +169,8 @@ describe('agent runtime commands', () => {
     expect(await env.repo.load(dayId)).toBeNull()
     await expect(executeCommand({
       commandId: 'update-invalid-day', type: 'update-block', id: task.id,
-      content: 'Changed', properties: {start: iso, finish: '2028-04-31'},
-    }, env.context)).rejects.toThrow(/2028-04-31/)
+      content: 'Changed', properties: {start: iso, finish: '66654d0d'},
+    }, env.context)).rejects.toThrow(/66654d0d/)
     expect(await env.repo.load(dayId)).toBeNull()
     expect(await env.repo.load(task.id)).toMatchObject({content: 'Task', properties: task.properties})
   })

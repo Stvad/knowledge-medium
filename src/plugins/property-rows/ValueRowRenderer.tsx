@@ -6,7 +6,7 @@ import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/pr
 import type { BlockRenderer } from '@/types'
 import type { Block } from '@/data/block'
 import { FIELD_FORM_MARKER } from '@/data/referenceBlock'
-import { encodedPropertyValueToChildContents, getPropertyFieldTargetId, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
+import { encodedPropertyValueToChildContents, isPropertyFieldInstance, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import { readValuePresets, resolveValuePresetPresentation } from '@/data/valuePresetRegistry'
@@ -54,15 +54,22 @@ const InlineValue = ({block, Inner, fieldRowId, schema}: {
   if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return warning
     ? <div className="flex min-w-0 items-center gap-1">{warning}<Inner block={block}/></div> : <Inner block={block}/>
   const resolveAndChange: PropertyEditorProps<unknown>['resolveAndChange'] = async resolve => {
+    // Defence in depth for custom renderer contexts: only a resolved definition identifies the field.
     if (block.repo.isReadOnly || !isResolvedPropertySchema(schema) || isPropertyPanelReadOnlyProperty(schema.name)) return false
     return block.repo.tx(async tx => {
       const row = await tx.get(block.id)
-      if (!row || row.deleted || row.isFieldForm || row.parentId !== fieldRowId || row.workspaceId !== schema.workspaceId) return false
+      if (row?.deleted !== false || row.isFieldForm || row.parentId !== fieldRowId) return false
+      // Defence in depth for synced moves across graphs before workspace write admission.
+      if (row.workspaceId !== schema.workspaceId) return false
       const field = await tx.get(fieldRowId)
-      if (!field || field.deleted || !field.isFieldForm || field.parentId === null
-        || getPropertyFieldTargetId(field) !== schema.fieldId) return false
+      if (field?.deleted !== false || !isPropertyFieldInstance(field, fieldId => fieldId === schema.fieldId)) return false
+      // A single-block delete can leave its field and value children live.
+      const owner = await tx.get(field.parentId!)
+      if (owner?.deleted !== false) return false
       const currentSchema = tx.resolvePropertyFieldSchema(row.workspaceId, schema.fieldId)
-      if (!currentSchema || currentSchema.codec !== schema.codec || isPropertyPanelReadOnlyProperty(currentSchema.name)) return false
+      if (currentSchema?.codec !== schema.codec) return false
+      // Defence in depth: a queued edit must still respect the current field and repo write policy.
+      if (isPropertyPanelReadOnlyProperty(currentSchema.name) || block.repo.isReadOnly) return false
       tx.assertWritableWorkspace(row.workspaceId)
       const next = await resolve(tx)
       const [content] = encodedPropertyValueToChildContents(currentSchema, currentSchema.codec.encode(next))
@@ -75,8 +82,7 @@ const InlineValue = ({block, Inner, fieldRowId, schema}: {
       onFocus={focusHandlers.onFocus} onBlur={focusHandlers.onBlur}>
       {warning}
       <Editor block={block} schema={schema} value={value} resolveAndChange={resolveAndChange} onChange={next => {
-        const [content] = encodedPropertyValueToChildContents(schema, schema.codec.encode(next))
-        void block.setContent(content)
+        void resolveAndChange(async () => next)
       }}/>
     </div>
   )
