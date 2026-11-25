@@ -68,7 +68,7 @@ beforeEach(async () => {
         }
         return send(202, {id: `command-${commands.length}`})
       }
-      const commandMatch = req.method === 'GET' && req.url?.match(/^\/runtime\/commands\/([^/]+)$/)
+      const commandMatch = req.method === 'GET' && new URL(req.url!, 'http://localhost').pathname.match(/^\/runtime\/commands\/([^/]+)$/)
       if (commandMatch) {
         const command = commands[Number(commandMatch[1]!.slice('command-'.length)) - 1]
         const mention = pendingMention && command?.type === 'get-block'

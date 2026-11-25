@@ -147,6 +147,12 @@ the built entrypoint directly:
 
 `km-mcp` is generic graph access. Dispatch-specific loop-prevention policy, including blocked watcher-target wikilinks, lives in the `agent-dispatch` MCP wrapper.
 
+For repeated reads, keep one MCP connection open. A Node script can also reuse a
+`createBridgeClient()` from `@knowledge-medium/agent-cli/client`. To read a
+known page, pass its name straight to `subtree` (or `today` for the daily note).
+The default text includes ids for follow-up reads and edits. Request JSON when
+the caller needs to process individual fields.
+
 ## Eval execution scope
 
 `kmagent eval` runs your code inside the app tab, with the runtime context already destructured into the local scope. You do **not** need to dig values out of `window.__omniliner` — the following names are bound for you:
@@ -284,6 +290,11 @@ kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
 ```
 
 Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.9.0 km-mcp`).
+
+### Upgrade to 0.14.3
+
+Upgrade the CLI or MCP server and restart the bridge to receive command results
+as soon as the app finishes. An older bridge still answers by polling.
 
 ### Upgrade to 0.14.1
 
