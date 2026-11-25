@@ -1,1 +1,0 @@
-export{f2 as adoptTypedBlock,p2 as createTypedChild,bpt as derivedBlockId,m2 as getOrCreateTypedChild}from"../../chunks/app-SnObPfS_.js";

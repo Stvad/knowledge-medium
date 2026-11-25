@@ -1,1 +1,0 @@
-export{mc as propertyReadContentContribution}from"../../../chunks/app-SnObPfS_.js";

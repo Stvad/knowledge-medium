@@ -1,1 +1,0 @@
-export{XL as appUpdatePromptExtension}from"../../../chunks/app-SnObPfS_.js";

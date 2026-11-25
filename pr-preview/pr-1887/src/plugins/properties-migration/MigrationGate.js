@@ -1,1 +1,0 @@
-export{qc as MigrationGate}from"../../../chunks/app-SnObPfS_.js";

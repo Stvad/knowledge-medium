@@ -1,1 +1,0 @@
-export{v_ as contributorsPlugin}from"../../../chunks/app-SnObPfS_.js";

@@ -1,1 +1,0 @@
-export{IW as BlockProperties}from"../../chunks/app-SnObPfS_.js";

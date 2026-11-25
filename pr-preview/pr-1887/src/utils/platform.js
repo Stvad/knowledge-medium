@@ -1,1 +1,0 @@
-export{dJ as isIOS,fJ as isMacPlatform}from"../../chunks/app-SnObPfS_.js";

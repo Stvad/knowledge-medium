@@ -1,1 +1,0 @@
-export{DC as useIsReadOnly}from"../../chunks/app-SnObPfS_.js";

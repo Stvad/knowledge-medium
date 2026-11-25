@@ -1,1 +1,0 @@
-export{h8 as SYNCED_TABLES,g8 as syncedWriteTarget,_8 as writeTargets}from"../../chunks/app-Bp0aTqda.js";

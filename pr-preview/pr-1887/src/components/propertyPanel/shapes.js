@@ -1,1 +1,0 @@
-export{MY as propertyShapeLabel}from"../../../chunks/app-SnObPfS_.js";

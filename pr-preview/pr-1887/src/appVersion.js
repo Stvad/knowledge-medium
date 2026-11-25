@@ -1,1 +1,0 @@
-export{hd as appVersion}from"../chunks/app-SnObPfS_.js";

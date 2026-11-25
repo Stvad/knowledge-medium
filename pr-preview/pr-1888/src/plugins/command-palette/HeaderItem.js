@@ -1,1 +1,0 @@
-export{DF as CommandPaletteHeaderItem}from"../../../chunks/app-Bp0aTqda.js";

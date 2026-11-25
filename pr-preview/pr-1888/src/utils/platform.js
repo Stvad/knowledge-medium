@@ -1,1 +1,0 @@
-export{fJ as isIOS,pJ as isMacPlatform}from"../../chunks/app-Bp0aTqda.js";

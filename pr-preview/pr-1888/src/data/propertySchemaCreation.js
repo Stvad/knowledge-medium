@@ -1,1 +1,0 @@
-export{PY as adoptOrCreatePropertySchema}from"../../chunks/app-Bp0aTqda.js";

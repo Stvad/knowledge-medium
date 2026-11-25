@@ -1,1 +1,0 @@
-export{jI as DEFAULT_TYPE_COLORS,MI as defaultTypeColor,NI as pickLeastUsedTypeColor}from"../../chunks/app-Bp0aTqda.js";

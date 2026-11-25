@@ -1,1 +1,0 @@
-export{k4 as characterCounterDataExtension}from"../../../chunks/app-SnObPfS_.js";

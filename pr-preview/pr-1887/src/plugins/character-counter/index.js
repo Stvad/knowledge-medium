@@ -1,1 +1,0 @@
-export{M4 as CHAR_COUNTER_TYPE,L4 as RAW_CHARACTER_COUNT_PROFILE_ID,R4 as WORDS_COUNT_PROFILE_ID,F4 as WORD_COUNTER_TYPE,tr as charCountDisplay,z4 as charExcludeProp,B4 as charLimitProp,V4 as charProfileProp,H4 as charScopeProp,qn as characterCountProfilesFacet,Hn as characterCounterPlugin,Zn as textCountProfile}from"../../../chunks/app-SnObPfS_.js";

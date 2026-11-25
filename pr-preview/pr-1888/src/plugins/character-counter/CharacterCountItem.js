@@ -1,1 +1,0 @@
-export{Gn as characterCountItemContribution}from"../../../chunks/app-Bp0aTqda.js";

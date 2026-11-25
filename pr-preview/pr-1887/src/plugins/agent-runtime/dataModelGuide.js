@@ -1,1 +1,0 @@
-export{Yb as DATA_MODEL_GUIDE,Xb as dataModelGuide}from"../../../chunks/app-SnObPfS_.js";

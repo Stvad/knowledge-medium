@@ -1,1 +1,0 @@
-export{ho as tablesPlugin}from"../../../chunks/app-SnObPfS_.js";

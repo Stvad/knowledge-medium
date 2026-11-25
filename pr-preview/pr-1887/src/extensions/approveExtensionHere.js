@@ -1,1 +1,0 @@
-export{GL as approveExtensionHere}from"../../chunks/app-SnObPfS_.js";

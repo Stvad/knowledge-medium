@@ -1,1 +1,0 @@
-export{cp as blockTagsConfigUi}from"../../../chunks/app-SnObPfS_.js";

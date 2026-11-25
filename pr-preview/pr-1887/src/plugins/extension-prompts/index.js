@@ -1,1 +1,0 @@
-export{IL as ExtensionPromptSurface,LL as extensionPromptsExtension}from"../../../chunks/app-SnObPfS_.js";

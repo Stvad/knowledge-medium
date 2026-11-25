@@ -1,1 +1,0 @@
-export{wx as UpdateIndicator}from"../../../chunks/app-Bp0aTqda.js";

@@ -1,1 +1,0 @@
-export{pZ as staticDataExtensions}from"../../chunks/app-SnObPfS_.js";

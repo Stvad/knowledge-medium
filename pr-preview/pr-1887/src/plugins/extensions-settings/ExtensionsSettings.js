@@ -1,1 +1,0 @@
-export{Kr as ExtensionsSettings}from"../../../chunks/app-SnObPfS_.js";

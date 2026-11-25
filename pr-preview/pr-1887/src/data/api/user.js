@@ -1,1 +1,0 @@
-export{Bgt as SYSTEM_AUTHOR_PREFIX,Vgt as isSystemAuthor,Hgt as systemAuthor}from"../../../chunks/app-SnObPfS_.js";

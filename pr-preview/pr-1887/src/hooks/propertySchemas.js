@@ -1,1 +1,0 @@
-export{OY as usePropertySchemas}from"../../chunks/app-SnObPfS_.js";

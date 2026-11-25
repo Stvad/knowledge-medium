@@ -1,1 +1,0 @@
-export{BS as wikilinkMarkdownExtension}from"../../../../../chunks/app-SnObPfS_.js";

@@ -1,1 +1,0 @@
-export{sG as typePropertyGroups}from"../../chunks/app-SnObPfS_.js";

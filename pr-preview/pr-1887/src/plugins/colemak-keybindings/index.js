@@ -1,1 +1,0 @@
-export{fD as COLEMAK_KEYBINDINGS_PLUGIN_ID,pD as colemakKeybindingsPlugin,mD as colemakMovementKeybindingOverrides}from"../../../chunks/app-SnObPfS_.js";

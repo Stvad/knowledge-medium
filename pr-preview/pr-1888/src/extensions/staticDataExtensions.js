@@ -1,1 +1,0 @@
-export{mZ as staticDataExtensions}from"../../chunks/app-Bp0aTqda.js";

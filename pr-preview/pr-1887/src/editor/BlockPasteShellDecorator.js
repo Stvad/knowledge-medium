@@ -1,1 +1,0 @@
-export{SL as BlockPasteShellDecorator,CL as blockPasteShellDecorator}from"../../chunks/app-SnObPfS_.js";

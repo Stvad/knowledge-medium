@@ -1,1 +1,0 @@
-export{D$ as geoDataExtension}from"../../../chunks/app-SnObPfS_.js";

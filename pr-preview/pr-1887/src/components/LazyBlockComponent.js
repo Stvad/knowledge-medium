@@ -1,1 +1,0 @@
-export{gz as LazyBlockComponent}from"../../chunks/app-SnObPfS_.js";

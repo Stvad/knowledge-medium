@@ -1,1 +1,0 @@
-export{cG as typePropertyGroups}from"../../chunks/app-Bp0aTqda.js";

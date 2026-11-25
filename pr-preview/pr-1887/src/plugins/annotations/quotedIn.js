@@ -1,1 +1,0 @@
-export{Bm as quotedInFooterContribution}from"../../../chunks/app-SnObPfS_.js";

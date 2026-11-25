@@ -1,1 +1,0 @@
-export{gU as ExtensionRenderBoundary}from"../../chunks/app-SnObPfS_.js";

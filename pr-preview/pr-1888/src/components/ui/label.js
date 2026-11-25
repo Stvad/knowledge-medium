@@ -1,1 +1,0 @@
-export{BM as Label}from"../../../chunks/app-Bp0aTqda.js";

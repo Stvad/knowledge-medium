@@ -1,1 +1,0 @@
-export{CN as dailyDateWikilinkDecorator}from"../../../chunks/app-SnObPfS_.js";
