@@ -1,0 +1,1 @@
+export{pz as LazyBlockComponent}from"../../chunks/app-DKd4PQgU.js";

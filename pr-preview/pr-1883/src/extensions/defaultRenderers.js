@@ -1,0 +1,1 @@
+export{wz as defaultRegistry,Tz as defaultRendererContributions,Ez as defaultRenderersExtension}from"../../chunks/app-DKd4PQgU.js";

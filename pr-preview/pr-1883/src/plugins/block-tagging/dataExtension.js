@@ -1,0 +1,1 @@
+export{cp as blockTaggingDataExtension}from"../../../chunks/app-DKd4PQgU.js";

@@ -1,0 +1,1 @@
+export{rw as attachmentsPlugin}from"../../../chunks/app-DKd4PQgU.js";

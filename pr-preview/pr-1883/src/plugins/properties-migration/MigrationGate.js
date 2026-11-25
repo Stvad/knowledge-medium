@@ -1,0 +1,1 @@
+export{Wc as MigrationGate}from"../../../chunks/app-DKd4PQgU.js";

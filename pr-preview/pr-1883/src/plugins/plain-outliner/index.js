@@ -1,0 +1,1 @@
+export{ek as plainOutlinerPlugin}from"../../../chunks/app-DKd4PQgU.js";

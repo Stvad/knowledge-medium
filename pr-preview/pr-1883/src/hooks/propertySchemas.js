@@ -1,0 +1,1 @@
+export{TY as usePropertySchemas}from"../../chunks/app-DKd4PQgU.js";

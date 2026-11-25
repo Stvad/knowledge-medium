@@ -1,0 +1,1 @@
+export{bx as updateIndicatorPlugin}from"../../../chunks/app-DKd4PQgU.js";

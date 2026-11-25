@@ -1,0 +1,1 @@
+export{AL as editorAutocompleteExtension}from"../../chunks/app-DKd4PQgU.js";

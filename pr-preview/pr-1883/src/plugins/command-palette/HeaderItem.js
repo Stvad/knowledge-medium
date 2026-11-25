@@ -1,0 +1,1 @@
+export{wF as CommandPaletteHeaderItem}from"../../../chunks/app-DKd4PQgU.js";

@@ -1,0 +1,1 @@
+export{NW as BlockProperties}from"../../chunks/app-DKd4PQgU.js";

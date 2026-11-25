@@ -1,0 +1,1 @@
+export{TZ as tablesDataExtension}from"../../../chunks/app-DKd4PQgU.js";
