@@ -57,12 +57,13 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // thousands of them — the per-block subscription fan-out the spatial-nav
   // shell decorator documents as the pitfall to avoid. Children render in this
   // context, so its scope is the one they will have.
-  const {renderScopeId} = useBlockContext()
+  const {renderScopeId, eagerChildrenScope} = useBlockContext()
+  const Child = renderScopeId !== undefined && renderScopeId === eagerChildrenScope ? BlockComponent : LazyBlockComponent
   const {childIds, hasUnlistedChild, mode} = useRetainedFieldRows(block, renderScopeId)
 
   return <PropertyRowListingContext value={mode !== 'none' || hasUnlistedChild ? block.id : null}>
     {childIds.map((childId) => (
-      <LazyBlockComponent
+      <Child
         key={childId}
         blockId={childId}
         renderScopeId={renderScopeId}

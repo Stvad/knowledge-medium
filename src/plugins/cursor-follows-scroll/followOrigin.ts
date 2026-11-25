@@ -48,6 +48,11 @@ export const rememberFollow = (
   followsByPanel.set(panelId, {origin, followedTo: to})
 }
 
+/** The row picked at scroll settlement may have left the viewport before
+ *  its focus write reaches the renderer. Revealing it would reverse the scroll. */
+export const isFollowedLocation = (panelId: string, location: FocusedBlockLocation): boolean =>
+  sameFocusedBlockLocation(followsByPanel.get(panelId)?.followedTo, location)
+
 /** Forget the panel's follow unless the cursor is still where it put it. Run
  *  on every cursor change, for the moves no action dispatch announces
  *  (navigating, focus recovery): checking only when the follow is taken would

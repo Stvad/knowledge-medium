@@ -127,6 +127,7 @@ export const CalendarGrid = ({
               disabled={disabled}
               aria-label={formatDayLabel(cell.date)}
               aria-current={isToday ? 'date' : undefined}
+              aria-pressed={isSelected}
               onClick={event => onSelect(iso, event)}
               className={cn(
                 'inline-flex h-10 items-center justify-center rounded-sm text-base transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60',

@@ -26,11 +26,18 @@ export const CALENDAR_WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
 export const monthLabel = (date: Date): string =>
   date.toLocaleString('en-US', {month: 'long'})
 
+/** The numeric Date constructor interprets years 0–99 as 1900–1999. */
+const localDate = (year: number, month: number, day: number): Date => {
+  const date = new Date(2000, 0, 1)
+  date.setFullYear(year, month, day)
+  return date
+}
+
 export const firstOfMonth = (date: Date): Date =>
-  new Date(date.getFullYear(), date.getMonth(), 1)
+  localDate(date.getFullYear(), date.getMonth(), 1)
 
 export const addMonths = (date: Date, months: number): Date =>
-  new Date(date.getFullYear(), date.getMonth() + months, 1)
+  localDate(date.getFullYear(), date.getMonth() + months, 1)
 
 /** Parse an ISO date string into a local-midnight Date, or null if
  *  the string isn't a valid `YYYY-MM-DD`. The round-trip check
@@ -39,7 +46,7 @@ export const addMonths = (date: Date, months: number): Date =>
 export const fromIso = (iso: string): Date | null => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
   if (!match) return null
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  const date = localDate(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
   if (Number.isNaN(date.getTime())) return null
   return formatIsoDate(date) === iso ? date : null
 }
@@ -57,13 +64,13 @@ export const initialDateFromIso = (iso: string | undefined): Date => {
 export const buildCalendarCells = (visibleMonth: Date): CalendarCell[] => {
   const year = visibleMonth.getFullYear()
   const month = visibleMonth.getMonth()
-  const leadingEmptyCells = (new Date(year, month, 1).getDay() + 6) % 7
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const leadingEmptyCells = (localDate(year, month, 1).getDay() + 6) % 7
+  const daysInMonth = localDate(year, month + 1, 0).getDate()
 
   return Array.from({length: CALENDAR_CELL_COUNT}, (_, index) => {
     const day = index - leadingEmptyCells + 1
     if (day < 1 || day > daysInMonth) return {date: null, iso: null}
-    const date = new Date(year, month, day)
+    const date = localDate(year, month, day)
     return {date, iso: formatIsoDate(date)}
   })
 }

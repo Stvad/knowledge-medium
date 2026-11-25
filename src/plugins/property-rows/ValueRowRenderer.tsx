@@ -1,20 +1,24 @@
 import { useContext } from 'react'
-import type { AnyPropertySchema } from '@/data/api'
+import { ChangeScope, type AnyPropertySchema, type PropertyEditorProps } from '@/data/api'
 import { referenceWarningMessage } from './referenceWarning'
 import { propertyValueTargetTypes } from './valueSchema'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import type { BlockRenderer } from '@/types'
 import type { Block } from '@/data/block'
 import { FIELD_FORM_MARKER } from '@/data/referenceBlock'
-import { encodedPropertyValueToChildContents, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
+import { encodedPropertyValueToChildContents, isPropertyFieldInstance, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import { propertyEditorOverridesFacet } from '@/data/facets'
-import { readValuePresets } from '@/data/valuePresetRegistry'
+import { readValuePresets, resolveValuePresetPresentation } from '@/data/valuePresetRegistry'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { cachedContentDecorator, type BlockContentDecoratorContribution } from '@/extensions/blockInteraction'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer'
 import { useHandle } from '@/hooks/block'
 import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation'
+import { isPropertyPanelReadOnlyProperty } from '@/components/propertyPanel/visibility'
+import { isResolvedPropertySchema } from '@/data/internals/propertySchemaResolution'
+import { DayPropertyEditor } from '@/plugins/daily-notes/DayPropertyEditor'
+import { storedIsoDay } from '@/plugins/daily-notes/dayProperty'
 import { drawsPropertyRows, useFieldRowDefinition, isSingleValueProperty, useIsChildOf, usePropertyDefinitions } from './fieldRow'
 
 const ReferenceWarning = ({block, schema, targetId}: {block: Block; schema: AnyPropertySchema; targetId: string}) => {
@@ -22,7 +26,9 @@ const ReferenceWarning = ({block, schema, targetId}: {block: Block; schema: AnyP
   return warning ? <span data-reference-type-warning="true" aria-label={warning} title={warning}>⚠</span> : null
 }
 
-const InlineValue = ({block, Inner, schema}: {block: Block; Inner: BlockRenderer; schema: AnyPropertySchema | undefined}) => {
+const InlineValue = ({block, Inner, fieldRowId, schema}: {
+  block: Block; Inner: BlockRenderer; fieldRowId: string; schema: AnyPropertySchema | undefined
+}) => {
   const runtime = useAppRuntime()
   const definitions = usePropertyDefinitions(block.repo)
   const data = useHandle(block, {selector: row => row ? {
@@ -30,7 +36,7 @@ const InlineValue = ({block, Inner, schema}: {block: Block; Inner: BlockRenderer
   } : undefined})
   const override = schema && resolveEditorOverride(schema.name, definitions,
     runtime.read(propertyEditorOverridesFacet), schema)
-  const Editor = override?.InlineEditor ?? (schema && readValuePresets(runtime).get(schema.codec.type)?.InlineEditor)
+  const Editor = override?.InlineEditor ?? (schema && resolveValuePresetPresentation(readValuePresets(runtime), schema)?.InlineEditor)
   const focusHandlers = usePropertyEditingActivation(block)
   if (!data || data.isFieldForm || !schema) {
     return <Inner block={block}/>
@@ -39,23 +45,52 @@ const InlineValue = ({block, Inner, schema}: {block: Block; Inner: BlockRenderer
   try {
     value = valueChildCodec(schema).decode(valueChildContentToEncoded(schema, data))
   } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Value cannot be decoded'
-    return <div className="flex min-w-0 items-center gap-1">
-      <span data-invalid-property-value="true" aria-label="Invalid property value" title={reason}>⚠</span>
-      <Inner block={block}/>
-    </div>
+    // A stale date row keeps the old literal until the day editor has relinked it.
+    if (Editor === DayPropertyEditor && Inner === MarkdownContentRenderer && storedIsoDay(data.content)) {
+      value = data.content
+    } else {
+      const reason = error instanceof Error ? error.message : 'Value cannot be decoded'
+      return <div className="flex min-w-0 items-center gap-1">
+        <span data-invalid-property-value="true" aria-label="Invalid property value" title={reason}>⚠</span>
+        <Inner block={block}/>
+      </div>
+    }
   }
   const warning = typeof value === 'string' && value && propertyValueTargetTypes(schema).length > 0
     ? <ReferenceWarning block={block} schema={schema} targetId={value}/> : null
   if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return warning
     ? <div className="flex min-w-0 items-center gap-1">{warning}<Inner block={block}/></div> : <Inner block={block}/>
+  const resolveAndChange: PropertyEditorProps<unknown>['resolveAndChange'] = async (resolve, options) => {
+    // Defence in depth for custom renderer contexts: only a resolved definition identifies the field.
+    if (block.repo.isReadOnly || !isResolvedPropertySchema(schema) || isPropertyPanelReadOnlyProperty(schema.name)) return false
+    return block.repo.tx(async tx => {
+      const row = await tx.get(block.id)
+      if (row?.deleted !== false || row.isFieldForm || row.parentId !== fieldRowId) return false
+      if (options?.ifUnchanged && (row.content !== data.content || row.referenceTargetId !== data.referenceTargetId)) return false
+      // Defence in depth for synced moves across graphs before workspace write admission.
+      if (row.workspaceId !== schema.workspaceId) return false
+      const field = await tx.get(fieldRowId)
+      if (field?.deleted !== false || !isPropertyFieldInstance(field, fieldId => fieldId === schema.fieldId)) return false
+      // A single-block delete can leave its field and value children live.
+      const owner = await tx.get(field.parentId!)
+      if (owner?.deleted !== false) return false
+      const currentSchema = tx.resolvePropertyFieldSchema(row.workspaceId, schema.fieldId)
+      if (currentSchema?.codec !== schema.codec) return false
+      // Defence in depth: a queued edit must still respect the current field and repo write policy.
+      if (isPropertyPanelReadOnlyProperty(currentSchema.name) || block.repo.isReadOnly) return false
+      tx.assertWritableWorkspace(row.workspaceId)
+      const next = await resolve(tx)
+      const [content] = encodedPropertyValueToChildContents(currentSchema, currentSchema.codec.encode(next))
+      await tx.update(block.id, {content})
+      return true
+    }, {scope: ChangeScope.BlockDefault, description: `set content on ${block.id}`})
+  }
   return (
     <div data-property-value-row="true" data-property-name={schema.name}
       onFocus={focusHandlers.onFocus} onBlur={focusHandlers.onBlur}>
       {warning}
-      <Editor block={block} schema={schema} value={value} onChange={next => {
-        const [content] = encodedPropertyValueToChildContents(schema, schema.codec.encode(next))
-        void block.setContent(content)
+      <Editor block={block} schema={schema} value={value} resolveAndChange={resolveAndChange} onChange={next => {
+        void resolveAndChange(async () => next)
       }}/>
     </div>
   )
@@ -73,7 +108,7 @@ const PropertyReadContent = ({block, Inner}: {block: Block; Inner: BlockRenderer
       </div>
     )
   }
-  return isValue ? <InlineValue block={block} Inner={Inner} schema={field?.schema}/> : <Inner block={block}/>
+  return isValue && field ? <InlineValue block={block} Inner={Inner} fieldRowId={field.id} schema={field.schema}/> : <Inner block={block}/>
 }
 
 const decoratePropertyContent = cachedContentDecorator(PropertyReadContent, 'PropertyReadContent')

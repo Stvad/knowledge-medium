@@ -13,8 +13,8 @@ import { useDebouncedSearch } from '@/hooks/useDebouncedSearch.js'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { refTargetFilterDefaultsFacet } from '@/data/facets.js'
+import { queryableFieldsFacet, refTargetComparablePropertiesFacet } from '@/data/facets.js'
+import { useFacetValue } from '@/hooks/useFacetValue'
 import { type BlockPredicate } from '@/data/api'
 import {
   propertyFilterOperatorArity,
@@ -368,37 +368,41 @@ const htmlInputType = (kind: PropertyFilterInputKind): 'date' | 'number' | 'text
   kind === 'date' ? 'date' : kind === 'number' ? 'number' : 'text'
 
 const PropertyPredicateInput = ({
+  workspaceId,
   mode,
   readOnly = false,
   onAdd,
 }: {
+  workspaceId: string
   mode: FilterMode
   readOnly?: boolean
   onAdd: (predicate: BlockPredicate) => void
 }) => {
   const schemas = usePropertySchemas()
-  const runtime = useAppRuntime()
-  const refTargetDefaults = runtime.read(refTargetFilterDefaultsFacet)
+  const refTargetDefaults = useFacetValue(refTargetComparablePropertiesFacet, workspaceId)
+  const fields = useFacetValue(queryableFieldsFacet, workspaceId)
   const queryable = useMemo(() => {
-    return Array.from(schemas.values())
+    return Array.from(schemas.values()).filter(schema => !fields.has(schema.name))
       .sort((a, b) => a.name.localeCompare(b.name))
-  }, [schemas])
+  }, [schemas, fields])
   const [name, setName] = useState('')
-  const [op, setOp] = useState<PropertyFilterOperatorId>('eq')
+  const [selectedOp, setOp] = useState<PropertyFilterOperatorId>('eq')
   const [value, setValue] = useState('')
   const [valueHi, setValueHi] = useState('')
-  const schema = useMemo(() => schemas.get(name), [schemas, name])
+  const schema = !fields.has(name) ? schemas.get(name) : undefined
   const affordance: PropertyFilterAffordance | undefined = useMemo(
-    () => schema ? resolvePropertyFilter(schema, schemas, refTargetDefaults) : undefined,
-    [schema, schemas, refTargetDefaults],
+    () => schema ? resolvePropertyFilter(schema, schemas, refTargetDefaults, fields) : undefined,
+    [schema, schemas, refTargetDefaults, fields],
   )
+  const operators = affordance?.operators ?? []
+  const op = operators.includes(selectedOp) ? selectedOp : operators[0] ?? 'eq'
   const arity = propertyFilterOperatorArity(op)
   const inputKind: PropertyFilterInputKind = affordance?.inputKind ?? 'text'
   const inputType = htmlInputType(inputKind)
   const defaultOperatorFor = (propertyName: string): PropertyFilterOperatorId => {
     const nextSchema = schemas.get(propertyName)
     if (!nextSchema) return 'eq'
-    return resolvePropertyFilter(nextSchema, schemas, refTargetDefaults).operators[0] ?? 'eq'
+    return resolvePropertyFilter(nextSchema, schemas, refTargetDefaults, fields).operators[0] ?? 'eq'
   }
 
   const reset = () => {
@@ -421,7 +425,6 @@ const PropertyPredicateInput = ({
   if (queryable.length === 0) return null
 
   const valueAriaLabel = mode === 'include' ? 'Include value' : 'Exclude value'
-  const operators = affordance?.operators ?? []
 
   return (
     <form className="flex min-w-0 gap-1" onSubmit={submit}>
@@ -614,6 +617,7 @@ export function BacklinkFilters({
             )}
           />
           <PropertyPredicateInput
+            workspaceId={workspaceId}
             mode="include"
             readOnly={readOnly}
             onAdd={p => addPredicate('include', p)}
@@ -645,6 +649,7 @@ export function BacklinkFilters({
             )}
           />
           <PropertyPredicateInput
+            workspaceId={workspaceId}
             mode="exclude"
             readOnly={readOnly}
             onAdd={p => addPredicate('exclude', p)}

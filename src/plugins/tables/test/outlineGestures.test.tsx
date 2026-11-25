@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { Suspense, useEffect } from 'react'
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorView } from '@codemirror/view'
 import * as structuralEdits from '@/data/structuralEditPolicy'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
-import { definitionSeedsFacet } from '@/data/facets'
+import { definitionSeedsFacet, queryableFieldsFacet, refTargetComparablePropertiesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -36,12 +36,17 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
+import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes'
+import { DAILY_NOTE_TYPE, dayValuePresetCore } from '@/plugins/daily-notes/schema'
 import * as toast from '@/utils/toast'
 import { disarmCut, getArmedCut } from '@/paste/armedCut'
 import { pasteArmedCut } from '@/paste/operations'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
 import { propertyDisplayProp } from '@/data/propertyDisplayMode'
 import { turnIntoTable } from '../convert'
+import { addColumn } from '../columns'
+import { viewQuery } from '../model'
 import { openQueryValue } from '../query/queryValue'
 import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { tablesPlugin } from '../index'
@@ -130,7 +135,7 @@ const ContextProbe = () => {
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
 
-const mount = () => render(
+const mount = (childBacked = true) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
@@ -139,7 +144,7 @@ const mount = () => render(
         <Suspense fallback={null}>
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: PARENT_SCOPE, scopeRootId: HOST}}>
             <GlobalShortcuts/>
-            <PropertyDisplayScopeContext value={{childBacked: true, workspace: 'non-hidden', panel: 'inherit'}}>
+            <PropertyDisplayScopeContext value={{childBacked, workspace: 'non-hidden', panel: 'inherit'}}>
               <BlockComponent blockId={HOST}/>
             </PropertyDisplayScopeContext>
           </BlockContextProvider>
@@ -202,6 +207,157 @@ const press = (view: EditorView, key: string, options: {shiftKey?: boolean} = {}
 }
 
 const focused = () => peekFocusedBlockLocation(ui())
+
+it.each([
+  {storage: 'old property bags', childBacked: false, readOnly: false},
+  {storage: 'read-only workspace', childBacked: true, readOnly: true},
+])('links stored days and legacy daily-note refs in $storage', async ({childBacked, readOnly}) => {
+  const day = seedProperty({
+    seedKey: 'test/property/tables-gesture-day', revision: 1, name: 'gesture:day',
+    preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+  })
+  const legacy = seedProperty({
+    seedKey: 'test/property/tables-gesture-legacy-day', revision: 1, name: 'gesture:legacy-day',
+    preset: 'optional-ref', config: {targetTypes: [DAILY_NOTE_TYPE]}, changeScope: ChangeScope.BlockDefault,
+  })
+  const stale = seedProperty({
+    seedKey: 'test/property/tables-gesture-stale-day', revision: 1, name: 'gesture:stale-day',
+    preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+  })
+  const seeds = [day, legacy, stale]
+  configureRuntime(dailyNotesDataExtension, seeds.map(seed => definitionSeedsFacet.of(seed, {source: 'test'})))
+  await repo.whenPropertyDefinitionsReady(WS)
+  await materializePropertySeeds(repo, WS, seeds)
+  const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
+  for (const seed of seeds) await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, seed.seedKey))
+  const target = await getOrCreateDailyNote(repo, WS, '2026-01-06')
+  const title = (await target.load())!.content
+  await target.setContent('Trip planning')
+  await repo.awaitProcessors()
+  if (!childBacked) await db.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = ?", [WS])
+  const oldInstant = '2026-02-03T00:00:00.000Z'
+  await db.db.execute("UPDATE blocks SET properties_json = json_patch(properties_json, ?), updated_at = updated_at + 1 WHERE id = 'row-0'",
+    [JSON.stringify({[day.name]: target.id, [legacy.name]: target.id, [stale.name]: oldInstant})])
+  await repo.load('row-0')
+  expect(repo.block('row-0').peek()?.properties).toMatchObject({[day.name]: target.id, [legacy.name]: target.id})
+  repo.setReadOnly(readOnly)
+
+  mount(childBacked)
+  await waitFor(() => {
+    const cells = document.querySelector(`[data-table-row="row-0"]`)!
+    const days = [...cells.querySelectorAll('a')].filter(link => link.textContent === title)
+    expect(days.map(link => link.getAttribute('href'))).toEqual([`#${WS}/${target.id}`, `#${WS}/${target.id}`])
+    expect(days.map(link => link.getAttribute('title'))).toEqual(['Trip planning', 'Trip planning'])
+    expect(cells.textContent).not.toContain(target.id)
+    expect(cells.querySelector('[aria-label="Change day"], [aria-label="Choose day"]')).toBeNull()
+  })
+  const row = within(document.querySelector<HTMLElement>('[data-table-row="row-0"]')!)
+  await row.findByText('2026-02-03, not linked')
+  const relink = row.queryByRole('button', {name: 'Relink day'})
+  const noteId = dailyNoteBlockId(WS, '2026-02-03')
+  expect(await repo.load(noteId)).toBeNull()
+  expect((await repo.load('row-0'))?.properties[stale.name]).toBe(oldInstant)
+  if (readOnly) {
+    expect(relink).toBeNull()
+  } else {
+    expect(relink).toBeEnabled()
+    fireEvent.click(relink!)
+    expect(await row.findByRole('link', {name: 'February 3rd, 2026'})).toHaveAttribute('href', `#${WS}/${noteId}`)
+    expect((await repo.load('row-0'))?.properties[stale.name]).toBe(noteId)
+  }
+})
+
+// The mounted grid and all three sort transitions take about a second locally.
+it('cycles the daily note reference header through date order and outline order', async () => {
+  const planned = seedProperty({
+    seedKey: 'test/property/tables-gesture-planned', revision: 1,
+    name: 'gesture:planned', preset: 'optional-ref', changeScope: ChangeScope.BlockDefault,
+    config: {targetTypes: [DAILY_NOTE_TYPE]},
+  })
+  configureRuntime(dailyNotesDataExtension, definitionSeedsFacet.of(planned, {source: 'test'}))
+  await repo.whenPropertyDefinitionsReady(WS)
+  await materializePropertySeeds(repo, WS, [planned])
+  const earlier = await getOrCreateDailyNote(repo, WS, '2026-01-04')
+  const later = await getOrCreateDailyNote(repo, WS, '2026-01-06')
+  await repo.tx(async tx => {
+    await tx.setProperty('row-0', planned, later.id)
+    await tx.setProperty('row-1', planned, earlier.id)
+    await tx.create({id: 'row-2', workspaceId: WS, parentId: HOST, orderKey: 'a0V', content: 'unscheduled'})
+  }, {scope: ChangeScope.BlockDefault})
+  const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
+  const columnId = await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, planned.seedKey))
+
+  mount()
+  const header = await waitFor(() => {
+    const column = document.querySelector(`[data-table-column="${columnId}"]`)
+    expect(column).not.toBeNull()
+    return column!
+  })
+  const label = header.querySelector('[data-table-column-drag]')!
+  const order = () => [...document.querySelectorAll<HTMLElement>('[data-table-row]')].map(row => row.dataset.tableRow)
+  await waitFor(() => expect(order()).toEqual(['row-0', 'row-2', 'row-1']))
+  const clickHeader = () => {
+    const pointer = {pointerId: 1, button: 0, clientX: 10}
+    fireEvent.pointerDown(label, pointer)
+    fireEvent.pointerUp(label, pointer)
+  }
+  clickHeader()
+  await waitFor(() => {
+    expect(header).toHaveAttribute('aria-sort', 'ascending')
+    expect(order()).toEqual(['row-1', 'row-0', 'row-2'])
+  })
+  const replaceTarget = (property: string | undefined) => act(() => {
+    repo.setRuntimeContributions(refTargetComparablePropertiesFacet, 'test-override',
+      property ? [{targetType: DAILY_NOTE_TYPE, property}] : [], {workspaceId: WS})
+  })
+  replaceTarget(tags.name)
+  await waitFor(() => {
+    expect(header).not.toHaveAttribute('aria-sort')
+    expect(order()).toEqual(['row-0', 'row-2', 'row-1'])
+  })
+  replaceTarget(undefined)
+  await waitFor(() => {
+    expect(header).toHaveAttribute('aria-sort', 'ascending')
+    expect(order()).toEqual(['row-1', 'row-0', 'row-2'])
+  })
+  clickHeader()
+  await waitFor(() => {
+    expect(header).toHaveAttribute('aria-sort', 'descending')
+    expect(order()).toEqual(['row-0', 'row-1', 'row-2'])
+  })
+  clickHeader()
+  await waitFor(() => {
+    expect(header).not.toHaveAttribute('aria-sort')
+    expect(order()).toEqual(['row-0', 'row-2', 'row-1'])
+  })
+  await act(async () => {
+    await repo.block(HOST).set(queryProp, `childof=self ${planned.name}>=2026-01-05`)
+  })
+  await waitFor(() => expect(order()).toEqual(['row-0']))
+  replaceTarget(tags.name)
+  await waitFor(() => {
+    expect(document.querySelector('[data-table-query-errors]')).not.toBeNull()
+    expect(new Set(order())).toEqual(new Set(['row-0', 'row-1', 'row-2']))
+  })
+}, 20_000)
+
+it('reparses a mounted table when a queryable field becomes available', async () => {
+  await repo.block(HOST).set(queryProp, 'childof=self score>=1')
+  mount()
+  await waitFor(() => expect(document.querySelector('[data-table-query-errors]')).not.toBeNull())
+  act(() => {
+    repo.setRuntimeContributions(queryableFieldsFacet, 'test-override', [{
+      name: 'score',
+      value: alias => ({sql: `CASE WHEN ${alias}.id = ? THEN 1 ELSE 0 END`, params: ['row-1']}),
+      encode: operand => Number(operand),
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }], {workspaceId: WS})
+  })
+  await waitFor(() => {
+    expect(document.querySelector('[data-table-query-errors]')).toBeNull()
+    expect([...document.querySelectorAll<HTMLElement>('[data-table-row]')].map(row => row.dataset.tableRow)).toEqual(['row-1'])
+  })
+})
 
 describe('a list cell draws its members as outline blocks', () => {
   it('shows each member with a bullet, not as a bare cell value', async () => {

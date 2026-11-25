@@ -16,14 +16,8 @@
  * historically (the legacy ['cmd+shift+[', 'ctrl+shift+['] pair only
  * worked via the Ctrl entry in practice).
  *
- * The prev/next actions need to figure out "what daily note is this
- * panel showing right now" so the offset is relative. We do that by
- * walking ancestors of the panel's top-level block and looking for a
- * page whose `aliases` list contains an ISO-shaped date — that's the
- * canonical alias for a daily note, written by `getOrCreateDailyNote`
- * via `dailyPageAliases`. Falling back to `todayIso()` when nothing in
- * the ancestor chain is a daily note keeps the shortcuts functional
- * from any view.
+ * Prev/next walk the focal block's ancestors for a daily-note date anchor
+ * or a legacy ISO alias. Outside a daily note they offset from today.
  *
  * Originally lived in `src/shortcuts/defaultShortcuts.ts` alongside
  * the rest of the kernel action set; extracted here so the daily-notes
@@ -36,7 +30,6 @@ import { getLayoutSessionBlock } from '@/data/stateBlocks.js'
 import { grabSoftKeyboard } from '@/utils/softKeyboardGrab.js'
 import {
   activePanelIdProp,
-  aliasesProp,
   editorSelection,
   isEditingProp,
 } from '@/data/properties.js'
@@ -54,7 +47,7 @@ import {
 } from '@/utils/navigation.js'
 import {
   addDaysIso,
-  dailyNoteIsoFromAliases,
+  dailyNoteIsoFromRow,
   getOrCreateDailyNote,
   todayIso,
 } from './dailyNotes.ts'
@@ -63,9 +56,6 @@ export const OPEN_TODAY_ACTION_ID = 'open_today'
 export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
 export const OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID = 'open_previous_daily_note'
 export const OPEN_NEXT_DAILY_NOTE_ACTION_ID = 'open_next_daily_note'
-
-const dailyNoteIsoFromBlock = (block: Block): string | null =>
-  dailyNoteIsoFromAliases(block.peekProperty(aliasesProp) ?? [])
 
 const findContainingDailyNoteIso = async (
   repo: Repo,
@@ -77,7 +67,7 @@ const findContainingDailyNoteIso = async (
 
   let block: Block | null = repo.block(blockId)
   while (block) {
-    const iso = dailyNoteIsoFromBlock(block)
+    const iso = dailyNoteIsoFromRow(block.peek())
     if (iso) return iso
     block = block.parent
   }

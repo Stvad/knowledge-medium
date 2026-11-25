@@ -27,7 +27,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { EXTENSION_TYPE, hasSourceContent, HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, presetIdProp, propertyNameProp, typesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
@@ -474,6 +474,34 @@ describe('parseReferences — source content is not scanned for content refs', (
 })
 
 describe('parseReferences — schema-swap reprojection', () => {
+  it('retains both projected references when two retyped definitions swap names', async () => {
+    const {repo} = env
+    const names = ['first', 'second']
+    const options = {scope: ChangeScope.BlockDefault}
+    await repo.tx(async tx => {
+      for (const name of names) {
+        await tx.create({id: `definition-${name}`, workspaceId: WS, parentId: null, orderKey: name,
+          properties: {types: ['property-schema'], [propertyNameProp.name]: name, [presetIdProp.name]: 'string'}})
+      }
+    }, options)
+    await vi.waitFor(() => expect(names.map(name => repo.propertySchemas.get(name)?.codec.type)).toEqual(['string', 'string']))
+    await repo.tx(async tx => {
+      for (const [from, to] of [['first', 'second'], ['second', 'first']] as const) {
+        await tx.setProperty(`definition-${from}`, propertyNameProp, to)
+        await tx.setProperty(`definition-${from}`, presetIdProp, 'ref')
+      }
+      await tx.create({id: 'swap-source', workspaceId: WS, parentId: null, orderKey: 'source',
+        properties: {first: 'target-a', second: 'target-b'},
+        references: [
+          {id: 'target-a', alias: 'target-a', sourceField: 'first'},
+          {id: 'target-b', alias: 'target-b', sourceField: 'second'},
+        ]})
+    }, options)
+    await repo.awaitProcessors()
+    const references = JSON.parse((await env.read('swap-source'))!.references_json) as BlockReference[]
+    expect(references.map(ref => [ref.sourceField, ref.id]).sort()).toEqual([['first', 'target-a'], ['second', 'target-b']])
+  })
+
   const reviewerProp = refTestSeed('reviewer', 'ref')
   const approverProp = refTestSeed('approver', 'ref')
   // `reviewer` redefined with a NON-ref preset — the real "stopped being

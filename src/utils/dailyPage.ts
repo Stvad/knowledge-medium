@@ -20,15 +20,16 @@ const ordinalSuffix = (day: number): string => {
 }
 
 /** "April 26th, 2026" — Roam-style long form, en-US, used as a page alias. */
-export const formatRoamDate = (date: Date): string => {
-  const month = date.toLocaleString('en-US', {month: 'long'})
-  const day = date.getDate()
-  return `${month} ${day}${ordinalSuffix(day)}, ${date.getFullYear()}`
+export const formatRoamDate = (date: Date, zone?: 'UTC'): string => {
+  const month = date.toLocaleString('en-US', {month: 'long', timeZone: zone})
+  const day = zone ? date.getUTCDate() : date.getDate()
+  const year = zone ? date.getUTCFullYear() : date.getFullYear()
+  return `${month} ${day}${ordinalSuffix(day)}, ${year}`
 }
 
 /** "2026-04-26" — ISO local-date form, used as a secondary page alias. */
 export const formatIsoDate = (date: Date): string => {
-  const year = date.getFullYear()
+  const year = String(date.getFullYear()).padStart(4, '0')
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`

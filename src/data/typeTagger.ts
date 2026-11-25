@@ -24,7 +24,7 @@ import type {
   TypeContribution,
   TypeRegistrySnapshot,
 } from '@/data/api'
-import { BlockNotFoundForTypeError, ChangeScope } from '@/data/api'
+import { BlockNotFoundForTypeError, ChangeScope, propertyValue } from '@/data/api'
 import { typesProp } from './properties'
 import { decodeRowProperty } from './rowProperty'
 import { withAbsentPropertyValues } from './typeInitialValues'
@@ -51,6 +51,22 @@ const requireTypeContribution = (
   )
 }
 
+/** Prepare one membership edit, retaining tag order and resolving the types field by identity. */
+export const prepareTypeTags = async (
+  tx: Tx, snapshot: TypeRegistrySnapshot, blockId: string, required: readonly [string, ...string[]], strict = true,
+) => {
+  const contributions = required.map(typeId => requireTypeContribution(snapshot.types, typeId))
+  const block = await tx.get(blockId)
+  if (!block || block.deleted) {
+    if (strict) throw new BlockNotFoundForTypeError(blockId, required[0], block ? 'tombstoned' : 'missing')
+    return null
+  }
+  const schema = await tx.resolvePropertySchema(blockId, typesProp)
+  const held = decodeRowProperty(block, schema)
+  const missing = [...new Set(required)].filter(typeId => !held.includes(typeId))
+  return {block, contributions, changed: missing.length > 0, assignment: propertyValue(schema, [...held, ...missing])}
+}
+
 // Each type operation makes one net bag change per key. Initial values resolve
 // through the same identity boundary as setProperty and fill only what the bag
 // lacks (`withAbsentPropertyValues`); MATERIALIZE projects the cells into field
@@ -74,34 +90,19 @@ export const applyTypeTagInTx = async (
     writeOpts?: TxWriteOpts
   },
 ): Promise<void> => {
-  const {types, propertySchemas} = snapshot
-  const contribution = requireTypeContribution(types, typeId)
-  const block = await tx.get(blockId)
-  if (!block) {
-    if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'missing')
-    return
-  }
-  if (block.deleted) {
-    if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'tombstoned')
-    return
-  }
-
-  // Resolve before decoding: a shadowing winner may use an incompatible
-  // codec, and this write path must reject through the identity boundary
-  // rather than attempting to interpret the winner's cell as membership.
-  const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
-  const current = decodeRowProperty(block, resolvedTypes)
-  const wasNew = !current.includes(typeId)
-  const next = wasNew
-    ? {...block.properties, [resolvedTypes.name]: resolvedTypes.codec.encode([...current, typeId])}
+  const tags = await prepareTypeTags(tx, snapshot, blockId, [typeId], strict)
+  if (!tags) return
+  const {block, assignment, contributions: [contribution]} = tags
+  const next = tags.changed
+    ? {...block.properties, [assignment.schema.name]: assignment.schema.codec.encode(assignment.value)}
     : block.properties
 
   const entries = Object.entries(initialValues)
   const declaredSchemas = entries.length === 0
     ? null
-    : new Map((contribution.properties ?? []).map(schema => [schema.name, schema] as const))
+    : new Map((contribution!.properties ?? []).map(schema => [schema.name, schema] as const))
   const assignments = entries.map(([name, value]) => {
-    const schema = declaredSchemas?.get(name) ?? propertySchemas.get(name)
+    const schema = declaredSchemas?.get(name) ?? snapshot.propertySchemas.get(name)
     if (schema === undefined) {
       throw new Error(
         `[addType] initialValues[${JSON.stringify(name)}] has no registered PropertySchema ` +
@@ -112,7 +113,7 @@ export const applyTypeTagInTx = async (
   })
   const filled = await withAbsentPropertyValues(tx, blockId, next, assignments)
 
-  if (wasNew || filled) {
+  if (tags.changed || filled) {
     await tx.update(blockId, {properties: filled ?? next}, writeOpts)
   }
 }

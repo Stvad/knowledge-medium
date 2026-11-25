@@ -77,26 +77,28 @@
  *    alternative is keeping the arriving row's spelling, which is the #1055
  *    bug this pass exists to fix.
  *
- * The FAN-OUT is dormant until a definition has field rows — see
- * `consumingParentIds`, which is its gate. The refusals split on field rows and
- * the split is deliberate: `MIGRATION_RUNNING_REFUSAL` exists precisely because
- * a consumer with no field row YET is invisible to them, while the
- * unconvertible refusal is a fact about values this pass actually read and so
- * can only be reached through the walk. The contested and shared-name refusals
- * ask the wider `anyBlockHoldsFieldRowFor`.
+ * Ordinary re-encodings walk field rows. A semantic scalar conversion also
+ * visits owners holding the old encoding directly in their property bag.
  */
 
 import {
   defineSameTxProcessor,
+  derivedRefKey,
+  reconcileDerived,
   ProcessorRejection,
+  scalarConversionBetween,
   type AnyPropertySchema,
   type BlockData,
   type SameTxCtx,
+  type ScalarPresetConversion,
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import { isResolvableFieldDefinition } from './propertySchemaResolution'
-import { presetConfigProp, presetIdProp } from '@/data/properties'
-import { peekRowProperty } from '@/data/rowProperty'
+import { presetConfigProp, presetIdProp, propertyDefaultProp } from '@/data/properties'
+import { peekRowProperty, storedPropertyValue } from '@/data/rowProperty'
+import { materializePropertyChildrenForExistingRow } from './propertyChildrenProcessor'
+import { projectedRefsForField } from './refProjection'
+import { inlineJsonPath, jsonPathForProperty } from './typedBlockQuery'
 import { jsonValuesEqual } from './jsonCanonical'
 import {
   deriveReferenceColumns,
@@ -119,7 +121,10 @@ import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
+  encodedToValueChildContent,
+  valueChildContentToEncoded,
   fieldRowValues,
+  propertyCellValueRejection,
   projectedValueCount,
   propertiesEqual,
   unionValuesAcrossFieldRows,
@@ -248,6 +253,7 @@ interface Refusal {
 interface HeldChange {
   readonly fieldId: string
   readonly refusal: Refusal
+  readonly scalarName?: string
 }
 
 const UNBUILDABLE_REFUSAL: Refusal = {
@@ -383,6 +389,8 @@ type CollectedChanges =
     }
 
 interface DefinitionChange {
+  readonly conversion?: ScalarPresetConversion
+  readonly retainedDefault?: unknown
   readonly fieldId: string
   readonly oldName: string
   readonly newName: string
@@ -488,7 +496,21 @@ const collectChanges = (
       unfanoutable.push({fieldId: after.id, refusal: UNBUILDABLE_REFUSAL})
       continue
     }
+    const conversion = scalarConversionBetween(
+      ctx.valuePresets, peekRowProperty(before, presetIdProp), afterSchema,
+    )
+    // A legacy destination cell can hold an independent value with no definition.
+    if (conversion && renamed) {
+      throw new ProcessorRejection(
+        'Change the property type without renaming it in the same edit.',
+        'property.definition-change.rename-and-convert', {fieldId: after.id},
+      )
+    }
+    const storedDefault = storedPropertyValue(after.properties, propertyDefaultProp.name)
     candidates.push({
+      conversion,
+      retainedDefault: jsonValuesEqual(storedDefault, storedPropertyValue(before.properties, propertyDefaultProp.name))
+        ? storedDefault : undefined,
       fieldId: after.id,
       oldName: beforeMeta.name,
       newName: afterMeta.name,
@@ -564,7 +586,8 @@ const collectChanges = (
   // definition also claims — see `contestedChanges` for the two halves.
   const contested = contestedChanges(candidates, claimOf)
   for (const candidate of contested) {
-    unfanoutable.push({fieldId: candidate.fieldId, refusal: CONTESTED_REFUSAL})
+    unfanoutable.push({fieldId: candidate.fieldId, refusal: CONTESTED_REFUSAL,
+      scalarName: candidate.conversion && candidate.oldName})
   }
   // Defence in depth, and unpinnable through the public path: a contested
   // change either has a consumer, and then the caller refuses the whole tx, or
@@ -658,6 +681,12 @@ const consumingParentsFromSql = (targetCount: number): string =>
          WHERE owner.id = field.parent_id AND owner.deleted = 0
       )`
 
+const liveBagConsumers = (workspaceId: string, name: string) => ({
+  sql: `SELECT id FROM blocks
+        WHERE workspace_id = ? AND deleted = 0 AND json_type(properties_json, ?) IS NOT NULL`,
+  params: [workspaceId, jsonPathForProperty(name)],
+})
+
 /** Whether any block holds a live field row for one of `fieldIds`, a DELETED
  *  owner included — the question the contested and shared-name refusals ask,
  *  which is wider than the fan-out's. Declining to re-key a deleted owner is a
@@ -717,7 +746,19 @@ export const countConsumingParents = async (
   db: Pick<SameTxCtx['db'], 'getOptional'>,
   workspaceId: string,
   fieldId: string,
+  scalarName?: string,
 ): Promise<number> => {
+  if (scalarName !== undefined) {
+    const bags = liveBagConsumers(workspaceId, scalarName)
+    const row = await db.getOptional<{count: number}>(
+      `SELECT COUNT(*) AS count FROM (
+         SELECT field.parent_id FROM ${consumingParentsFromSql(1)}
+         UNION ${bags.sql}
+       )`,
+      [workspaceId, fieldId, ...bags.params],
+    )
+    return row?.count ?? 0
+  }
   const row = await db.getOptional<{count: number}>(
     `SELECT COUNT(DISTINCT field.parent_id) AS count
        FROM ${consumingParentsFromSql(1)}`,
@@ -756,6 +797,32 @@ const valuesLostBy = (
   return Math.max(0, held - projectedValueCount(change.schema, projected))
 }
 
+interface ConversionRefusal {reasons: Map<string, number>; count: number; blockIds: Set<string>}
+
+const recordRefusal = (refusals: Map<string, ConversionRefusal>, fieldId: string, ownerId: string, reason: string) => {
+  const held = refusals.get(fieldId) ?? {reasons: new Map<string, number>(), count: 0, blockIds: new Set<string>()}
+  held.count++
+  held.reasons.set(reason, (held.reasons.get(reason) ?? 0) + 1)
+  held.blockIds.add(ownerId)
+  refusals.set(fieldId, held)
+}
+
+/** Count refusals across all consumers before aborting the definition edit. */
+const convertedScalar = async (
+  change: DefinitionChange, ctx: SameTxCtx, workspaceId: string,
+  encoded: unknown, refusals: Map<string, ConversionRefusal>, ownerId: string, sourceText?: string,
+): Promise<unknown> => {
+  const result = await change.conversion!.convert(encoded, {tx: ctx.tx, types: ctx.types, propertySchemas: ctx.propertySchemas, workspaceId}, sourceText)
+  if ('encoded' in result) {
+    if (result.encoded === undefined) throw new Error('A scalar conversion must return a stored value')
+    if (!propertyCellValueRejection(change.schema, result.encoded)) return result.encoded
+    recordRefusal(refusals, change.fieldId, ownerId, 'destination type cannot store this value')
+  } else {
+    recordRefusal(refusals, change.fieldId, ownerId, result.refused)
+  }
+  return undefined
+}
+
 /** Apply every change that owns a field row under ONE parent, in one cell write.
  *
  *  SWAP-SAFE, and that is why the drops and the assignments are collected for
@@ -775,6 +842,8 @@ const applyToParent = async (
   isFieldDefinition: IsPropertyFieldDefinition,
   lostByField: Map<string, number>,
   lostParents: Set<string>,
+  refusals: Map<string, ConversionRefusal>,
+  childBacked: boolean,
 ): Promise<void> => {
   const parent = await ctx.tx.get(parentId)
   // Tombstoned owners are excluded by `consumingParentsFromSql`, which is the
@@ -788,13 +857,32 @@ const applyToParent = async (
   const oldNames: string[] = []
   const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
   for (const change of changes) {
-    // `null` = this parent carries no field row for this definition, so its
-    // cell keys for it are none of this change's business. It is also the gate
-    // `childContentsToEncodedPropertyValue` is called under.
+    // Without a live field row a scalar conversion reads the stored cell directly.
     const perFieldRow = await fieldRowValues(
       ctx.tx, siblings, change.fieldId, isFieldDefinition,
     )
-    if (perFieldRow === null) continue
+    if (perFieldRow === null) {
+      const held = storedPropertyValue(parent.properties, change.oldName)
+      if (!change.conversion || held === undefined) continue
+      const converted = await convertedScalar(change, ctx, parent.workspaceId, held, refusals, parentId)
+      if (converted === undefined) continue
+      if (childBacked) {
+        const schema = {...change.schema, fieldId: change.fieldId}
+        await materializePropertyChildrenForExistingRow(ctx.tx,
+          {...parent, properties: {...parent.properties, [schema.name]: converted}},
+          {resolveNameSchema: () => schema}, [schema.name])
+      }
+      assignments.push({name: change.newName, value: converted, unset: false})
+      continue
+    }
+    if (change.conversion && !childBacked) {
+      const projected = childContentsToEncodedPropertyValue(change.beforeSchema,
+        unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow))
+      if (!jsonValuesEqual(storedPropertyValue(parent.properties, change.oldName), projected)) {
+        recordRefusal(refusals, change.fieldId, parentId, 'stored cell and field rows disagree')
+        continue
+      }
+    }
     const canonicalized: Array<Array<Pick<BlockData, 'id' | 'content' | 'referenceTargetId'>>> = []
     for (const values of perFieldRow) {
       const group: Array<Pick<BlockData, 'id' | 'content' | 'referenceTargetId'>> = []
@@ -819,15 +907,23 @@ const applyToParent = async (
         // new one has a spelling for what that read; where it has none the
         // text route re-reads `null` and the ambiguity decides the other way
         // (`list` -> `string`).
-        const conversion = convertValueChildContent(
-          change.beforeSchema, change.schema, value,
-        )
-        // Left exactly as stored and out of the projection — the same thing
-        // the projection itself does with text it cannot read. Whether that
-        // COSTS anything is not a per-row question and is not asked here;
-        // `valuesLostBy` asks it of the aggregate.
-        if (conversion.outcome === 'unreadable') continue
-        const canonical = conversion.content
+        let canonical: string
+        if (change.conversion) {
+          let encoded: unknown
+          try {
+            encoded = valueChildContentToEncoded(change.beforeSchema, value)
+          } catch {
+            recordRefusal(refusals, change.fieldId, parentId, 'unreadable source')
+            continue
+          }
+          const converted = await convertedScalar(change, ctx, parent.workspaceId, encoded, refusals, parentId, value.content)
+          if (converted === undefined) continue
+          canonical = encodedToValueChildContent(change.schema, converted)
+        } else {
+          const conversion = convertValueChildContent(change.beforeSchema, change.schema, value)
+          if (conversion.outcome === 'unreadable') continue
+          canonical = conversion.content
+        }
         group.push({...value, content: canonical})
         if (value.content === canonical) continue
         // Re-stamp the reference columns from the REWRITTEN content, the same
@@ -889,14 +985,19 @@ const applyToParent = async (
       name: change.newName, value: projected, unset: projected === undefined,
     })
   }
-  const next = {...parent.properties}
+  // Resolving a reference can repair the very row whose properties are being migrated.
+  const current = changes.some(change => change.conversion) ? (await ctx.tx.get(parentId))! : parent
+  const next = {...current.properties}
   for (const name of oldNames) delete next[name]
   for (const assignment of assignments) {
     if (assignment.unset) delete next[assignment.name]
     else next[assignment.name] = assignment.value
   }
-  if (propertiesEqual(parent.properties, next)) return
-  await ctx.tx.update(parentId, {properties: next}, {skipMetadata: true})
+  if (propertiesEqual(current.properties, next)) return
+  const refs = changes.flatMap(change => change.conversion
+    ? projectedRefsForField({...current, properties: next}, change.schema, change.newName) : [])
+  const references = refs.length ? reconcileDerived({prior: current.references, recomputed: refs, keyOf: derivedRefKey}) : current.references
+  await ctx.tx.update(parentId, {properties: next, references}, {skipMetadata: true})
 }
 
 export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
@@ -1000,6 +1101,13 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       const consumed = await fieldIdsHeldByAnyBlock(
         ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
       )
+      for (const held of unfanoutable) {
+        if (!held.scalarName || consumed.has(held.fieldId)) continue
+        if (await ctx.db.getOptional(`SELECT 1 FROM blocks WHERE workspace_id = ? AND
+          json_type(properties_json, ${inlineJsonPath(held.scalarName)}) IS NOT NULL LIMIT 1`, [event.workspaceId])) {
+          consumed.add(held.fieldId)
+        }
+      }
       const blocking = unfanoutable.find(held => consumed.has(held.fieldId))
       if (blocking !== undefined) {
         // ONE refusal per transaction, whichever is found first — the user
@@ -1020,10 +1128,22 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     }
     if (changes.length === 0) return
-    const parentIds = await consumingParentIds(
+    const parents = new Set(await consumingParentIds(
       ctx.db, event.workspaceId, changes.map(c => c.fieldId),
-    )
-    if (parentIds.length === 0) return
+    ))
+    const refusals = new Map<string, ConversionRefusal>()
+    const conversions = changes.filter(change => change.conversion)
+    const childBacked = conversions.length > 0 && await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId)
+    for (const change of conversions) {
+      // Pre-children workspaces hold their editable values directly on the owner.
+      const bags = liveBagConsumers(event.workspaceId, change.oldName)
+      const rows = await ctx.db.getAll<{id: string}>(bags.sql, bags.params)
+      for (const row of rows) parents.add(row.id)
+      if (change.retainedDefault !== undefined) {
+        const converted = await convertedScalar(change, ctx, event.workspaceId, change.retainedDefault, refusals, change.fieldId)
+        if (converted !== undefined) await ctx.tx.setProperty(change.fieldId, propertyDefaultProp, converted)
+      }
+    }
     // This tx PARSED and BUILT each changing definition's row, so its field
     // rows are recognized without asking the resolver — whose tx-start registry
     // can still answer `definition-unavailable` for it while the projector has
@@ -1039,17 +1159,17 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     const lostParents = new Set<string>()
     const changingFieldIds = changes.map(change => change.fieldId)
     let done = 0
-    for (const parentId of parentIds) {
+    for (const parentId of parents) {
       await applyToParent(
-        ctx, parentId, changes, isFieldDefinition, lostByField, lostParents,
+        ctx, parentId, changes, isFieldDefinition, lostByField, lostParents, refusals, childBacked,
       )
       done += 1
       // No-op unless a gesture's run is open. The first report replaces
       // 'Starting…', every stride moves the bar, and the last keeps a total
       // that is not a multiple of the stride from sitting short while the
       // transaction commits.
-      if (done === 1 || done === parentIds.length || done % FANOUT_REPORT_STRIDE === 0) {
-        reportPropertyDefinitionFanout(changingFieldIds, done, parentIds.length)
+      if (done === 1 || done === parents.size || done % FANOUT_REPORT_STRIDE === 0) {
+        reportPropertyDefinitionFanout(changingFieldIds, done, parents.size)
       }
     }
     // REFUSE rather than commit a change that takes a value away. Every write
@@ -1068,6 +1188,15 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // to give it, and the blocks ride on `meta` so a surface can offer them:
     // "fix those values" is not actionable without them.
     for (const change of changes) {
+      const refusal = refusals.get(change.fieldId)
+      if (refusal) {
+        const reasons = [...refusal.reasons].map(([reason, count]) => `${count} ${count === 1 ? 'value' : 'values'} (${reason})`)
+        throw new ProcessorRejection(
+          `Cannot change "${change.oldName}". Fix ${reasons.join(', ')} before converting.`,
+          'property.definition-change.unconvertible',
+          {fieldId: change.fieldId, name: change.oldName, count: refusal.count, blockIds: [...refusal.blockIds]},
+        )
+      }
       const count = lostByField.get(change.fieldId) ?? 0
       if (count === 0) continue
       throw new ProcessorRejection(

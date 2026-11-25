@@ -7,6 +7,11 @@ import {
 import { actionsFacet, headerItemsFacet } from '@/extensions/core.js'
 import type { BlockRenderer } from '@/types.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { ChangeScope, codecs } from '@/data/api'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
+import { selectablePresets } from '@/components/propertyEditors/selectablePresets'
+import { readValuePresets, resolveValuePresetPresentation } from '@/data/valuePresetRegistry'
 import { typeSeedsFacet } from '@/data/facets.js'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
@@ -23,6 +28,26 @@ import {
 } from '../index.ts'
 
 describe('dailyNotesPlugin', () => {
+  it('offers Date separately from Date & time and specializes scalar daily-note references', () => {
+    const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension, kernelValuePresetsExtension, dailyNotesPlugin({repo: fakeRepo}),
+    ])
+    const presets = readValuePresets(runtime)
+    const choices = selectablePresets(presets)
+    expect(choices.find(choice => choice.id === 'day')?.label).toBe('Date')
+    expect(choices.find(choice => choice.id === 'date')?.label).toBe('Date & time')
+
+    const presentationFor = (codec: ReturnType<typeof codecs.ref> | ReturnType<typeof codecs.refList>) =>
+      resolveValuePresetPresentation(presets, {
+        codec, name: 'appointment', defaultValue: '', changeScope: ChangeScope.BlockDefault,
+      })?.id
+    expect(presentationFor(codecs.ref({targetTypes: [DAILY_NOTE_TYPE]}))).toBe('day')
+    expect(presentationFor(codecs.ref({targetTypes: [DAILY_NOTE_TYPE, 'page']}))).toBe('ref')
+    expect(presentationFor(codecs.ref())).toBe('ref')
+    expect(presentationFor(codecs.refList({targetTypes: [DAILY_NOTE_TYPE]}))).toBe('refList')
+  })
+
   it('contributes the daily-note TypeContribution through the app-side plugin', () => {
     // AppRuntimeProvider rebuilds the FacetRuntime from
     // `staticAppExtensions` alone (NOT staticDataExtensions) and then

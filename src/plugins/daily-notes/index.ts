@@ -46,6 +46,8 @@
  */
 import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/facets/facet.js'
+import { defineSplitPreset } from '@/data/api'
+import { valuePresetPresentationsFacet } from '@/data/facets'
 import { systemToggle } from '@/facets/togglable.js'
 import {
   actionContextsFacet,
@@ -67,6 +69,8 @@ import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
+import { DayPropertyEditor } from './DayPropertyEditor'
+import { dayValuePresetCore, isDayReferenceSchema } from './schema'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
 import { dateNavDecoratorContribution } from './DateNavDecorator.tsx'
 import { openDialog } from '@/utils/dialogs.js'
@@ -147,6 +151,15 @@ export const openDailyNotePickerAction = (
   },
 })
 
+const {presentation: dayPresentation} = defineSplitPreset(dayValuePresetCore, {
+  id: dayValuePresetCore.id,
+  label: 'Date',
+  Glyph: CalendarDays,
+  Editor: DayPropertyEditor,
+  InlineEditor: DayPropertyEditor,
+  matchesSchema: isDayReferenceSchema,
+})
+
 // Factory rather than a const because the action handlers close over
 // `repo` (they call `repo.activeWorkspaceId` and `getOrCreateDailyNote`
 // without going through React context). Same shape as
@@ -173,6 +186,7 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     description: 'Date-keyed pages, the workspace-landing resolver that opens today on app open, and the prev/next/today shortcuts.',
   }).of([
     dailyNotesDataExtension,
+    valuePresetPresentationsFacet.of(dayPresentation, {source: 'daily-notes'}),
     dialogAppMountExtension,
     appMountsFacet.of(dateScrubOverlayMount, {source: 'daily-notes'}),
     appMountsFacet.of(dateKeyboardScrubControllerMount, {source: 'daily-notes'}),

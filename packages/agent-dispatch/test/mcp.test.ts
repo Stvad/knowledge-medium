@@ -114,7 +114,7 @@ beforeEach(async () => {
         postedCommands.push({body, authorization: req.headers.authorization})
         return send(202, {id: 'command-1'})
       }
-      if (req.method === 'GET' && req.url === '/runtime/commands/command-1') {
+      if (req.method === 'GET' && new URL(req.url!, 'http://localhost').pathname === '/runtime/commands/command-1') {
         return send(200, {
           id: 'command-1',
           status: 'completed',

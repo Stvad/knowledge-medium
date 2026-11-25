@@ -44,6 +44,10 @@
  * afterCommit schedule all commit together).
  */
 
+import type { AnyPropertySchema } from '@/data/api'
+import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import { buildSchemaOrNull } from '@/data/userSchemasService'
+import { presetIdProp } from '@/data/properties'
 import { decodeRowProperty } from '@/data/rowProperty'
 import { z } from 'zod'
 import {
@@ -530,6 +534,29 @@ const planNeedsWrite = (plan: SourcePlan): boolean =>
   || plan.aliasesToEnsure.length > 0
   || plan.datesToEnsure.length > 0
 
+/** The registry was captured before the edit. Derive property references
+ *  from the committed definition, including on undo and redo. */
+const committedReferenceSchemas = (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
+  const replacements: Array<{previousName: string; schema: AnyPropertySchema}> = []
+  for (const {before, after} of event.changedRows) {
+    if (!before || !after || before.properties[presetIdProp.name] === after.properties[presetIdProp.name]) continue
+    const previous = parsePropertyDefinitionMetadata(before)
+    const next = parsePropertyDefinitionMetadata(after)
+    if (!previous || !next || next.seedKey) continue
+    const definitions = ctx.repo.propertyDefinitionsFor(after.workspaceId)
+    const registered = definitions?.definitionsByFieldId.get(after.id)
+    if (!registered || definitions?.definitionsByName.get(registered.name)?.[0]?.fieldId !== after.id) continue
+    const schema = buildSchemaOrNull(after, ctx.repo.valuePresetCores, next)
+    if (schema) replacements.push({previousName: previous.name, schema})
+  }
+  if (!replacements.length) return ctx.propertySchemas
+  const schemas = new Map(ctx.propertySchemas)
+  // Names may swap in a single edit. Vacate all old names before assigning any new one.
+  for (const {previousName} of replacements) schemas.delete(previousName)
+  for (const {schema} of replacements) schemas.set(schema.name, schema)
+  return schemas
+}
+
 export const parseReferencesProcessor = definePostCommitProcessor({
   name: PARSE_REFERENCES_PROCESSOR,
   // `deleted` is watched so a RESTORE re-derives references: tx.update
@@ -554,13 +581,14 @@ export const parseReferencesProcessor = definePostCommitProcessor({
     // Read phase — outside any tx; bare-connection reads, no writer
     // contention. Each plan describes what the write phase needs to do
     // (or nothing, if the parse came out idempotent).
+    const planContext = {...ctx, propertySchemas: committedReferenceSchemas(event, ctx)}
     const plans: SourcePlan[] = []
     for (const row of event.changedRows) {
       // Skip hard-deletes (after === null) — nothing to parse.
       if (row.after === null) continue
       // Skip soft-deletes (after.deleted === true) — same reason.
       if (row.after.deleted) continue
-      plans.push(await buildSourcePlan(ctx, row.after, row.before))
+      plans.push(await buildSourcePlan(planContext, row.after, row.before))
     }
     if (!plans.some(planNeedsWrite)) return
 

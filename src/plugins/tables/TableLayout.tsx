@@ -5,10 +5,12 @@ import {
 import { BlockChildren, BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
+import { ReferenceLink } from '@/components/references/ReferenceLink'
+import { resolveAndWriteProperty } from '@/components/propertyPanel/actions'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { PropertyDisplayScopeContext, PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
-import { type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
+import { decodeRefId, isRefCodec, type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
 import { isPropertyValueEditable } from '@/data/internals/propertyValueEdits'
@@ -18,6 +20,8 @@ import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
 import { useChildIdsForMode, useContent, useHandle, useWorkspaceId } from '@/hooks/block'
+import { StoredDayReference } from '@/plugins/daily-notes/DayPropertyEditor'
+import { isDayReferenceSchema } from '@/plugins/daily-notes/schema'
 import { isSingleValueProperty, resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
@@ -27,11 +31,13 @@ import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, LIST_CONTEXT_KEY, ROW_CONTEXT_KEY, 
 import { ColumnHeaders, ColumnToolbar, type ResizePreview } from './ColumnHeaders'
 import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
 import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
+import { useTableQueryFacets, type TableQueryFacets } from './query/registrations'
 import { useTableQuery, type TableQuery } from './query/source'
-import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
+import { columnSortKeys, sortOrder, useViewSort, writeSort, type ViewSort } from './sort'
 import { notesAmong } from './childrenViews'
 import { registerGrid, tableRenderScopeId } from './registry'
 import { useIsMobile } from '@/utils/react'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete'
 import { GUTTER_VARIABLE, MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, gutterWidth } from './rowGutter'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
@@ -84,15 +90,36 @@ const formatStored = (value: unknown): string =>
     : typeof value === 'object' ? JSON.stringify(value)
     : String(value)
 
-/** The value as `properties_json` stores it, for cells that draw no rows. */
-const StoredValue = ({properties, schema}: {properties: BlockData['properties'] | undefined; schema: AnyPropertySchema}) => {
-  const text = properties ? formatStored(storedPropertyValue(properties, schema.name)) : ''
+const StoredReference = ({row, targetId}: {row: Block; targetId: string}) => {
+  const workspaceId = useWorkspaceId(row)
+  const target = row.repo.block(targetId)
+  const label = useHandle(target, {selector: data => data?.workspaceId === workspaceId
+    ? data.content.trim() || labelForBlockData(data, 'Untitled block')
+    : null})
+  return label ? <div className="truncate"><ReferenceLink block={target}>{label}</ReferenceLink></div>
+    : <span className="text-muted-foreground">Unavailable reference</span>
+}
+
+/** The value from the property bag, for cells that draw no value rows. */
+const StoredValue = ({row, properties, schema}: {
+  row: Block; properties: BlockData['properties'] | undefined; schema: AnyPropertySchema
+}) => {
+  const stored = properties && storedPropertyValue(properties, schema.name)
+  const targetId = isRefCodec(schema.codec) ? decodeRefId(schema.codec, stored) : undefined
+  if (targetId && isDayReferenceSchema(schema)) {
+    return <StoredDayReference block={row} targetId={targetId}
+      resolveAndChange={!row.repo.isReadOnly && isPropertyValueEditable(schema)
+        ? resolve => resolveAndWriteProperty(row, schema, resolve, {expectedEncoded: stored})
+        : undefined}/>
+  }
+  if (targetId) return <StoredReference row={row} targetId={targetId}/>
+  const text = formatStored(stored)
   return text ? <span className="block truncate text-muted-foreground" title={text}>{text}</span> : null
 }
 
 const ReadOnlyCell = ({row, schema}: {row: Block; schema: AnyPropertySchema}) => {
   const properties = useHandle(row, {selector: data => data?.properties})
-  return <StoredValue properties={properties} schema={schema}/>
+  return <StoredValue row={row} properties={properties} schema={schema}/>
 }
 
 /** The block context a cell draws its blocks in: rooted at `scopeRootId`, out
@@ -123,7 +150,7 @@ const EditableCell = ({row, fieldId, schema}: {row: Block; fieldId: string; sche
   }})
   if (!cell) return null
   const {values} = cell
-  if (values.length === 0) return <StoredValue properties={cell.properties} schema={schema}/>
+  if (values.length === 0) return <StoredValue row={row} properties={cell.properties} schema={schema}/>
   // A list's members are drawn as the outline draws a field row's children:
   // bulleted blocks that split, merge, nest and show their own children. The
   // field row is their scope root and is not drawn (see `./keys`).
@@ -351,12 +378,13 @@ interface GridProps {
  *  never flashes as empty. */
 const TableGrid = (props: GridProps) => {
   const viewIds = useViewIds(props.host, props.workspaceId)
-  const query = useTableQuery(props.host, props.workspaceId)
+  const facets = useTableQueryFacets(props.workspaceId)
+  const query = useTableQuery(props.host, props.workspaceId, facets)
   if (viewIds === undefined || query === undefined) return null
   if (viewIds.length === 0) return <p className="py-1 text-sm text-muted-foreground">
     This table has no view. Show it as an outline and turn it into a table again to add one.
   </p>
-  return <TableView {...props} viewIds={viewIds} query={query}/>
+  return <TableView {...props} viewIds={viewIds} query={query} facets={facets}/>
 }
 
 const NO_COLUMNS: readonly TableColumn[] = []
@@ -377,13 +405,13 @@ const useColumnDefinitions = (repo: Block['repo'], workspaceId: string, columns:
 type ColumnSchema = AnyPropertySchema | undefined
 
 /** Hidden columns are drawn nowhere but in the toolbar, which shows them again. */
-const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQuery | null}) => {
+const TableView = ({facets, ...props}: GridProps & {viewIds: readonly string[]; query: TableQuery | null; facets: TableQueryFacets}) => {
   const viewId = props.viewIds[0]!
   const all = useColumns(props.host, props.workspaceId, viewId)
   const {schemas, names} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
   const sort = useViewSort(props.host.repo.block(viewId))
-  const fieldNames = useQueryableFieldNames(props.host.repo, props.workspaceId)
-  const order = useMemo(() => sortOrder(sort, all ?? NO_COLUMNS, schemas, fieldNames), [all, fieldNames, schemas, sort])
+  const sortKeys = columnSortKeys(props.host.repo, props.workspaceId, schemas, facets)
+  const order = sortOrder(sort, all ?? NO_COLUMNS, sortKeys)
   const split = useMemo(() => {
     const shown = {columns: [] as TableColumn[], schemas: [] as ColumnSchema[], names: [] as string[]}
     const hidden = {columns: [] as TableColumn[], names: [] as string[]}
@@ -407,14 +435,15 @@ const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQ
     hidden={split.hidden.columns} hiddenNames={split.hidden.names}
     hasContentColumn={all.some(column => column.fieldId === null)}/>
   if (split.shown.columns.length === 0) return <><NoColumns/>{toolbar}</>
+  const sortable = all.flatMap((column, index) => column.hidden ? [] : [sortKeys[index] !== undefined])
   return <TableBody {...props} columns={split.shown.columns} schemas={split.shown.schemas}
-    names={split.shown.names} toolbar={toolbar} viewId={viewId} sort={sort} order={order}/>
+    names={split.shown.names} toolbar={toolbar} viewId={viewId} sort={order && sort} order={order} sortable={sortable}/>
 }
 
 const NoColumns = () => <p className="py-1 text-sm text-muted-foreground">This table shows no columns.</p>
 
 const TableBody = ({
-  host, renderScopeId, parentRenderScopeId, workspaceId, query, columns, schemas, names, toolbar, viewId, viewIds, sort, order,
+  host, renderScopeId, parentRenderScopeId, workspaceId, query, columns, schemas, names, toolbar, viewId, viewIds, sort, order, sortable,
 }: GridProps & {
   query: TableQuery | null
   viewIds: readonly string[]
@@ -425,6 +454,7 @@ const TableBody = ({
   viewId: string
   sort: ViewSort | undefined
   order: TypedBlockQuery['order'] | undefined
+  sortable: readonly boolean[]
 }) => {
   const uiStateBlock = useUIStateBlock()
   const repo = host.repo
@@ -469,7 +499,8 @@ const TableBody = ({
 
   useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setQuery(query?.parsed.terms ?? null) }, [controller, query])
-  useLayoutEffect(() => { controller.setSorted(order !== undefined) }, [controller, order])
+  const sorted = order !== undefined
+  useLayoutEffect(() => { controller.setSorted(sorted) }, [controller, sorted])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => {
     controller.setSurfaces(rowsDisplayScope, outlineSurfaceOf({
@@ -519,8 +550,6 @@ const TableBody = ({
   const contentColumn = columns.findIndex(column => column.fieldId === null)
   const table = useMemo<TableState>(() => ({controller, hasQuery: query !== null, columns, schemas, editable, contentColumn, unmatched, rows: rowSet}),
     [controller, query, columns, schemas, editable, contentColumn, unmatched, rowSet])
-  const fieldNames = useQueryableFieldNames(repo, workspaceId)
-  const sortable = useMemo(() => schemas.map(schema => isSortable(schema, fieldNames)), [fieldNames, schemas])
   const onSort = useCallback((next: ViewSort | undefined) => {
     void writeSort(repo, viewId, next).catch(error => console.error('[tables] sort failed', error))
   }, [repo, viewId])
