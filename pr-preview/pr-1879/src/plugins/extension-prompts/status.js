@@ -1,1 +1,1 @@
-export{ML as extensionPromptDiagnosticContribution,NL as extensionPromptDiagnosticSource}from"../../../chunks/app-8QyiJOIf.js";
+export{ML as extensionPromptDiagnosticContribution,NL as extensionPromptDiagnosticSource}from"../../../chunks/app-gDdb_EjD.js";

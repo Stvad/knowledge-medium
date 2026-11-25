@@ -1,1 +1,1 @@
-export{Pft as deriveWorkspaceIdNamespace}from"../../../chunks/app-8QyiJOIf.js";
+export{Pft as deriveWorkspaceIdNamespace}from"../../../chunks/app-gDdb_EjD.js";

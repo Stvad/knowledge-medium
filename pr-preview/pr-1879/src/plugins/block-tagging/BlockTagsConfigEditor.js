@@ -1,1 +1,1 @@
-export{op as BlockTagsConfigEditor}from"../../../chunks/app-8QyiJOIf.js";
+export{op as BlockTagsConfigEditor}from"../../../chunks/app-gDdb_EjD.js";

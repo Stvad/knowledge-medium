@@ -1,1 +1,1 @@
-export{KO as usePromotableBreadcrumb}from"../../../chunks/app-8QyiJOIf.js";
+export{KO as usePromotableBreadcrumb}from"../../../chunks/app-gDdb_EjD.js";

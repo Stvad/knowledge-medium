@@ -1,1 +1,1 @@
-export{Ns as queryResolver,Ps as useQueryFieldId,Fs as useTableQuery}from"../../../../chunks/app-8QyiJOIf.js";
+export{Ns as queryResolver,Ps as useQueryFieldId,Fs as useTableQuery}from"../../../../chunks/app-gDdb_EjD.js";

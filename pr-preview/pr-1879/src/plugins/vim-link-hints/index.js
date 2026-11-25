@@ -1,1 +1,1 @@
-export{eD as vimLinkHintsPlugin}from"../../../chunks/app-8QyiJOIf.js";
+export{eD as vimLinkHintsPlugin}from"../../../chunks/app-gDdb_EjD.js";

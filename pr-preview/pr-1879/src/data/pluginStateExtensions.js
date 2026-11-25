@@ -1,1 +1,1 @@
-export{p3 as pluginPrefsExtension,m3 as pluginUIStateExtension}from"../../chunks/app-8QyiJOIf.js";
+export{p3 as pluginPrefsExtension,m3 as pluginUIStateExtension}from"../../chunks/app-gDdb_EjD.js";

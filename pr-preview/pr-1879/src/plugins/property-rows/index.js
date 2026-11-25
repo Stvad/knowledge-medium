@@ -1,1 +1,1 @@
-export{uc as propertyRowsPlugin}from"../../../chunks/app-8QyiJOIf.js";
+export{uc as propertyRowsPlugin}from"../../../chunks/app-gDdb_EjD.js";

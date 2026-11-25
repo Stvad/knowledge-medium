@@ -1,1 +1,1 @@
-export{WL as appUpdatePromptExtension}from"../../../chunks/app-8QyiJOIf.js";
+export{WL as appUpdatePromptExtension}from"../../../chunks/app-gDdb_EjD.js";

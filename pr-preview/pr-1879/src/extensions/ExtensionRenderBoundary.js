@@ -1,1 +1,1 @@
-export{uU as ExtensionRenderBoundary}from"../../chunks/app-8QyiJOIf.js";
+export{uU as ExtensionRenderBoundary}from"../../chunks/app-gDdb_EjD.js";

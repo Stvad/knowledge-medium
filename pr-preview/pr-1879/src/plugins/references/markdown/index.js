@@ -1,1 +1,1 @@
-export{NS as referencesMarkdownExtension}from"../../../../chunks/app-8QyiJOIf.js";
+export{NS as referencesMarkdownExtension}from"../../../../chunks/app-gDdb_EjD.js";

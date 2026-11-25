@@ -1,1 +1,1 @@
-export{tG as typePropertyGroups}from"../../chunks/app-8QyiJOIf.js";
+export{tG as typePropertyGroups}from"../../chunks/app-gDdb_EjD.js";

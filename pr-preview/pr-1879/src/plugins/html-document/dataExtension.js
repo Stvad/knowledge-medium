@@ -1,1 +1,1 @@
-export{KQ as htmlDocumentDataExtension}from"../../../chunks/app-8QyiJOIf.js";
+export{KQ as htmlDocumentDataExtension}from"../../../chunks/app-gDdb_EjD.js";

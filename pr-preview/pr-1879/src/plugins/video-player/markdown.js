@@ -1,1 +1,1 @@
-export{sE as videoPlayerMarkdownExtension}from"../../../chunks/app-8QyiJOIf.js";
+export{sE as videoPlayerMarkdownExtension}from"../../../chunks/app-gDdb_EjD.js";

@@ -1,1 +1,1 @@
-export{ZI as exampleExtensions,QI as insertExampleExtensionsUnder}from"../../chunks/app-8QyiJOIf.js";
+export{ZI as exampleExtensions,QI as insertExampleExtensionsUnder}from"../../chunks/app-gDdb_EjD.js";

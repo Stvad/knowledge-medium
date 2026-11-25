@@ -1,1 +1,1 @@
-export{_H as useShortcutSurfaceActivations}from"../../chunks/app-8QyiJOIf.js";
+export{_H as useShortcutSurfaceActivations}from"../../chunks/app-gDdb_EjD.js";

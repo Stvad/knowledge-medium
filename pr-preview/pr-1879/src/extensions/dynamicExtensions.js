@@ -1,1 +1,1 @@
-export{kR as dynamicExtensionsExtension}from"../../chunks/app-8QyiJOIf.js";
+export{kR as dynamicExtensionsExtension}from"../../chunks/app-gDdb_EjD.js";

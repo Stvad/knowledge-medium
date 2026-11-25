@@ -1,1 +1,1 @@
-export{XP as useCommandPaletteActions}from"../../../chunks/app-8QyiJOIf.js";
+export{XP as useCommandPaletteActions}from"../../../chunks/app-gDdb_EjD.js";

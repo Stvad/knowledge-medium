@@ -1,1 +1,1 @@
-export{n4 as contributorsDataExtension}from"../../../chunks/app-8QyiJOIf.js";
+export{n4 as contributorsDataExtension}from"../../../chunks/app-gDdb_EjD.js";

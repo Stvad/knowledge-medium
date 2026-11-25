@@ -1,1 +1,1 @@
-export{$I as insertDrawnBlock}from"../../chunks/app-8QyiJOIf.js";
+export{$I as insertDrawnBlock}from"../../chunks/app-gDdb_EjD.js";

@@ -1,1 +1,1 @@
-export{SC as useIsReadOnly}from"../../chunks/app-8QyiJOIf.js";
+export{SC as useIsReadOnly}from"../../chunks/app-gDdb_EjD.js";

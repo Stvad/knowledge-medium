@@ -1,1 +1,1 @@
-export{AL as ExtensionPromptSurface,jL as extensionPromptsExtension}from"../../../chunks/app-8QyiJOIf.js";
+export{AL as ExtensionPromptSurface,jL as extensionPromptsExtension}from"../../../chunks/app-gDdb_EjD.js";

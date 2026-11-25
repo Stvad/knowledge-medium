@@ -1,1 +1,1 @@
-export{ZC as richPastePlugin}from"../../../chunks/app-8QyiJOIf.js";
+export{ZC as richPastePlugin}from"../../../chunks/app-gDdb_EjD.js";
