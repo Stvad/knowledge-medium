@@ -707,3 +707,19 @@ it('retyping authored named text into a day reuses its long wikilink', async () 
   expect(await readValueChild('owner')).toMatchObject({content: `[[${NEW_DAY_TITLE}]]`, reference_target_id: note.id})
   expect((await storedProperties('owner'))[NAME]).toBe(note.id)
 })
+
+it('counts a stored day awaiting its alias when checking for lossy retyping', async () => {
+  const {repo, schema} = await childBackedDay(['owner'])
+  const note = await getOrCreateDailyNote(repo, WS, NEW_DAY)
+  await repo.tx(tx => tx.setProperty('owner', schema, note.id), SCOPE)
+  await repo.awaitProcessors()
+  const child = (await readValueChild('owner'))!
+  await testDb.db.writeTransaction(async db => {
+    await db.execute('UPDATE blocks SET properties_json = json_remove(properties_json, ?) WHERE id = ?',
+      [`$."${aliasesProp.name}"`, note.id])
+    await db.execute('UPDATE blocks SET reference_target_id = NULL WHERE id = ?', [child.id])
+  })
+  expect((await storedProperties('owner'))[NAME]).toBe(note.id)
+  expect(await readValueChild('owner')).toEqual({...child, reference_target_id: null})
+  await expectRefusalPreservingRows(repo, () => repo.tx(tx => tx.setProperty(DEFINITION, presetIdProp, 'number'), SCOPE), /lose|loss|unconvertible/i)
+})

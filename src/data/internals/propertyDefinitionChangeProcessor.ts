@@ -785,6 +785,7 @@ const valuesLostBy = (
   change: DefinitionChange,
   perFieldRow: readonly (readonly BlockData[])[],
   projected: unknown,
+  stored: unknown,
 ): number => {
   // A SHORT-CIRCUIT, not a guard: deleting it changes no outcome, because a
   // rename re-spells nothing and both sides then project identically. It saves
@@ -793,7 +794,7 @@ const valuesLostBy = (
   if (!change.encodingChanged) return 0
   const held = projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
     change.beforeSchema,
-    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow),
+    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow), stored,
   ))
   return Math.max(0, held - projectedValueCount(change.schema, projected))
 }
@@ -975,9 +976,10 @@ const applyToParent = async (
     // first-parseable-wins read here would publish one member and let
     // MATERIALIZE reap the rest.
     const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
+    const stored = storedPropertyValue(parent.properties, change.oldName)
     const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents,
-      change.encodingChanged ? undefined : storedPropertyValue(parent.properties, change.oldName))
-    const lost = valuesLostBy(change, perFieldRow, projected)
+      change.encodingChanged ? undefined : stored)
+    const lost = valuesLostBy(change, perFieldRow, projected, stored)
     if (lost > 0) {
       lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)
       lostParents.add(parentId)
