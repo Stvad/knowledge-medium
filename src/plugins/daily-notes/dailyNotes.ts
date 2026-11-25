@@ -1,11 +1,11 @@
 import { ChangeScope, propertyValue, type AnyPropertyAssignment, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
-import { requireTypeContribution } from '@/data/typeTagger'
+import { prepareTypeTags } from '@/data/typeTagger'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
-import { aliasesProp, getAliases, hasBlockType, typesProp } from '@/data/properties'
+import { aliasesProp, getAliases, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock, partitionClaimableAliases, restorePropertiesStrippingAliases } from '@/data/targets'
@@ -95,6 +95,9 @@ const includesAll = (existing: readonly string[], expected: readonly string[]): 
 const appendMissing = (held: readonly string[], required: readonly string[]): string[] =>
   [...held, ...required.filter(item => !held.includes(item))]
 
+const canExtendLiveAliases = (held: readonly string[], claimable: readonly string[]): boolean =>
+  claimable.length > held.length && includesAll(claimable, held)
+
 /** Get-or-create the workspace's Journal page.
  *
  *  The Journal is a kernel page — deterministic id from `workspaceId`, a
@@ -151,7 +154,9 @@ const noteIsReady = (row: BlockData, shape: DailyNoteShape, parentId: string | n
 
 /** A property write may precede eager Journal bootstrap. A note can live at
  *  the root until navigation files it. Minting the shared Journal inside the
- *  property edit would let undo remove a container used by other devices. */
+ *  property edit would let undo remove a container used by other devices.
+ *  Undo can tombstone a newly created note with later synced children; reopening the day reveals them.
+ *  When a user page owns both date aliases, wiki links open it and day references open the separate canonical note. */
 export const getOrCreateDailyNoteInTx = async (
   tx: Tx, snapshot: TypeRegistrySnapshot, workspaceId: string, iso: string,
 ): Promise<string> => {
@@ -169,7 +174,6 @@ export const getOrCreateDailyNoteInTx = async (
       throw new Error(`Cannot use the daily note for ${iso}: its stored date differs`)
     }
   }
-  // Undo of a new note can hide later synced children until the note is reopened.
   if (existing) {
     if (existing.deleted) {
       const properties = await restorePropertiesStrippingAliases(tx, id)
@@ -181,20 +185,15 @@ export const getOrCreateDailyNoteInTx = async (
   } else {
     await tx.create({id, workspaceId, parentId, orderKey, content: title}, {systemMint: true})
   }
-  requireTypeContribution(snapshot.types, PAGE_TYPE)
-  requireTypeContribution(snapshot.types, DAILY_NOTE_TYPE)
+  const tags = (await prepareTypeTags(tx, snapshot, id, [PAGE_TYPE, DAILY_NOTE_TYPE]))!
   const heldAliases = existing ? decodeRowProperty(existing, aliasesProp) : []
-  const heldTypes = existing ? decodeRowProperty(existing, typesProp) : []
   const live = existing && !existing.deleted
   const set: AnyPropertyAssignment[] = []
-  if (!live || !includesAll(heldTypes, [PAGE_TYPE, DAILY_NOTE_TYPE])) {
-    set.push(propertyValue(typesProp, appendMissing(heldTypes, [PAGE_TYPE, DAILY_NOTE_TYPE])))
-  }
+  if (!live || tags.changed) set.push(tags.assignment)
   if (!live || !includesAll(heldAliases, aliases)) {
-    // If another page owns both date aliases, wiki links open that page and typed day refs open this alias-less note.
     const wanted = appendMissing(heldAliases, aliases)
     const claimable = await partitionClaimableAliases(tx, id, wanted, workspaceId)
-    if (!live || (claimable.length > heldAliases.length && includesAll(claimable, heldAliases))) {
+    if (!live || canExtendLiveAliases(heldAliases, claimable)) {
       set.push(propertyValue(aliasesProp, claimable))
     }
   }
@@ -255,7 +254,7 @@ export const isValidDateAlias = (alias: string): boolean => {
   return new Date(ms).toISOString().slice(0, 10) === alias
 }
 
-/** A valid ISO alias also identifies a legacy daily note that predates date anchors. */
+/** Legacy notes can have only an ISO alias. Validate the calendar day so February 30 cannot roll over to March 2. */
 export const dailyNoteIsoFromAliases = (
   aliases: readonly string[],
 ): string | null => aliases.find(isValidDateAlias) ?? null
