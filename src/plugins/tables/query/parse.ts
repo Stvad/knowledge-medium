@@ -502,7 +502,7 @@ const readCompare = (reader: Reader, property: QueryProperty, op: CompareOp, sta
   const capability = operandCapability(schema)
   if (!capability) reader.fail(start, `${property.name} can only be tested for presence: ${property.name} or !${property.name}`)
   if (!codec.where && !equality) reader.fail(start, `${property.name} is a list; test a member with = or !=`)
-  if (!equality && !reference && !isComparable(schema)) reader.fail(start, `${property.name} compares with = or != only`)
+  if (!equality && !isComparable(schema)) reader.fail(start, `${property.name} compares with = or != only`)
   if (capabilityValue(capability, value) === undefined) reader.fail(operandStart, operandProblem(property.name, schema, value))
   return {kind: 'compare', property, op, operand: {kind: 'text', value}, ...(target && {target}), start, end: reader.i}
 }
