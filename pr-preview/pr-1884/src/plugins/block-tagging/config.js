@@ -1,1 +1,1 @@
-export{fp as blockTaggingPrefsType,pp as blockTagsConfigCodec,mp as blockTagsConfigPresetCore,hp as blockTagsConfigProp,gp as isValidTagName,_p as normalizeBlockTagsConfig,vp as selectableTagNames,yp as tagNameIssue}from"../../../chunks/app-B3Pv9BLe.js";
+export{ap as blockTaggingPrefsType,op as blockTagsConfigCodec,sp as blockTagsConfigPresetCore,cp as blockTagsConfigProp,lp as isValidTagName,up as normalizeBlockTagsConfig,dp as selectableTagNames,fp as tagNameIssue}from"../../../chunks/app-DXHTLgoZ.js";

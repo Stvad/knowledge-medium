@@ -1,1 +1,1 @@
-export{Rz as usePanelLayoutProjection}from"../../chunks/app-B3Pv9BLe.js";
+export{Wz as usePanelLayoutProjection}from"../../chunks/app-DXHTLgoZ.js";

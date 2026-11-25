@@ -1,1 +1,1 @@
-export{xB as ExtensionLoadErrorStore,SB as ExtensionLoadErrorsProvider,CB as useExtensionLoadError,wB as useExtensionLoadErrors}from"../../chunks/app-B3Pv9BLe.js";
+export{DB as ExtensionLoadErrorStore,OB as ExtensionLoadErrorsProvider,kB as useExtensionLoadError,AB as useExtensionLoadErrors}from"../../chunks/app-DXHTLgoZ.js";
