@@ -1,0 +1,1 @@
+export{qL as appUpdatePromptExtension}from"../../../chunks/app-B4ekowXz.js";

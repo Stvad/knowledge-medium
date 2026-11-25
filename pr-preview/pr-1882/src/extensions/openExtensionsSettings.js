@@ -1,0 +1,1 @@
+export{Hz as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,Uz as openExtensionsSettings}from"../../chunks/app-B4ekowXz.js";

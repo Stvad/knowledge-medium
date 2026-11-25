@@ -1,0 +1,1 @@
+export{t0 as annotationsDataExtension}from"../../../chunks/app-B4ekowXz.js";

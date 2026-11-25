@@ -1,0 +1,1 @@
+export{mtt as loadTypeIdsByBlock}from"../../chunks/app-B4ekowXz.js";

@@ -1,0 +1,1 @@
+export{wC as useIsReadOnly}from"../../chunks/app-B4ekowXz.js";
