@@ -1,1 +1,0 @@
-export{M4 as RAW_CHARACTER_COUNT_PROFILE_ID,N4 as WORDS_COUNT_PROFILE_ID,P4 as charLimitProp,F4 as charProfileProp,I4 as charScopeProp}from"../../../chunks/app-DKd4PQgU.js";

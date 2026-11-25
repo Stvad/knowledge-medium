@@ -1,1 +1,0 @@
-export{h4 as CONTRIBUTOR_TYPE,g4 as attributionCreatorsProp,_4 as attributionEditorsProp,v4 as contributorForProp,y4 as contributorKindOf,b4 as contributorKindProp,x4 as contributorProfileType,S4 as contributorRoleProp}from"../../../chunks/app-DKd4PQgU.js";

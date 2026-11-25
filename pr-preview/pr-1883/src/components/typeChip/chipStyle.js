@@ -1,1 +1,0 @@
-export{DI as chipStyle}from"../../../chunks/app-DKd4PQgU.js";
