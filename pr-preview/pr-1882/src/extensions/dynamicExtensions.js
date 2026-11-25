@@ -1,1 +1,0 @@
-export{MR as dynamicExtensionsExtension}from"../../chunks/app-B4ekowXz.js";
