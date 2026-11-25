@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import type { TypeContribution } from '@/data/api'
 import type { Block } from '@/data/block'
+import { refTargetComparisonFor } from '@/data/comparableRefTarget'
 import { KERNEL_QUERYABLE_FIELDS, queryableFieldsFacet } from '@/data/facets'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
@@ -31,6 +32,7 @@ export const queryResolver = (
   return {
     propertyByName: name => propertyOf(definitions, definitions?.definitionsByName.get(name)?.[0]?.fieldId),
     propertyById: fieldId => propertyOf(definitions, fieldId),
+    refValueTarget: refTargetComparisonFor(repo, workspaceId),
     typeByLabel: label => {
       const wanted = label.toLowerCase()
       for (const type of types.values()) if (labelOf(type).toLowerCase() === wanted) return {id: type.id, label: labelOf(type)}

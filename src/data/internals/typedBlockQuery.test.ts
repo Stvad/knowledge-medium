@@ -304,6 +304,63 @@ describe('typed queries for table rows', () => {
     expect(await env.repo.query.typedBlockCount(desc).load()).toBe(ascending.length)
   })
 
+  it('sorts by a single ref target property with deterministic ties and missing targets last', async () => {
+    await create({id: 'parent'})
+    await create({id: 'ten', properties: {priority: 10}})
+    await create({id: 'two', properties: {priority: 2}})
+    await create({id: 'deleted', properties: {priority: 0}})
+    await create({id: 'foreign', workspaceId: OTHER_WS, properties: {priority: 0}})
+    await create({id: 'malformed'})
+    await env.h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({priority: '0'}), 'malformed'],
+    ))
+    await env.repo.tx(tx => tx.delete('deleted'), {scope: ChangeScope.BlockDefault})
+
+    for (const [id, reviewer] of [
+      ['z-ten', 'ten'], ['b-two', 'two'], ['c-two', 'two'], ['a-deleted', 'deleted'],
+      ['a-dangling', 'dangling'], ['a-foreign', 'foreign'], ['a-malformed', 'malformed'],
+    ]) {
+      await create({id, parentId: 'parent', properties: {reviewer}})
+    }
+    await create({id: 'a-unset', parentId: 'parent'})
+
+    const query = {workspaceId: WS, parentId: 'parent'}
+    const order = {property: reviewerProp.name, target: priorityProp.name} as const
+    const ascending = {...query, order: {...order, direction: 'asc'}} as const
+    const descending = {...query, order: {...order, direction: 'desc'}} as const
+    const missing = ['a-dangling', 'a-deleted', 'a-foreign', 'a-malformed', 'a-unset']
+    expect(await env.repo.query.typedBlockIds(ascending).load()).toEqual(['b-two', 'c-two', 'z-ten', ...missing])
+    expect(ids(await env.repo.query.typedBlocks(descending).load())).toEqual(['z-ten', 'b-two', 'c-two', ...missing])
+    expect(await env.repo.query.typedBlockIds({...ascending, limit: 1}).load()).toEqual(['b-two'])
+    expect(await env.repo.query.typedBlockCount(descending).load()).toBe(8)
+  })
+
+  it('reorders mounted limited results after target and source changes', async () => {
+    await create({id: 'parent'})
+    await create({id: 'low', properties: {priority: 1}})
+    await create({id: 'high', properties: {priority: 2}})
+    await create({id: 'a', parentId: 'parent', properties: {reviewer: 'low'}})
+    await create({id: 'b', parentId: 'parent', properties: {reviewer: 'high'}})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, parentId: 'parent', limit: 1,
+      order: {property: reviewerProp.name, target: priorityProp.name, direction: 'asc'},
+    })
+    expect(await handle.load()).toEqual(['a'])
+    const off = handle.subscribe(() => {})
+    try {
+      await env.repo.tx(tx => tx.setProperty('low', priorityProp, 3), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['b']))
+      await env.repo.tx(tx => tx.delete('high'), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['a']))
+      await env.repo.tx(tx => tx.setProperty('b', reviewerProp, 'low'), {scope: ChangeScope.BlockDefault})
+      await env.repo.tx(tx => tx.setProperty('a', reviewerProp, 'high'), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['b']))
+    } finally {
+      off()
+    }
+  })
+
   it('keeps outline ids quiet for irrelevant edits and follows reorders and moves', async () => {
     await create({id: 'parent'})
     await create({id: 'other-parent'})
@@ -533,6 +590,12 @@ describe('typed queries for table rows', () => {
     await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
       workspaceId: WS, order: {property, direction: 'asc'},
     }).load())).rejects.toThrow(new RegExp(property))
+  })
+
+  it.each([reviewersProp.name, statusProp.name])('refuses target sorting through %s', async property => {
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId: WS, order: {property, target: priorityProp.name, direction: 'asc'},
+    }).load())).rejects.toThrow(/single ref|single-reference|requires a ref/i)
   })
 
   it('refuses outline order without a direct parent', async () => {
@@ -1595,6 +1658,62 @@ describe('typed query disjunctions and extended where operators', () => {
     try {
       await env.repo.tx(tx => tx.setProperty('higher', priorityProp, 1), {scope: ChangeScope.BlockDefault})
       await waitFor(() => expect(ascending.peek()).toEqual(['higher', 'lower', 'a-missing']))
+    } finally {
+      off()
+    }
+  })
+
+  it('binds a virtual field on the ref target and tracks its declared dependency', async () => {
+    const field = 'test:score'
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'scores', [{
+      name: field,
+      value: alias => ({sql: `json_extract(${alias}.properties_json, ?)`, params: ['$.priority']}),
+      encode: operand => codecs.number.decode(operand),
+      dependencies: [workspaceId => ({
+        kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL, key: typedBlocksPropertyKey(workspaceId, priorityProp.name),
+      })],
+    }])
+    await create({id: 'parent'})
+    await create({id: 'low', properties: {priority: 1}})
+    await create({id: 'high', properties: {priority: 2}})
+    await create({id: 'a', parentId: 'parent', properties: {reviewer: 'low', status: 'open'}})
+    await create({id: 'b', parentId: 'parent', properties: {reviewer: 'high', status: 'open'}})
+    await create({id: 'excluded', parentId: 'parent', properties: {reviewer: 'low', status: 'done'}})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, parentId: 'parent', limit: 2, where: {status: 'open'},
+      order: {property: reviewerProp.name, target: field, direction: 'asc'},
+    })
+    expect(await handle.load()).toEqual(['a', 'b'])
+    const off = handle.subscribe(() => {})
+    try {
+      await env.repo.tx(tx => tx.setProperty('low', priorityProp, 3), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['b', 'a']))
+    } finally {
+      off()
+    }
+  })
+
+  it('reorders dangling refs when a target appears with a virtual value', async () => {
+    const field = 'test:constant'
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'constant', [{
+      name: field, value: alias => ({sql: `COALESCE(json_extract(${alias}.properties_json, '$.priority'), 0)`, params: []}),
+      encode: Number, dependencies: [workspaceId => ({
+        kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL, key: typedBlocksPropertyKey(workspaceId, priorityProp.name),
+      })],
+    }])
+    await create({id: 'parent'})
+    await create({id: 'existing'})
+    await create({id: 'a', parentId: 'parent', properties: {reviewer: 'missing'}})
+    await create({id: 'b', parentId: 'parent', properties: {reviewer: 'existing'}})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, parentId: 'parent', limit: 1,
+      order: {property: reviewerProp.name, target: field, direction: 'asc'},
+    })
+    expect(await handle.load()).toEqual(['b'])
+    const off = handle.subscribe(() => {})
+    try {
+      await create({id: 'missing'})
+      await waitFor(() => expect(handle.peek()).toEqual(['a']))
     } finally {
       off()
     }

@@ -244,6 +244,15 @@ const comparableValue = (
  *  with outer ones. The top-level call always passes `{n: 0}`. */
 interface AliasCounter { n: number }
 
+/** FROM and correlation shared by target predicates and scalar target reads. */
+const targetSource = (name: string, rowAlias: string, alias: string, list: boolean): string => {
+  const visible = `${alias}.deleted = 0 AND ${alias}.workspace_id = ${rowAlias}.workspace_id`
+  if (list) {
+    return `FROM ${listMembersSql(rowAlias, name)} AS je JOIN blocks ${alias} ON ${alias}.id = je.value WHERE ${visible}`
+  }
+  return `FROM blocks ${alias} WHERE ${alias}.id = json_extract(${rowAlias}.properties_json, ${inlineJsonPath(name)}) AND ${visible}`
+}
+
 const compileTargetTraversal = (
   name: string,
   inner: Readonly<Record<string, unknown>>,
@@ -272,27 +281,8 @@ const compileTargetTraversal = (
     innerParams.push(...compiled.params)
   }
   const inWhere = innerClauses.length === 0 ? '' : ` AND ${innerClauses.join(' AND ')}`
-  // A target outside the source row's workspace is not a live target here:
-  // reference resolution is workspace-scoped, and so are the deps that wake a
-  // handle when a target is created or deleted (`typedBlocksStructureKey`).
-  const visible = `${alias}.deleted = 0 AND ${alias}.workspace_id = ${rowAlias}.workspace_id`
-  if (isRef) {
-    // The source row's `properties_json[name]` holds the target id
-    // (string, stored as JSON). `json_extract` unwraps the JSON
-    // quoting and gives us the bare id for the equality join.
-    return {
-      sql:
-        `EXISTS (SELECT 1 FROM blocks ${alias} ` +
-        `WHERE ${alias}.id = json_extract(${rowAlias}.properties_json, ${inlineJsonPath(name)}) ` +
-        `AND ${visible}${inWhere})`,
-      params: innerParams,
-    }
-  }
   return {
-    sql:
-      `EXISTS (SELECT 1 FROM ${listMembersSql(rowAlias, name)} AS je ` +
-      `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
-      `WHERE ${visible}${inWhere})`,
+    sql: `EXISTS (SELECT 1 ${targetSource(name, rowAlias, alias, isRefList)}${inWhere})`,
     params: innerParams,
   }
 }
@@ -762,19 +752,27 @@ const resultOrder = (query: ResolvedTypedBlockQuery, context: WhereContext): Com
   if (typeof order !== 'object') {
     return {sql: `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`, params: []}
   }
-  const field = virtualFieldFor(order.property, context)
-  let expr: CompiledClause
-  if (field) {
-    expr = fieldExpression(field, 'b')
-  } else {
-    const cell = `b.properties_json, ${inlineJsonPath(order.property)}`
-    const {test, storage} = comparableCell(order.property, context.properties.get(order.property), cell, 'order')
-    // SQLite NOCASE folds ASCII; accented letters retain code-point order.
-    const collation = storage === 'text' ? ' COLLATE NOCASE' : ''
-    expr = {sql: `CASE WHEN ${test} THEN json_extract(${cell}) END${collation}`, params: []}
+  const throughTarget = order.target !== undefined
+  if (throughTarget && (virtualFieldFor(order.property, context) || !isRefCodec(context.properties.get(order.property)?.codec))) {
+    throw new Error(`[queryBlocks] order.target requires a single ref property; got ${JSON.stringify(order.property)}`)
   }
+  const alias = throughTarget ? 'd0' : 'b'
+  const name = order.target ?? order.property
+  const field = virtualFieldFor(name, context)
+  let expr: CompiledClause
+  let collation = ''
+  if (field) {
+    expr = fieldExpression(field, alias)
+  } else {
+    const cell = `${alias}.properties_json, ${inlineJsonPath(name)}`
+    const {test, storage} = comparableCell(name, context.properties.get(name), cell, 'order')
+    // Keep the collation on the ORDER BY term even when the cell comes from a subquery.
+    collation = storage === 'text' ? ' COLLATE NOCASE' : ''
+    expr = {sql: `CASE WHEN ${test} THEN json_extract(${cell}) END`, params: []}
+  }
+  const value = throughTarget ? `(SELECT ${expr.sql} ${targetSource(order.property, 'b', alias, false)})` : expr.sql
   const direction = order.direction === 'desc' ? 'DESC' : 'ASC'
-  return {sql: `${expr.sql} ${direction} NULLS LAST, b.id`, params: expr.params}
+  return {sql: `${value}${collation} ${direction} NULLS LAST, b.id`, params: expr.params}
 }
 
 export const compileTypedBlockQuery = (

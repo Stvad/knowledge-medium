@@ -11,6 +11,7 @@
  *    status!=open                            not equal
  *    snooze  !snooze                         property stored / not stored
  *    assignee=[[Mary]]  owner=((id))         a reference property pointing at a block
+ *    scheduled>=2026-01-05                  compare a reference through the target's registered date property
  *    refs=[[Mary]]                           references the block through any field
  *    childof=self  childof=[[X]]  under=[[X]] direct parent / ancestor
  *    created>2026-01-01  plugin:score>3       a queryable field; on created/updated a date means the local day
@@ -45,6 +46,8 @@ export interface QueryType {
 export interface QueryResolver {
   propertyByName(name: string): QueryProperty | undefined
   propertyById(fieldId: string): QueryProperty | undefined
+  /** Scalar target property through which a reference can compare a value. */
+  refValueTarget(schema: AnyPropertySchema): AnyPropertySchema | undefined
   typeByLabel(label: string): QueryType | undefined
   typeById(id: string): QueryType | undefined
   /** A queryable field (`created`, `updated`, a plugin's), and how it takes an operand. */
@@ -90,7 +93,10 @@ interface Span { readonly start: number; readonly end: number }
 
 export type QueryTerm = Span & (
   | {readonly kind: 'types'; readonly negated: boolean; readonly types: readonly QueryType[]}
-  | {readonly kind: 'compare'; readonly property: QueryProperty; readonly op: CompareOp; readonly operand: Operand}
+  | {
+    readonly kind: 'compare'; readonly property: QueryProperty; readonly op: CompareOp; readonly operand: Operand
+    readonly target?: AnyPropertySchema
+  }
   | {readonly kind: 'presence'; readonly property: QueryProperty; readonly present: boolean}
   | {
     readonly kind: 'field'; readonly field: string; readonly op: CompareOp; readonly operand: string
@@ -334,9 +340,9 @@ const operandCapability = (schema: AnyPropertySchema): WhereCapability<unknown> 
 export const takesOperand = (schema: AnyPropertySchema): boolean =>
   isRefCodec(schema.codec) || isRefListCodec(schema.codec) || operandCapability(schema) !== undefined
 
-const operandProblem = (property: QueryProperty, text: string): string => {
-  const {name, schema: {codec}} = property
-  switch (operandCapability(property.schema)?.storage) {
+const operandProblem = (name: string, schema: AnyPropertySchema, text: string): string => {
+  const {codec} = schema
+  switch (operandCapability(schema)?.storage) {
     case 'number': return `${name} takes a number`
     case 'boolean': return `${name} takes true or false`
     case 'iso-date': return `${name} takes a date like 2026-01-31 or an ISO instant`
@@ -347,7 +353,7 @@ const operandProblem = (property: QueryProperty, text: string): string => {
 /** The stored value a positive `=` term names, which a new row is given so the
  *  query selects it; undefined for any other term. */
 export const impliedValue = (term: QueryTerm): unknown => {
-  if (term.kind !== 'compare' || term.op !== 'eq') return undefined
+  if (term.kind !== 'compare' || term.op !== 'eq' || term.target) return undefined
   const {schema} = term.property
   if (term.operand.kind === 'ref') return isRefListCodec(schema.codec) ? [term.operand.id] : term.operand.id
   const capability = operandCapability(schema)
@@ -361,16 +367,16 @@ const operatorValue = (op: CompareOp, value: unknown): Record<string, unknown> =
 /** The predicate a positive or negated term contributes, and where it goes. */
 type Placement = {to: 'match' | 'exclude'; predicate: BlockPredicate}
 
-const compareTerm = ({property, op, operand}: TermOf<'compare'>): Placement => {
+const compareTerm = ({property, op, operand, target}: TermOf<'compare'>): Placement => {
   const to = op === 'ne' ? 'exclude' : 'match'
   if (operand.kind === 'ref') return {to, predicate: {referencedBy: {id: operand.id, sourceField: property.name}}}
-  const {codec} = property.schema
-  const capability = operandCapability(property.schema)!
+  const schema = target ?? property.schema
+  const {codec} = schema
+  const capability = operandCapability(schema)!
   if (!codec.where) return {to, predicate: {where: {[property.name]: {contains: capabilityValue(capability, operand.value)}}}}
   const day = codec.where.storage === 'iso-date' ? dayBounds(operand.value, utcDayStart) : undefined
-  return {to, predicate: {where: {[property.name]: day
-    ? dayRange(op, day, isoOf)
-    : operatorValue(op, capabilityValue(capability, operand.value))}}}
+  const comparison = day ? dayRange(op, day, isoOf) : operatorValue(op, capabilityValue(capability, operand.value))
+  return {to, predicate: {where: {[property.name]: target ? {target: {[target.name]: comparison}} : comparison}}}
 }
 
 const placementOf = (term: AlternativeTerm, options: ParseOptions): Placement => {
@@ -456,23 +462,31 @@ const readFieldTerm = (reader: Reader, name: string, field: QueryField, op: Comp
 
 const readCompare = (reader: Reader, property: QueryProperty, op: CompareOp, start: number): QueryTerm => {
   const operandStart = reader.i
-  const {codec} = property.schema
+  const {codec: propertyCodec} = property.schema
   const equality = op === 'eq' || op === 'ne'
-  if (isRefCodec(codec) || isRefListCodec(codec)) {
-    if (!equality) reader.fail(start, `${property.name} is a reference; compare it with = or !=`)
-    return {kind: 'compare', property, op, operand: readTarget(reader, property.name, operandStart), start, end: reader.i}
+  const reference = isRefCodec(propertyCodec) || isRefListCodec(propertyCodec)
+  const identity = equality && (reader.peek() === '[' || reader.startsWith('(('))
+  const inner = reference && !identity ? reader.resolver.refValueTarget(property.schema) : undefined
+  const target = inner && isComparable(inner) ? inner : undefined
+  if (reference && !target) {
+    if (equality) {
+      return {kind: 'compare', property, op, operand: readTarget(reader, property.name, operandStart), start, end: reader.i}
+    }
+    reader.fail(start, `${property.name} is a reference; compare it with = or !=`)
   }
-  if (reader.startsWith('[[') || reader.startsWith('((')) {
+  const schema = target ?? property.schema
+  const {codec} = schema
+  if (!target && (reader.startsWith('[[') || reader.startsWith('(('))) {
     reader.fail(operandStart, `${property.name} is not a reference property; quote the text to compare it`, reader.i + 2)
   }
   const value = reader.name()
   if (reader.i === operandStart) reader.fail(start, `Expected a value after ${OP_TEXT[op]}`)
-  const capability = operandCapability(property.schema)
+  const capability = operandCapability(schema)
   if (!capability) reader.fail(start, `${property.name} can only be tested for presence: ${property.name} or !${property.name}`)
   if (!codec.where && !equality) reader.fail(start, `${property.name} is a list; test a member with = or !=`)
-  if (!equality && !isComparable(property.schema)) reader.fail(start, `${property.name} compares with = or != only`)
-  if (capabilityValue(capability, value) === undefined) reader.fail(operandStart, operandProblem(property, value))
-  return {kind: 'compare', property, op, operand: {kind: 'text', value}, start, end: reader.i}
+  if (!equality && !reference && !isComparable(schema)) reader.fail(start, `${property.name} compares with = or != only`)
+  if (capabilityValue(capability, value) === undefined) reader.fail(operandStart, operandProblem(property.name, schema, value))
+  return {kind: 'compare', property, op, operand: {kind: 'text', value}, ...(target && {target}), start, end: reader.i}
 }
 
 /** The engine keys a property term by name, so a name that is both a property's

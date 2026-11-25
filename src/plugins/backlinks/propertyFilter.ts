@@ -5,7 +5,7 @@
  *    - the codec's `where` capability (is this storage-comparable?),
  *    - the codec's `type` discriminator (date/number get richer
  *      comparison operators; everything else with `where` is eq-only),
- *    - the `refTargetFilterDefaultsFacet` (a ref/refList to a known
+ *    - the `refTargetComparablePropertiesFacet` (a ref/refList to a known
  *      target type is presented as a filter on the target's default
  *      inner property — daily-notes contributes daily-note:date).
  *
@@ -17,7 +17,7 @@ import {
   type AnyPropertySchema,
   type BlockPredicate,
 } from '@/data/api'
-import type { RefTargetFilterDefault } from '@/data/facets.js'
+import type { RefTargetComparableProperty } from '@/data/facets.js'
 
 export type PropertyFilterOperatorId =
   | 'eq' | 'lt' | 'lte' | 'gt' | 'gte' | 'between'
@@ -164,7 +164,7 @@ const presenceOnlyAffordance: PropertyFilterAffordance = {
 export const resolvePropertyFilter = (
   schema: AnyPropertySchema,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
-  refTargetDefaults: ReadonlyMap<string, RefTargetFilterDefault>,
+  refTargetDefaults: ReadonlyMap<string, RefTargetComparableProperty>,
 ): PropertyFilterAffordance => {
   if (isRefCodec(schema.codec) || isRefListCodec(schema.codec)) {
     for (const targetType of schema.codec.targetTypes) {

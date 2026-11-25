@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { formatQuery } from '../query/format'
-import { parseQuery, type ParseOptions } from '../query/parse'
+import { impliedValue, parseQuery, type ParseOptions } from '../query/parse'
 import { MARY, PROJECTS, PROPERTIES, localDayStart, resolver } from './queryFixtures'
 
 const SELF = '0190a0c0-0000-7000-8000-00000000000c'
@@ -122,6 +122,72 @@ describe('parseQuery dates', () => {
 
   it('crosses a month end', () => {
     expect(parse('due>2026-01-31').query).toEqual({match: [{where: {due: {gt: '2026-01-31T23:59:59.999Z'}}}]})
+  })
+})
+
+describe('parseQuery reference ranges', () => {
+  const through = (text: string, name: string) =>
+    parseQuery(text, {
+      ...resolver,
+      refValueTarget: schema => schema.name === 'assignee' ? PROPERTIES.find(p => p.name === name)?.schema : undefined,
+    }, options)
+
+  it('compares a number through the target property', () => {
+    const result = through('assignee>=1e3', 'rating')
+    expect(result.errors).toEqual([])
+    expect(result.query).toEqual({match: [{where: {assignee: {target: {rating: {gte: 1000}}}}}]})
+    const saved = formatQuery(result.terms)
+    expect(saved).toBe('assignee^f-assignee>=1e3')
+    expect(through(saved, 'rating').query).toEqual(result.query)
+  })
+
+  it.each([
+    ['<2026-01-05', {lt: '2026-01-05T00:00:00.000Z'}],
+    ['<=2026-01-05', {lte: '2026-01-05T23:59:59.999Z'}],
+    ['>2026-01-05', {gt: '2026-01-05T23:59:59.999Z'}],
+    ['>=2026-01-05', {gte: '2026-01-05T00:00:00.000Z'}],
+    ['>2026-01-05T12:15:00.000Z', {gt: '2026-01-05T12:15:00.000Z'}],
+  ])('compares a date reference in UTC: %s', (operand, comparison) => {
+    const result = through(`assignee${operand}`, 'due')
+    expect(result.errors).toEqual([])
+    expect(result.query).toEqual({match: [{where: {assignee: {target: {due: comparison}}}}]})
+  })
+
+  it('keeps equality and inequality as reference identity', () => {
+    const result = through(`assignee=[[Mary]] assignee!=((${PROJECTS}))`, 'due')
+    expect(result.errors).toEqual([])
+    expect(result.query).toEqual({
+      match: [{referencedBy: {id: MARY, sourceField: 'assignee'}}],
+      exclude: [{referencedBy: {id: PROJECTS, sourceField: 'assignee'}}],
+    })
+  })
+
+  it('compares and excludes the entire UTC day when an equality names a date', () => {
+    const result = through('assignee=2026-01-05 assignee!=2026-01-06', 'due')
+    expect(result.errors).toEqual([])
+    expect(result.query).toEqual({
+      match: [{where: {assignee: {target: {due: {
+        between: ['2026-01-05T00:00:00.000Z', '2026-01-05T23:59:59.999Z'],
+      }}}}}],
+      exclude: [{where: {assignee: {target: {due: {
+        between: ['2026-01-06T00:00:00.000Z', '2026-01-06T23:59:59.999Z'],
+      }}}}}],
+    })
+    expect(impliedValue(result.terms[0]!)).toBeUndefined()
+  })
+
+  it('reports a bad target value at the operand and keeps the remaining terms', () => {
+    const text = '#book assignee>=2026-02-30 status=open'
+    const result = through(text, 'due')
+    expect(result.errors.map(({start, end, message}) => [text.slice(start, end), message])).toEqual([
+      ['2026-02-30', 'assignee takes a date like 2026-01-31 or an ISO instant'],
+    ])
+    expect(result.query).toEqual({types: ['t-book'], match: [{where: {status: {eq: 'open'}}}]})
+  })
+
+  it('rejects ranges through a text target', () => {
+    expect(through('assignee>=A', 'label').errors.map(error => error.message))
+      .toEqual(['assignee is a reference; compare it with = or !='])
   })
 })
 

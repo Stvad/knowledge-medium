@@ -28,7 +28,7 @@ import { ColumnHeaders, ColumnToolbar, type ResizePreview } from './ColumnHeader
 import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
 import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
 import { useTableQuery, type TableQuery } from './query/source'
-import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
+import { columnSortKeys, sortOrder, useViewSort, writeSort, type ViewSort } from './sort'
 import { notesAmong } from './childrenViews'
 import { registerGrid, tableRenderScopeId } from './registry'
 import { useIsMobile } from '@/utils/react'
@@ -371,7 +371,7 @@ const useColumnDefinitions = (repo: Block['repo'], workspaceId: string, columns:
   const names = useMemo(() => columns.map((column, index) => column.label ||
     (column.fieldId === null ? 'Title' : definitionsOf[index]?.name ?? 'Unknown property')), [columns, definitionsOf])
   const schemas = useMemo(() => definitionsOf.map(definition => definition?.schema), [definitionsOf])
-  return {schemas, names}
+  return {schemas, names, sortKeys: columnSortKeys(repo, workspaceId, schemas)}
 }
 
 type ColumnSchema = AnyPropertySchema | undefined
@@ -380,10 +380,9 @@ type ColumnSchema = AnyPropertySchema | undefined
 const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQuery | null}) => {
   const viewId = props.viewIds[0]!
   const all = useColumns(props.host, props.workspaceId, viewId)
-  const {schemas, names} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
+  const {schemas, names, sortKeys} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
   const sort = useViewSort(props.host.repo.block(viewId))
-  const fieldNames = useQueryableFieldNames(props.host.repo, props.workspaceId)
-  const order = useMemo(() => sortOrder(sort, all ?? NO_COLUMNS, schemas, fieldNames), [all, fieldNames, schemas, sort])
+  const order = sortOrder(sort, all ?? NO_COLUMNS, sortKeys)
   const split = useMemo(() => {
     const shown = {columns: [] as TableColumn[], schemas: [] as ColumnSchema[], names: [] as string[]}
     const hidden = {columns: [] as TableColumn[], names: [] as string[]}
@@ -407,14 +406,15 @@ const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQ
     hidden={split.hidden.columns} hiddenNames={split.hidden.names}
     hasContentColumn={all.some(column => column.fieldId === null)}/>
   if (split.shown.columns.length === 0) return <><NoColumns/>{toolbar}</>
+  const sortable = all.flatMap((column, index) => column.hidden ? [] : [sortKeys[index] !== undefined])
   return <TableBody {...props} columns={split.shown.columns} schemas={split.shown.schemas}
-    names={split.shown.names} toolbar={toolbar} viewId={viewId} sort={sort} order={order}/>
+    names={split.shown.names} toolbar={toolbar} viewId={viewId} sort={order && sort} order={order} sortable={sortable}/>
 }
 
 const NoColumns = () => <p className="py-1 text-sm text-muted-foreground">This table shows no columns.</p>
 
 const TableBody = ({
-  host, renderScopeId, parentRenderScopeId, workspaceId, query, columns, schemas, names, toolbar, viewId, viewIds, sort, order,
+  host, renderScopeId, parentRenderScopeId, workspaceId, query, columns, schemas, names, toolbar, viewId, viewIds, sort, order, sortable,
 }: GridProps & {
   query: TableQuery | null
   viewIds: readonly string[]
@@ -425,6 +425,7 @@ const TableBody = ({
   viewId: string
   sort: ViewSort | undefined
   order: TypedBlockQuery['order'] | undefined
+  sortable: readonly boolean[]
 }) => {
   const uiStateBlock = useUIStateBlock()
   const repo = host.repo
@@ -469,7 +470,8 @@ const TableBody = ({
 
   useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setQuery(query?.parsed.terms ?? null) }, [controller, query])
-  useLayoutEffect(() => { controller.setSorted(order !== undefined) }, [controller, order])
+  const sorted = order !== undefined
+  useLayoutEffect(() => { controller.setSorted(sorted) }, [controller, sorted])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => {
     controller.setSurfaces(rowsDisplayScope, outlineSurfaceOf({
@@ -519,8 +521,6 @@ const TableBody = ({
   const contentColumn = columns.findIndex(column => column.fieldId === null)
   const table = useMemo<TableState>(() => ({controller, hasQuery: query !== null, columns, schemas, editable, contentColumn, unmatched, rows: rowSet}),
     [controller, query, columns, schemas, editable, contentColumn, unmatched, rowSet])
-  const fieldNames = useQueryableFieldNames(repo, workspaceId)
-  const sortable = useMemo(() => schemas.map(schema => isSortable(schema, fieldNames)), [fieldNames, schemas])
   const onSort = useCallback((next: ViewSort | undefined) => {
     void writeSort(repo, viewId, next).catch(error => console.error('[tables] sort failed', error))
   }, [repo, viewId])

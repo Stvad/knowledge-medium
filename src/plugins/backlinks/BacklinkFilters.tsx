@@ -14,7 +14,7 @@ import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { refTargetFilterDefaultsFacet } from '@/data/facets.js'
+import { refTargetComparablePropertiesFacet } from '@/data/facets.js'
 import { type BlockPredicate } from '@/data/api'
 import {
   propertyFilterOperatorArity,
@@ -378,7 +378,7 @@ const PropertyPredicateInput = ({
 }) => {
   const schemas = usePropertySchemas()
   const runtime = useAppRuntime()
-  const refTargetDefaults = runtime.read(refTargetFilterDefaultsFacet)
+  const refTargetDefaults = runtime.read(refTargetComparablePropertiesFacet)
   const queryable = useMemo(() => {
     return Array.from(schemas.values())
       .sort((a, b) => a.name.localeCompare(b.name))
