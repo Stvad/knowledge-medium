@@ -1,1 +1,1 @@
-export{Zx as dailyNoteBacklinksDefaultsUi}from"../../../chunks/app-BPY1Fb_Z.js";
+export{Zx as dailyNoteBacklinksDefaultsUi}from"../../../chunks/app-CTeBIUfi.js";

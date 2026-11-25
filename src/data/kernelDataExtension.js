@@ -1,1 +1,1 @@
-export{Get as kernelDataExtension}from"../../chunks/app-BPY1Fb_Z.js";
+export{Get as kernelDataExtension}from"../../chunks/app-CTeBIUfi.js";
