@@ -1,1 +1,0 @@
-export{vx as blockInfoPlugin}from"../../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,0 @@
-export{ap as blockTagsConfigUi}from"../../../chunks/app-DGGB3esD.js";

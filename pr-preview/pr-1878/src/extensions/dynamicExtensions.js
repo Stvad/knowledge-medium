@@ -1,1 +1,0 @@
-export{DR as dynamicExtensionsExtension}from"../../chunks/app-DGGB3esD.js";

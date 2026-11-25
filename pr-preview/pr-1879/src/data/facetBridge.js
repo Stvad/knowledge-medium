@@ -1,1 +1,0 @@
-export{I5 as FacetBridge}from"../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,0 @@
-export{Uc as propertiesMigrationPlugin}from"../../../chunks/app-VgMHfoOf.js";

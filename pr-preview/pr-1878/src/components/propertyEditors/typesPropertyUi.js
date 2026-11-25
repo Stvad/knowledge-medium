@@ -1,1 +1,0 @@
-export{gI as kernelPropertyUiExtension,_I as typesPropertyUi,vI as typesPropertyUiExtension}from"../../../chunks/app-DGGB3esD.js";

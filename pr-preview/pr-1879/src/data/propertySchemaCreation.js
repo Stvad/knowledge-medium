@@ -1,1 +1,0 @@
-export{AY as adoptOrCreatePropertySchema}from"../../chunks/app-VgMHfoOf.js";

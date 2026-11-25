@@ -1,1 +1,0 @@
-export{cU as ExtensionRenderBoundary}from"../../chunks/app-DGGB3esD.js";

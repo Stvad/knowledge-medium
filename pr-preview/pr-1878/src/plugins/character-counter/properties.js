@@ -1,1 +1,0 @@
-export{w4 as RAW_CHARACTER_COUNT_PROFILE_ID,T4 as WORDS_COUNT_PROFILE_ID,E4 as charLimitProp,D4 as charProfileProp,O4 as charScopeProp}from"../../../chunks/app-DGGB3esD.js";

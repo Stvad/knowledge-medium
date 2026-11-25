@@ -1,1 +1,0 @@
-export{uc as propertyRowsPlugin}from"../../../chunks/app-VgMHfoOf.js";

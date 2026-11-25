@@ -1,1 +1,0 @@
-export{a4 as contributorsDataExtension}from"../../../chunks/app-VgMHfoOf.js";

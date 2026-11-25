@@ -1,1 +1,0 @@
-export{LM as Label}from"../../../chunks/app-VgMHfoOf.js";

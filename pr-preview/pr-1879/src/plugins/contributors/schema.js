@@ -1,1 +1,0 @@
-export{m4 as CONTRIBUTOR_TYPE,h4 as attributionCreatorsProp,g4 as attributionEditorsProp,_4 as contributorForProp,v4 as contributorKindOf,y4 as contributorKindProp,b4 as contributorProfileType,x4 as contributorRoleProp}from"../../../chunks/app-VgMHfoOf.js";

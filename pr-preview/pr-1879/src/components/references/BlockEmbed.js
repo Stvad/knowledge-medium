@@ -1,1 +1,0 @@
-export{_I as BlockEmbed}from"../../../chunks/app-VgMHfoOf.js";

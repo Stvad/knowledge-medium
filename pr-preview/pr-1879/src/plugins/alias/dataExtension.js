@@ -1,1 +1,0 @@
-export{c6 as aliasDataExtension}from"../../../chunks/app-VgMHfoOf.js";

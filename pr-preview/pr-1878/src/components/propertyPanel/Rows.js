@@ -1,1 +1,0 @@
-export{kW as MetadataRow,AW as PropertySectionLabel}from"../../../chunks/app-DGGB3esD.js";

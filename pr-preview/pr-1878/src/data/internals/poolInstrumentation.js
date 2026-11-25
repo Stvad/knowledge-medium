@@ -1,1 +1,0 @@
-export{C8 as instrumentAdapter}from"../../../chunks/app-DGGB3esD.js";

@@ -1,1 +1,0 @@
-export{CY as propertyShapeLabel}from"../../../chunks/app-DGGB3esD.js";

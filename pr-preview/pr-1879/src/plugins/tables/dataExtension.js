@@ -1,1 +1,0 @@
-export{TZ as tablesDataExtension}from"../../../chunks/app-VgMHfoOf.js";

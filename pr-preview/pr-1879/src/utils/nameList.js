@@ -1,1 +1,0 @@
-export{vnt as NAMES_IN_A_SENTENCE,ynt as describeNames,bnt as firstFew}from"../../chunks/app-VgMHfoOf.js";

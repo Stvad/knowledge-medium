@@ -1,1 +1,0 @@
-export{lG as declarationOnlyDefinitionForName,uG as declarationOnlyStatusText}from"../../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,0 @@
-export{FQ as preferredSpanReplacement}from"../../../chunks/app-VgMHfoOf.js";

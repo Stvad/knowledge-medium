@@ -1,1 +1,0 @@
-export{GI as ensureMetricsConsoleHook}from"../../chunks/app-VgMHfoOf.js";

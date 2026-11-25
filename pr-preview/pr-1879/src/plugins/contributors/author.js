@@ -1,1 +1,0 @@
-export{ry as authorIdOf}from"../../../chunks/app-VgMHfoOf.js";

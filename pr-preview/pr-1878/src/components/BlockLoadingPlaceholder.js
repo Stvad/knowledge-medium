@@ -1,1 +1,0 @@
-export{gz as BlockLoadingPlaceholder}from"../../chunks/app-DGGB3esD.js";

@@ -1,1 +1,0 @@
-export{yL as BlockPasteShellDecorator,bL as blockPasteShellDecorator}from"../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,0 @@
-export{gnt as agree,_nt as pluralize}from"../../chunks/app-VgMHfoOf.js";

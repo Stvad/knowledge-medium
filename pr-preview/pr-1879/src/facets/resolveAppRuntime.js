@@ -1,1 +1,0 @@
-export{AR as resolveAppRuntime,jR as resolveAppRuntimeSync}from"../../chunks/app-VgMHfoOf.js";

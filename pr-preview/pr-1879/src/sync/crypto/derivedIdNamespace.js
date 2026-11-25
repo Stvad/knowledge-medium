@@ -1,1 +1,0 @@
-export{Lft as deriveWorkspaceIdNamespace}from"../../../chunks/app-VgMHfoOf.js";

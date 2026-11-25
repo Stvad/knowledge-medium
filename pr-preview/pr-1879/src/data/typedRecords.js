@@ -1,1 +1,0 @@
-export{c2 as adoptTypedBlock,l2 as createTypedChild,fpt as derivedBlockId,u2 as getOrCreateTypedChild}from"../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,0 @@
-export{OL as ExtensionPromptSurface,kL as extensionPromptsExtension}from"../../../chunks/app-DGGB3esD.js";

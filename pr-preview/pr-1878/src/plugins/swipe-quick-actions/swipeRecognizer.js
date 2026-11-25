@@ -1,1 +1,0 @@
-export{jF as SWIPE_QUICK_ACTIONS_GESTURE_ID,MF as SWIPE_TRIGGER_PX,NF as swipeRecognizer}from"../../../chunks/app-DGGB3esD.js";

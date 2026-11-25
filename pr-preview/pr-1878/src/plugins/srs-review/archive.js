@@ -1,1 +1,0 @@
-export{Id as archiveSrsCard}from"../../../chunks/app-DGGB3esD.js";

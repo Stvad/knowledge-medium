@@ -1,1 +1,0 @@
-export{s3 as pluginPrefsExtension,c3 as pluginUIStateExtension}from"../../chunks/app-DGGB3esD.js";

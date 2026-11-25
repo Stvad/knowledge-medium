@@ -1,1 +1,0 @@
-export{iG as typePropertyGroups}from"../../chunks/app-VgMHfoOf.js";

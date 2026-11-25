@@ -1,1 +1,0 @@
-export{NW as BlockProperties}from"../../chunks/app-VgMHfoOf.js";

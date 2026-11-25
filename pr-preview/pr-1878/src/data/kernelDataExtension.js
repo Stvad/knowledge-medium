@@ -1,1 +1,0 @@
-export{Net as kernelDataExtension}from"../../chunks/app-DGGB3esD.js";

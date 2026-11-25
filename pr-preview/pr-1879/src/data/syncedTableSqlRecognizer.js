@@ -1,1 +1,0 @@
-export{s8 as SYNCED_TABLES,c8 as syncedWriteTarget,l8 as writeTargets}from"../../chunks/app-VgMHfoOf.js";

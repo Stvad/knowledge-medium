@@ -1,1 +1,0 @@
-export{kQ as preferredSpanReplacement}from"../../../chunks/app-DGGB3esD.js";

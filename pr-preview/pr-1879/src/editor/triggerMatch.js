@@ -1,1 +1,0 @@
-export{i1 as matchCharTrigger}from"../../chunks/app-VgMHfoOf.js";

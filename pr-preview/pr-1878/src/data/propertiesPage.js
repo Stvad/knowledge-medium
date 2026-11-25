@@ -1,1 +1,0 @@
-export{Wdt as getOrCreatePropertiesPage,Gdt as propertiesPageBlockId,Kdt as propertiesPageSpec}from"../../chunks/app-DGGB3esD.js";

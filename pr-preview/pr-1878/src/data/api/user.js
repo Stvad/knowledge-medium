@@ -1,1 +1,0 @@
-export{xgt as SYSTEM_AUTHOR_PREFIX,Sgt as isSystemAuthor,Cgt as systemAuthor}from"../../../chunks/app-DGGB3esD.js";

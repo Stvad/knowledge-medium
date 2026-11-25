@@ -1,1 +1,0 @@
-export{v4 as characterCounterDataExtension}from"../../../chunks/app-DGGB3esD.js";

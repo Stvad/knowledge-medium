@@ -1,1 +1,0 @@
-export{Bet as Block,Vet as requireLoadedBlock}from"../../chunks/app-VgMHfoOf.js";

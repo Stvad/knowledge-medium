@@ -1,1 +1,0 @@
-export{G6 as agentDispatchCompanionDataExtension}from"../../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,0 @@
-export{rG as declarationOnlyDefinitionForName,iG as declarationOnlyStatusText}from"../../../chunks/app-DGGB3esD.js";

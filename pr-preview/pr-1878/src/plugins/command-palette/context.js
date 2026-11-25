@@ -1,1 +1,0 @@
-export{eF as COMMAND_PALETTE_ACTION_ID,tF as COMMAND_PALETTE_CONTEXT,nF as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,rF as commandPaletteActionContext}from"../../../chunks/app-DGGB3esD.js";

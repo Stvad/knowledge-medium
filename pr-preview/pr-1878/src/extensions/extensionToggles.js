@@ -1,1 +1,0 @@
-export{NR as extensionDisplayName,PR as extensionName,FR as userExtensionShellToggle,IR as userExtensionToggle}from"../../chunks/app-DGGB3esD.js";

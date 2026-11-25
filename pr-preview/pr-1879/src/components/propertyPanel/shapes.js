@@ -1,1 +1,0 @@
-export{kY as propertyShapeLabel}from"../../../chunks/app-VgMHfoOf.js";

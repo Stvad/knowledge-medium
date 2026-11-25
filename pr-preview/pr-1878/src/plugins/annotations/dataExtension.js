@@ -1,1 +1,0 @@
-export{q1 as annotationsDataExtension}from"../../../chunks/app-DGGB3esD.js";

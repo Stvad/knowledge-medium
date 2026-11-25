@@ -1,1 +1,0 @@
-export{ont as agree,snt as pluralize}from"../../chunks/app-DGGB3esD.js";

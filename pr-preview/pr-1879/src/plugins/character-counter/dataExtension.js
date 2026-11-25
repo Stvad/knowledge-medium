@@ -1,1 +1,0 @@
-export{T4 as characterCounterDataExtension}from"../../../chunks/app-VgMHfoOf.js";

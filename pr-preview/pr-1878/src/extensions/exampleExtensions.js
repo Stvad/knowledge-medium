@@ -1,1 +1,0 @@
-export{YI as exampleExtensions,XI as insertExampleExtensionsUnder}from"../../chunks/app-DGGB3esD.js";

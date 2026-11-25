@@ -1,1 +1,0 @@
-export{FA as usePendingInvitations}from"../../chunks/app-VgMHfoOf.js";

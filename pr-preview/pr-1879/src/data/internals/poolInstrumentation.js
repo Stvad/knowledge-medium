@@ -1,1 +1,0 @@
-export{M8 as instrumentAdapter}from"../../../chunks/app-VgMHfoOf.js";

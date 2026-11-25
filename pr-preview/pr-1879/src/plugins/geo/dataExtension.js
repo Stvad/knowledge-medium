@@ -1,1 +1,0 @@
-export{w$ as geoDataExtension}from"../../../chunks/app-VgMHfoOf.js";

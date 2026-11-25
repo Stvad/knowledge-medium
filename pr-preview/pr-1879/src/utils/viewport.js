@@ -1,1 +1,0 @@
-export{gK as MOBILE_BREAKPOINT_QUERY,_K as POINTER_COARSE_QUERY,vK as isMobileViewport,yK as isPointerCoarse}from"../../chunks/app-VgMHfoOf.js";

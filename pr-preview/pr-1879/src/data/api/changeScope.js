@@ -1,1 +1,0 @@
-export{M_t as CHANGE_SCOPE_POLICIES,N_t as ChangeScope,P_t as isChangeScope,F_t as policyForScope,I_t as scopeAllowedInReadOnly,L_t as scopeIsUndoable,R_t as scopePoliciesEquivalent,z_t as scopeUploadsToServer,B_t as sourceForScope}from"../../../chunks/app-VgMHfoOf.js";

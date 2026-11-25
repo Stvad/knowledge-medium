@@ -1,1 +1,0 @@
-export{qL as appUpdatePromptExtension}from"../../../chunks/app-VgMHfoOf.js";

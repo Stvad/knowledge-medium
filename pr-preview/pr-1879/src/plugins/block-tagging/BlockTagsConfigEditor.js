@@ -1,1 +1,0 @@
-export{op as BlockTagsConfigEditor}from"../../../chunks/app-VgMHfoOf.js";

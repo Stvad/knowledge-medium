@@ -1,1 +1,0 @@
-export{OR as ClientLocalSettings,kR as clientLocalSettings}from"../../chunks/app-VgMHfoOf.js";

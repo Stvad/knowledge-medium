@@ -1,1 +1,0 @@
-export{ntt as loadTypeIdsByBlock}from"../../chunks/app-DGGB3esD.js";

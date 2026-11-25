@@ -1,1 +1,0 @@
-export{xI as TypeChip}from"../../../chunks/app-DGGB3esD.js";

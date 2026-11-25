@@ -1,1 +1,0 @@
-export{bx as updateIndicatorPlugin}from"../../../chunks/app-VgMHfoOf.js";

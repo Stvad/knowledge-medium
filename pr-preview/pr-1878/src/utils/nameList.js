@@ -1,1 +1,0 @@
-export{cnt as NAMES_IN_A_SENTENCE,lnt as describeNames,unt as firstFew}from"../../chunks/app-DGGB3esD.js";

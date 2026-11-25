@@ -1,1 +1,0 @@
-export{Uet as kernelDataExtension}from"../../chunks/app-VgMHfoOf.js";

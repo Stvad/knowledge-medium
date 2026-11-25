@@ -1,1 +1,0 @@
-export{e0 as annotationsDataExtension}from"../../../chunks/app-VgMHfoOf.js";

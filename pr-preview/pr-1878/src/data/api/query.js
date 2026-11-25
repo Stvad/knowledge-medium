@@ -1,1 +1,0 @@
-export{kgt as defineQuery}from"../../../chunks/app-DGGB3esD.js";

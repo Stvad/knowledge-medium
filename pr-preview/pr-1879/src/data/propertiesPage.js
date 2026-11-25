@@ -1,1 +1,0 @@
-export{eft as getOrCreatePropertiesPage,tft as propertiesPageBlockId,nft as propertiesPageSpec}from"../../chunks/app-VgMHfoOf.js";

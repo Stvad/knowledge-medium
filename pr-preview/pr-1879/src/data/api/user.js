@@ -1,1 +1,0 @@
-export{jgt as SYSTEM_AUTHOR_PREFIX,Mgt as isSystemAuthor,Ngt as systemAuthor}from"../../../chunks/app-VgMHfoOf.js";

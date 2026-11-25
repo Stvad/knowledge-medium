@@ -1,1 +1,0 @@
-export{Lm as quotedInFooterContribution}from"../../../chunks/app-DGGB3esD.js";

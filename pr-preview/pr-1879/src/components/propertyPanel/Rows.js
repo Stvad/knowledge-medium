@@ -1,1 +1,0 @@
-export{PW as MetadataRow,FW as PropertySectionLabel}from"../../../chunks/app-VgMHfoOf.js";

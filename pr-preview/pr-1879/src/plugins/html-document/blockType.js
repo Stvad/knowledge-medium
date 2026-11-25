@@ -1,1 +1,0 @@
-export{XQ as htmlDocumentTypeSeed}from"../../../chunks/app-VgMHfoOf.js";

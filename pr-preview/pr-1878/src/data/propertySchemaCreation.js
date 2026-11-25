@@ -1,1 +1,0 @@
-export{wY as adoptOrCreatePropertySchema}from"../../chunks/app-DGGB3esD.js";

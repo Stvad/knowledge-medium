@@ -1,1 +1,0 @@
-export{t2 as adoptTypedBlock,n2 as createTypedChild,npt as derivedBlockId,r2 as getOrCreateTypedChild}from"../../chunks/app-DGGB3esD.js";

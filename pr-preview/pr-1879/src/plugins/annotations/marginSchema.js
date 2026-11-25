@@ -1,1 +1,0 @@
-export{N2 as annotationMarginOpenProp,P2 as annotationMarginShareProp}from"../../../chunks/app-VgMHfoOf.js";

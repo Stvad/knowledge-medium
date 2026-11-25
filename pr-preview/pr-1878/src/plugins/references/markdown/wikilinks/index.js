@@ -1,1 +1,0 @@
-export{IS as wikilinkMarkdownExtension}from"../../../../../chunks/app-DGGB3esD.js";

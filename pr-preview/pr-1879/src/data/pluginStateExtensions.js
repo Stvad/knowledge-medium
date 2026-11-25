@@ -1,1 +1,0 @@
-export{g3 as pluginPrefsExtension,_3 as pluginUIStateExtension}from"../../chunks/app-VgMHfoOf.js";
