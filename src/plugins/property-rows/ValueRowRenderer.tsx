@@ -1,4 +1,5 @@
 import { useContext } from 'react'
+import { Clock3 } from 'lucide-react'
 import { ChangeScope, type AnyPropertySchema, type PropertyEditorProps } from '@/data/api'
 import { referenceWarningMessage } from './referenceWarning'
 import { propertyValueTargetTypes } from './valueSchema'
@@ -6,7 +7,7 @@ import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/pr
 import type { BlockRenderer } from '@/types'
 import type { Block } from '@/data/block'
 import { FIELD_FORM_MARKER } from '@/data/referenceBlock'
-import { isPropertyFieldInstance, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
+import { awaitsReferenceTarget, isPropertyFieldInstance, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import { readValuePresets, resolveValuePresetPresentation } from '@/data/valuePresetRegistry'
@@ -43,9 +44,13 @@ const InlineValue = ({block, Inner, fieldRowId, schema}: {
   try {
     value = valueChildCodec(schema).decode(valueChildContentToEncoded(schema, data))
   } catch (error) {
+    const awaiting = awaitsReferenceTarget(schema, data)
+    const pendingMessage = 'Waiting for reference target'
     const reason = error instanceof Error ? error.message : 'Value cannot be decoded'
     return <div className="flex min-w-0 items-center gap-1">
-      <span data-invalid-property-value="true" aria-label="Invalid property value" title={reason}>⚠</span>
+      {awaiting ? <span role="status" aria-label={pendingMessage} title={pendingMessage} className="shrink-0 text-muted-foreground">
+        <Clock3 aria-hidden="true" className="size-3.5"/>
+      </span> : <span data-invalid-property-value="true" aria-label="Invalid property value" title={reason}>⚠</span>}
       <Inner block={block}/>
     </div>
   }

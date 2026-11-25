@@ -78,6 +78,7 @@ import {
 import { jsonValuesEqual, persistedJsonKey } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { deleteSubtreeAnnouncedInTx, deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { deriveReferenceColumns, sameTxReferenceTargetLookups } from './referenceTargetProcessor'
 import { mintPropertyChildRow } from './propertyChildMint'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -712,7 +713,7 @@ export const materializePropertyChildrenForExistingRow = async (
     const fieldRow = await upsertFieldRow(
       tx, row, schema.fieldId, fieldRows, opts.additive,
     )
-    await reconcileFieldValueChildren(tx, row, fieldRow, schema, encoded, opts.additive)
+    await reconcileFieldValueChildren(tx, fieldRow, schema, encoded, opts.additive)
   }
 }
 
@@ -922,9 +923,8 @@ export const upsertFieldRow = async (
  */
 export const reconcileFieldValueChildren = async (
   tx: Tx,
-  owner: BlockData,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  schema: AnyPropertySchema & {fieldId: string},
+  schema: AnyPropertySchema,
   encoded: unknown,
   /** See {@link MaterializeOptions.additive}. */
   additive = false,
@@ -938,12 +938,7 @@ export const reconcileFieldValueChildren = async (
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
   if (memberCodecOf(schema.codec) === undefined) {
-    const proposed = contents[0]!
-    await reconcileSingleValueChild(tx, fieldRow, schema, values, proposed, additive)
-    if (proposed.referenceTargetId && proposed.referenceTargetId !== encoded) {
-      // A repeated write can change the bag without changing the already-correct wikilink.
-      requestCellProjection(tx, owner, schema.fieldId, schema)
-    }
+    await reconcileSingleValueChild(tx, fieldRow, schema, values, contents[0]!, additive)
     return
   }
   await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents.map(row => row.content), additive)
@@ -965,6 +960,9 @@ export const createValueChild = (
   references: tx.derivedReferencesFor(proposed.content),
 }, {kind: 'value', occurrence, valueKey})
 
+// A clear leaves the next populated peer readable. Replaying that clear during materialization must use the original row.
+const clearedScalarRows = new WeakMap<Tx['meta'], Map<string, string>>()
+
 const reconcileSingleValueChild = async (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
@@ -981,10 +979,19 @@ const reconcileSingleValueChild = async (
   if (additive && values.length > 0) return
   const {content} = proposed
   const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
-  const primary = scalarValueRow(schema, values, content)
+  const clearedId = content === '' ? clearedScalarRows.get(tx.meta)?.get(fieldRow.id) : undefined
+  const primary = (clearedId && values.find(row => row.id === clearedId && row.content === ''))
+    || scalarValueRow(schema, values, content)
   if (!primary) {
     await createValueChild(tx, fieldRow, proposed, keyAtStart(values[0]?.orderKey ?? null), slot)
     return
+  }
+  if (content === '') {
+    let cleared = clearedScalarRows.get(tx.meta)
+    if (!cleared) clearedScalarRows.set(tx.meta, cleared = new Map())
+    cleared.set(fieldRow.id, primary.id)
+  } else {
+    clearedScalarRows.get(tx.meta)?.delete(fieldRow.id)
   }
   let sameValue = primary.content === content
   if (!sameValue && !proposed.referenceTargetId) {
@@ -1394,14 +1401,19 @@ export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor(
   watches: {kind: 'event', events: [PROPERTY_VALUES_RESOLVED_EVENT]},
   settledWrites: true,
   apply: async (event, ctx) => {
-    if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const rows: ProjectableRow[] = []
     for (const resolved of event.emittedEvents) {
       for (const id of (resolved.payload as ResolvedPropertyValuesEvent).valueIds) {
         const row = await ctx.tx.get(id)
-        if (row) rows.push(row)
+        if (!row || row.deleted) continue
+        if (row.referenceTargetId == null) {
+          const derived = await deriveReferenceColumns(row.content, row.workspaceId, sameTxReferenceTargetLookups(ctx.tx))
+          if (derived.targetId && !derived.isFieldForm) await ctx.tx.stampReferenceTarget(id, derived.targetId, false)
+        }
+        rows.push(row)
       }
     }
+    if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'resolved')
   },
 })

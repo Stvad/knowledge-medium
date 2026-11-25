@@ -9,10 +9,9 @@ import {
 import type { AppExtension } from '@/facets/facet.js'
 import { faithfulWikilinkReplacement } from '@/plugins/references/referenceParser'
 import { hasBlockType } from '@/data/properties'
-import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
-import { formatRoamDate } from '@/utils/dailyPage'
+import { referenceBlockContentForId } from '@/data/referenceBlock'
 import type { ScalarPresetConversion, AnyValuePresetCore } from '@/data/api'
-import { claimDailyNoteAliases, getOrCreateDailyNoteInTx, isValidDateAlias, journalPageSpec } from './dailyNotes.ts'
+import { claimDailyNoteAliases, dailyNoteTitle, getOrCreateDailyNoteInTx, isValidDateAlias, journalPageSpec } from './dailyNotes.ts'
 import { dailyNotesLocalSchema } from './localSchema.ts'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType, dayValuePresetCore, isDayReferenceSchema } from './schema.ts'
 
@@ -35,26 +34,22 @@ const convertDateToDay: ScalarPresetConversion = {
   },
 }
 
-// A competing page that owns the date alias is the value, just as it is for an authored wikilink.
+// Claiming a free long alias on an ISO-only daily note accepts one whole-column properties write.
 const dayValueReference: NonNullable<AnyValuePresetCore['valueChildReference']> = {
   matchesSchema: isDayReferenceSchema,
   async resolve(tx, workspaceId, id) {
     const target = await tx.get(id)
     if (!target || target.deleted || target.workspaceId !== workspaceId || !hasBlockType(target, DAILY_NOTE_TYPE)) return
-    const title = isValidDateAlias(target.content)
-      ? formatRoamDate(new Date(target.content), 'UTC') : target.content
+    const isIsoSeat = isValidDateAlias(target.content)
+    const title = isIsoSeat ? dailyNoteTitle(target.content) : target.content
     const link = faithfulWikilinkReplacement(title)
-    if (!link) return
+    if (!link) return referenceBlockContentForId(id)
     let owner = await tx.aliasLookup(link.refAlias, workspaceId)
-    if (!owner && isValidDateAlias(target.content)) {
-      // An ISO-only daily-note seat gains its long alias on the first link that uses it.
-      const isoOwner = await tx.aliasLookup(target.content, workspaceId)
-      await claimDailyNoteAliases(tx, isoOwner?.id ?? id, [link.refAlias])
+    if (!owner && isIsoSeat) {
+      await claimDailyNoteAliases(tx, id, [link.refAlias])
       owner = await tx.aliasLookup(link.refAlias, workspaceId)
     }
-    if (owner && (owner.id === id || parseLiteralDailyPageTitle(title))) {
-      return {content: link.text, referenceTargetId: owner.id}
-    }
+    return owner?.id === id ? link.text : referenceBlockContentForId(id)
   },
 }
 

@@ -23,6 +23,7 @@ import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { actionContextsFacet, blockRenderersFacet } from '@/extensions/core'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
+import { DialogHost } from '@/extensions/dialogAppMount'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
@@ -38,6 +39,7 @@ import * as propertyRows from '../index'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { dailyNotesPlugin, dateScrubOverlayMount } from '@/plugins/daily-notes'
 import { dailyNoteBlockId, dailyNoteDateProp, getOrCreateDailyNote } from '@/plugins/daily-notes'
+import { dayValuePresetCore } from '@/plugins/daily-notes/schema'
 import { annotationsDataExtension } from '@/plugins/annotations/dataExtension'
 import { createThread } from '@/plugins/annotations/threads'
 import { referencesPlugin } from '@/plugins/references'
@@ -59,6 +61,7 @@ import {
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { setBlockPropertyDisplay } from '../actions'
+import { __resetDialogsForTests } from '@/utils/dialogs'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
@@ -133,6 +136,7 @@ beforeAll(async () => {
 afterAll(async () => { await sharedDb.cleanup() })
 afterEach(() => {
   cleanup()
+  __resetDialogsForTests()
   committedListings.clear()
   vi.unstubAllGlobals()
   __resetLazyMountRegistryForTesting()
@@ -187,7 +191,7 @@ const addExtensions = (...extensions: AppExtension[]) => {
   repo.setFacetRuntime(runtime)
 }
 
-type Scope = {childBacked?: boolean; workspace?: PropertyDisplaySetting; renderScopeId?: string; dateScrub?: boolean}
+type Scope = {childBacked?: boolean; workspace?: PropertyDisplaySetting; renderScopeId?: string; dateScrub?: boolean; withDialogs?: boolean}
 
 const mount = (scope: Scope = {}) => render(outline(scope))
 
@@ -223,6 +227,7 @@ const outline = (scope: Scope) => (
               </PropertyDisplayScopeContext.Provider>
             </BlockContextProvider>
           </Suspense>
+          {scope.withDialogs && <DialogHost/>}
         </ActiveContextsProvider>
       </AppRuntimeContextProvider>
     </RepoContext>
@@ -672,7 +677,7 @@ describe('editing through a property row', () => {
     }, 20_000,
   )
 
-  it.each([false, true])('preserves unmatched ISO text and uses the normal property panel controls (read-only: %s)', async readOnly => {
+  it.each([false, true])('shows unmatched ISO text and offers a calendar only when editable (read-only: %s)', async readOnly => {
     const content = '2026-05-04T00:00:00.000Z'
     const appointment = seedProperty({
       seedKey: 'test/property/legacy-appointment', revision: 1, name: 'rows:legacy-appointment',
@@ -689,10 +694,9 @@ describe('editing through a property row', () => {
     await materializePropertySeeds(repo, WS, [appointment, dailyNoteDateProp, aliasesProp])
     await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
     const owner = repo.block(OWNER)
-    const replacement = await getOrCreateDailyNote(repo, WS, '2026-06-08')
     await owner.set(showPropertiesProp, true)
     repo.setReadOnly(readOnly)
-    await act(async () => { mount({childBacked: false}) })
+    await act(async () => { mount({childBacked: false, withDialogs: !readOnly}) })
 
     const label = await screen.findByText(content)
     const value = within(label.closest<HTMLElement>('[data-property-value]')!)
@@ -702,22 +706,52 @@ describe('editing through a property row', () => {
     expect((await repo.load(OWNER))?.properties[appointment.name]).toBe(content)
 
     if (readOnly) {
-      expect(value.queryByRole('button', {name: 'Remove block reference'})).toBeNull()
-      expect(value.queryByRole('combobox')).toBeNull()
+      expect(value.queryByRole('button', {name: 'Choose date'})).toBeNull()
+      expect(value.queryByRole('button', {name: 'Clear date'})).toBeNull()
       return
     }
 
-    fireEvent.click(value.getByRole('button', {name: 'Remove block reference'}))
-    const search = await value.findByRole('combobox', {name: 'Search block reference'})
+    fireEvent.click(value.getByRole('button', {name: 'Choose date'}))
+    const picker = await screen.findByRole('dialog', {name: 'Choose date'})
+    expect(within(picker).getByRole('button', {name: /May 4, 2026/})).toHaveAttribute('aria-pressed', 'true')
+    const replacementId = dailyNoteBlockId(WS, '2026-05-12')
+    expect(await repo.load(replacementId)).toBeNull()
+    await act(async () => fireEvent.click(within(picker).getByRole('button', {name: /May 12, 2026/})))
+    expect(await value.findByRole('link', {name: 'May 12th, 2026'})).toHaveAttribute('href', `#${WS}/${replacementId}`)
+    expect(owner.peekProperty(appointment)).toBe(replacementId)
+    expect(await repo.load(noteId)).toBeNull()
+
+    await act(async () => fireEvent.click(value.getByRole('button', {name: 'Clear date'})))
+    await value.findByText('Empty')
     expect(owner.peekProperty(appointment)).toBeUndefined()
     expect((await repo.load(OWNER))?.properties[appointment.name]).toBeNull()
-
-    fireEvent.change(search, {target: {value: 'June 8th, 2026'}})
-    fireEvent.click(await screen.findByRole('option', {name: /June 8th, 2026/}))
-    expect(await value.findByText('June 8th, 2026')).toBeInTheDocument()
-    expect(owner.peekProperty(appointment)).toBe(replacement.id)
-    expect(await repo.load(noteId)).toBeNull()
   }, 20_000)
+
+  it('links to the selected day without rendering its journal entries in the property panel', async () => {
+    const appointment = seedProperty({
+      seedKey: 'test/property/panel-appointment', revision: 1, name: 'rows:panel-appointment',
+      preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+    })
+    addExtensions(dailyNotesPlugin({repo}), definitionSeedsFacet.of(appointment))
+    await materializePropertySeeds(repo, WS, [appointment, dailyNoteDateProp, aliasesProp])
+    await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
+    const note = await getOrCreateDailyNote(repo, WS, '2026-05-04')
+    await repo.tx(tx => tx.create({workspaceId: WS, parentId: note.id, orderKey: 'a0', content: 'An entry in the daily note'}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.block(OWNER).set(appointment, note.id)
+    await repo.block(OWNER).set(showPropertiesProp, true)
+    await act(async () => { mount({workspace: 'none'}) })
+
+    const panel = await waitFor(() => {
+      const container = document.querySelector<HTMLElement>('.tm-property-fields')
+      expect(container).not.toBeNull()
+      return within(container!)
+    })
+    const link = await panel.findByRole('link', {name: 'May 4th, 2026'})
+    expect(link).toHaveAttribute('href', `#${WS}/${note.id}`)
+    expect(link.closest('.blockembed')).toBeNull()
+    expect(panel.queryByText('An entry in the daily note')).toBeNull()
+  })
 
   it('keeps an unresolved field-form child out of the scalar inline editor', async () => {
     const InlineEditor = ({value}: PropertyEditorProps<string>) => <button type="button">Edit {value}</button>
@@ -1091,6 +1125,23 @@ describe('a field row\'s own properties', () => {
 })
 
 describe('a scalar whose first value child its codec cannot read', () => {
+  it('shows an awaiting named reference as pending beside its editable text', async () => {
+    await repo.block(OWNER).set(sourceProp, NOTE)
+    const field = await fieldRow(sourceProp.name)
+    const id = 'awaiting-reference'
+    await insertSyncedValue(id, field.id, 'A0', '[[Late arrival]]')
+    expect(await repo.load(id)).toMatchObject({content: '[[Late arrival]]', referenceTargetId: null})
+
+    await act(async () => { mount({workspace: 'non-hidden'}) })
+    const marker = await screen.findByRole('status', {name: 'Waiting for reference target'})
+    const row = blockRow(marker)
+    expect(row).toHaveAttribute('data-block-id', id)
+    expect(within(row).getByText('Late arrival')).toBeInTheDocument()
+    expect(within(row).queryByLabelText('Invalid property value')).toBeNull()
+    await act(() => focusBlock(repo.block(PANEL), id, {edit: true}))
+    expect((await editorFor(id)).state.doc.toString()).toBe('[[Late arrival]]')
+  })
+
   // The cell reads the first child that decodes, and a write lands on that same
   // child. Each editor still edits the block the user is on.
   it('edits the value the cell reads, leaving the unreadable row\'s text alone', async () => {

@@ -134,7 +134,7 @@ const materializeFieldRows = async (tx: Tx, rows: PropertyRows, {values, duplica
     throw new PropertyEditRefusedError('would-change-stored-value', 'Folding this property\u2019s duplicate field rows would change its stored value.')
   }
   const field = await foldFields(tx, rows, duplicates)
-  if (materialize) await reconcileFieldValueChildren(tx, rows.owner, field, {...schema, fieldId: rows.fieldId}, stored)
+  if (materialize) await reconcileFieldValueChildren(tx, field, schema, stored)
   return field
 }
 

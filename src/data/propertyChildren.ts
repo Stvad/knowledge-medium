@@ -1021,16 +1021,23 @@ const firstScalarValue = <T extends ValueChildContent>(
     writing?: string; storedWhileAwaiting?: unknown
   },
 ): {row: T; value: unknown} | undefined => {
+  let blank: T | undefined
   for (const row of contents) {
     try {
-      return {row, value: valueChildContentToEncoded(schema, row)}
+      const value = valueChildContentToEncoded(schema, row)
+      // Enter at the start of a value inserts a blank sibling before it.
+      if (value === null && textOfValueChild(row) === '') {
+        blank ??= row
+        continue
+      }
+      return {row, value}
     } catch {
       if (awaitsReferenceTarget(schema, row) || textOfValueChild(row) === writing) {
         return {row, value: storedWhileAwaiting}
       }
     }
   }
-  return undefined
+  return blank === undefined ? undefined : {row: blank, value: null}
 }
 
 /** Writers and editors can repair a sole unreadable row in place. Multiple unreadable peers

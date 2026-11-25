@@ -1,18 +1,5 @@
-import { isoFromRoamDate } from '@/utils/dailyPage'
-import { dailyNoteDateValue, isDateAlias, isValidDateAlias, todayIso } from './dailyNotes'
-
-const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)$/
-
-/** Reads a literal ISO day or takes the UTC calendar day of an explicit ISO instant. */
-export const storedIsoDay = (text: string): string | undefined => {
-  if (isValidDateAlias(text)) return text
-  const match = ISO_INSTANT.exec(text)
-  if (!match || !isValidDateAlias(match[1])) return undefined
-  const ms = Date.parse(text)
-  if (!Number.isFinite(ms)) return undefined
-  const utcDay = new Date(ms).toISOString().slice(0, 10)
-  return isDateAlias(utcDay) ? utcDay : undefined
-}
+import { isoFromRoamDate, storedIsoDay } from '@/utils/dailyPage'
+import { dailyNoteDateValue, isDateAlias, todayIso } from './dailyNotes'
 
 const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 

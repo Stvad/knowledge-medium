@@ -1074,8 +1074,8 @@ export class TxImpl implements Tx {
       for (const preset of this.ctx.valuePresets?.values() ?? []) {
         const reference = preset.valueChildReference
         if (reference?.matchesSchema(schema)) {
-          const named = await reference.resolve(this, workspaceId, encoded)
-          if (named) return [named]
+          const content = await reference.resolve(this, workspaceId, encoded)
+          if (content) return [{content, referenceTargetId: encoded}]
         }
       }
     }
@@ -1900,7 +1900,7 @@ export class TxImpl implements Tx {
     const fieldRow = await upsertFieldRow(
       this.propertyChildTx, parent, schema.fieldId, fieldRows.map(parseBlockRow),
     )
-    await reconcileFieldValueChildren(this.propertyChildTx, parent, fieldRow, schema, encoded)
+    await reconcileFieldValueChildren(this.propertyChildTx, fieldRow, schema, encoded)
   }
 
   private async requireParentInWorkspace(

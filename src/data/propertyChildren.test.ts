@@ -22,6 +22,7 @@ import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
   awaitsReferenceTarget,
+  scalarValueRow,
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
   encodedPropertyValueToChildContents,
@@ -1837,6 +1838,28 @@ describe('a scalar write rewrites the value the cell reads', () => {
     const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
     return {repo, fieldId: field!.id, valueId: value!.id}
   }
+
+  it('clears the populated optional number once and preserves a divergent peer', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const schema = defineProperty('count', {
+      codec: codecs.optionalNumber, defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
+    })
+    registerDefinition(repo, 'optional-count', COUNT_FIELD_ID, schema)
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', schema, 5), {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(async tx => {
+      await tx.create({id: 'blank', workspaceId: WS, parentId: field!.id, orderKey: 'Zz', content: ''})
+      await tx.create({id: 'peer', workspaceId: WS, parentId: field!.id, orderKey: 'z', content: '9'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await bagOf('p')).toMatchObject({count: 5})
+    await repo.tx(tx => tx.setProperty('p', schema, undefined), {scope: ChangeScope.BlockDefault})
+    expect(await contentOf(value!.id)).toBe('')
+    expect(await contentOf('peer')).toBe('9')
+    expect(await bagOf('p')).toMatchObject({count: 9})
+  })
 
   it('leaves a block ahead of the value alone', async () => {
     const {repo, fieldId, valueId} = await setupCount()
@@ -3959,6 +3982,20 @@ describe('content <-> value codecs: reference value decoding', () => {
     codec: codecs.optionalRef(),
     defaultValue: undefined,
     changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('uses a blank optional ref only after all populated or pending peers', () => {
+    const blank = {content: ''}
+    const pending = {content: '[[pending]]'}
+    const target = {content: '((chosen))'}
+    for (const [peer, expected] of [[pending, 'previous'], [target, 'chosen']] as const) {
+      const rows = [blank, peer, target]
+      expect(childContentsToEncodedPropertyValue(optionalRefSchema, rows, 'previous')).toBe(expected)
+      expect(scalarValueRow(optionalRefSchema, rows)).toBe(peer)
+      expect(scalarValueRow(optionalRefSchema, rows, '((new))')).toBe(peer)
+    }
+    expect(childContentsToEncodedPropertyValue(optionalRefSchema, [blank, 'unreadable'], 'previous')).toBeNull()
+    expect(scalarValueRow(optionalRefSchema, [blank, {content: 'unreadable'}])).toBe(blank)
   })
 
   it('writes a ref value as `((id))`, not the bare id', () => {

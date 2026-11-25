@@ -147,13 +147,11 @@ function ReferenceEmbed({
   blockId,
   readOnly,
   onRemove,
-  missingTargetText,
 }: {
   owner: Block
   blockId: string
   readOnly: boolean
   onRemove: () => void
-  missingTargetText?: string
 }) {
   const blockContext = useBlockContext()
   const panelId = blockContext.panelId ?? `property:${owner.id}`
@@ -166,7 +164,6 @@ function ReferenceEmbed({
             blockId={blockId}
             sourceBlockId={owner.id}
             occurrenceId={`property:${owner.id}:${blockId}`}
-            missingTargetText={missingTargetText}
           />
         </BlockRefAncestorsProvider>
       </NestedBlockContextProvider>
@@ -360,16 +357,13 @@ export function ReferenceSearch({
   )
 }
 
-type ScalarRefEditorProps = (PropertyEditorProps<string> | PropertyEditorProps<string | undefined>) & {
-  missingTargetText?: string
-}
+type ScalarRefEditorProps = PropertyEditorProps<string> | PropertyEditorProps<string | undefined>
 
 function RefPropertyEditorInner({
   value,
   onChange,
   block,
   schema,
-  missingTargetText,
 }: ScalarRefEditorProps & {block: Block}) {
   const blockId = normalizeId(value)
   const readOnly = block.repo.isReadOnly
@@ -385,7 +379,6 @@ function RefPropertyEditorInner({
         blockId={blockId}
         readOnly={readOnly}
         onRemove={() => onChange('')}
-        missingTargetText={missingTargetText}
       />
     )
   }

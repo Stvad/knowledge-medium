@@ -817,10 +817,7 @@ const convertedScalar = async (
   const result = await change.conversion!.convert(encoded, {tx: ctx.tx, types: ctx.types, propertySchemas: ctx.propertySchemas, workspaceId}, sourceText)
   if ('encoded' in result) {
     if (result.encoded === undefined) throw new Error('A scalar conversion must return a stored value')
-    if (!propertyCellValueRejection(change.schema, result.encoded)) {
-      const [child] = await ctx.tx.propertyValueChildContents(change.schema, result.encoded, workspaceId)
-      return {encoded: result.encoded, child: child!, projected: child!.referenceTargetId ?? result.encoded}
-    }
+    if (!propertyCellValueRejection(change.schema, result.encoded)) return result
     recordRefusal(refusals, change.fieldId, ownerId, 'destination type cannot store this value')
   } else {
     recordRefusal(refusals, change.fieldId, ownerId, result.refused)
@@ -877,7 +874,7 @@ const applyToParent = async (
           {...parent, properties: {...parent.properties, [schema.name]: converted.encoded}},
           {resolveNameSchema: () => schema}, [schema.name])
       }
-      assignments.push({name: change.newName, value: converted.projected, unset: false})
+      assignments.push({name: change.newName, value: converted.encoded, unset: false})
       continue
     }
     if (change.conversion && !childBacked) {
@@ -923,7 +920,8 @@ const applyToParent = async (
           }
           const converted = await convertedScalar(change, ctx, parent.workspaceId, encoded, refusals, parentId, value.content)
           if (converted === undefined) continue
-          proposed = converted.child
+          const [child] = await ctx.tx.propertyValueChildContents(change.schema, converted.encoded, parent.workspaceId)
+          proposed = child!
         } else {
           const conversion = convertValueChildContent(change.beforeSchema, change.schema, value)
           if (conversion.outcome === 'unreadable') continue
@@ -1156,7 +1154,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       for (const row of rows) parents.add(row.id)
       if (change.retainedDefault !== undefined) {
         const converted = await convertedScalar(change, ctx, event.workspaceId, change.retainedDefault, refusals, change.fieldId)
-        if (converted !== undefined) await ctx.tx.setProperty(change.fieldId, propertyDefaultProp, converted.projected)
+        if (converted !== undefined) await ctx.tx.setProperty(change.fieldId, propertyDefaultProp, converted.encoded)
       }
     }
     // This tx PARSED and BUILT each changing definition's row, so its field

@@ -18,12 +18,10 @@ export function BlockEmbed({
   blockId,
   sourceBlockId,
   occurrenceId,
-  missingTargetText,
 }: {
   blockId: string
   sourceBlockId: string
   occurrenceId: string
-  missingTargetText?: string
 }) {
   const repo = useRepo()
   const ancestors = useBlockRefAncestors()
@@ -41,9 +39,6 @@ export function BlockEmbed({
   const targetExists = useBlockExists(target)
 
   if (!targetExists) {
-    if (missingTargetText !== undefined) {
-      return <span className="block truncate py-1 text-sm text-muted-foreground" title={missingTargetText}>{missingTargetText}</span>
-    }
     return (
       <div className="blockembed blockembed--unresolved border border-dashed border-muted-foreground/40 rounded p-2 my-1 text-sm text-muted-foreground">
         Embedded block not loaded yet (({blockId.slice(0, 8)}…))

@@ -5,7 +5,7 @@
  * of the old date-shift actions but exposes get/set in absolute-ISO
  * form for the calendar sheet and scrub gestures.
  */
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type ProposedValueChild } from '@/data/api'
 import type { Block } from '@/data/block'
 import { hasSourceContent, takesTextEdit } from '@/data/blockTypes'
 import { resolvePropertyValueFieldSchema } from '@/data/propertyChildren'
@@ -16,9 +16,8 @@ import {
   renderWikilink,
 } from '@/plugins/references/referenceParser.js'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
-import { formatRoamDate } from '@/utils/dailyPage.js'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
-import { dailyNoteDateValue, getOrCreateDailyNoteInTx } from './dailyNotes.ts'
+import { dailyNoteTitle, getOrCreateDailyNoteInTx } from './dailyNotes.ts'
 import { isDayReferenceSchema } from './schema.ts'
 
 export interface DateReferenceMatch {
@@ -49,9 +48,7 @@ export const replaceSingleDateReferenceContent = (
 ): string | null => {
   const match = singleDateReferenceMatch(content)
   if (!match) return null
-  const nextAlias = match.style === 'iso'
-    ? iso
-    : formatRoamDate(dailyNoteDateValue(iso), 'UTC')
+  const nextAlias = match.style === 'iso' ? iso : dailyNoteTitle(iso)
   // Unreachable for a date alias (short, delimiter-free), but `null` is
   // already this function's "no rewrite" answer — and beats splicing the
   // string "null" into the user's content.
@@ -86,19 +83,17 @@ export const referenceDateAdapter: BlockDateAdapter = {
       if (!takesTextEdit(row)) return
       const nextContent = replaceSingleDateReferenceContent(row.content, iso)
       if (nextContent === null || nextContent === row.content) return
-      const dateLink = parseExactReferenceBlockContent(nextContent)
-      if (dateLink?.kind === 'alias') {
+      let patch: ProposedValueChild = {content: nextContent}
+      if (parseExactReferenceBlockContent(nextContent)?.kind === 'alias') {
         const schema = await resolvePropertyValueFieldSchema(tx, row)
-        if (schema && isDayReferenceSchema(schema) && !await tx.aliasLookup(dateLink.alias, row.workspaceId)) {
-          // The owner cell projects the value row in this transaction, so the alias must already resolve.
+        if (schema && isDayReferenceSchema(schema)) {
           tx.assertWritableWorkspace(row.workspaceId)
-          await getOrCreateDailyNoteInTx(tx, block.repo.snapshotTypeRegistries(), row.workspaceId, iso)
-          if (!await tx.aliasLookup(dateLink.alias, row.workspaceId)) {
-            throw new Error(`Could not resolve the new day ${iso}`)
-          }
+          const id = await getOrCreateDailyNoteInTx(tx, block.repo.snapshotTypeRegistries(), row.workspaceId, iso)
+          const [value] = await tx.propertyValueChildContents(schema, id, row.workspaceId)
+          patch = value!
         }
       }
-      await tx.update(block.id, {content: nextContent})
+      await tx.update(block.id, patch)
       written = true
     }, {scope: ChangeScope.BlockDefault, description: 'set date reference'})
     return written

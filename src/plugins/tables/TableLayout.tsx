@@ -5,7 +5,7 @@ import {
 import { BlockChildren, BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
-import { ReferenceLink } from '@/components/references/ReferenceLink'
+import { CompactReferenceLink } from '@/components/references/CompactReferenceLink'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { PropertyDisplayScopeContext, PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
@@ -19,8 +19,6 @@ import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
 import { useChildIdsForMode, useContent, useHandle, useWorkspaceId } from '@/hooks/block'
-import { storedIsoDay } from '@/plugins/daily-notes/dayProperty'
-import { isDayReferenceSchema } from '@/plugins/daily-notes/schema'
 import { isSingleValueProperty, resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
@@ -36,7 +34,6 @@ import { columnSortKeys, sortOrder, useViewSort, writeSort, type ViewSort } from
 import { notesAmong } from './childrenViews'
 import { registerGrid, tableRenderScopeId } from './registry'
 import { useIsMobile } from '@/utils/react'
-import { labelForBlockData } from '@/utils/linkTargetAutocomplete'
 import { GUTTER_VARIABLE, MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, gutterWidth } from './rowGutter'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
@@ -88,26 +85,13 @@ const formatStored = (value: unknown): string =>
     : typeof value === 'object' ? JSON.stringify(value)
     : String(value)
 
-const StoredReference = ({row, targetId, missingText}: {row: Block; targetId: string; missingText?: string}) => {
-  const workspaceId = useWorkspaceId(row)
-  const target = row.repo.block(targetId)
-  const label = useHandle(target, {selector: data => data?.workspaceId === workspaceId
-    ? data.content.trim() || labelForBlockData(data, 'Untitled block')
-    : null})
-  return label ? <div className="truncate"><ReferenceLink block={target}>{label}</ReferenceLink></div>
-    : <span className="block truncate text-muted-foreground" title={missingText}>{missingText ?? 'Unavailable reference'}</span>
-}
-
 /** The value from the property bag, for cells that draw no value rows. */
 const StoredValue = ({row, properties, schema}: {
   row: Block; properties: BlockData['properties'] | undefined; schema: AnyPropertySchema
 }) => {
   const stored = properties && storedPropertyValue(properties, schema.name)
   const targetId = isRefCodec(schema.codec) ? decodeRefId(schema.codec, stored) : undefined
-  if (targetId) {
-    const missingText = isDayReferenceSchema(schema) && storedIsoDay(targetId) ? targetId : undefined
-    return <StoredReference row={row} targetId={targetId} missingText={missingText}/>
-  }
+  if (targetId) return <CompactReferenceLink owner={row} targetId={targetId}/>
   const text = formatStored(stored)
   return text ? <span className="block truncate text-muted-foreground" title={text}>{text}</span> : null
 }

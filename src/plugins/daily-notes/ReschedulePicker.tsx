@@ -13,7 +13,7 @@
  * `srsNextReviewDateProp` while content-date blocks rewrite the inline
  * wikilink, all behind the same UI.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils.js'
 import { useAnchoredFloating } from '@/components/ui/anchored-floating.js'
@@ -22,7 +22,7 @@ import { useRepo } from '@/context/repo.js'
 import { useIsMobile } from '@/utils/react.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import { addDaysIso, todayIso } from './dailyNotes.ts'
-import { pickBlockDateAdapter, type BlockDateAdapter } from './blockDateAdapter.ts'
+import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 import { CalendarGrid } from './CalendarGrid.tsx'
 import { firstOfMonth, formatDayLabel, fromIso } from './calendar.ts'
 
@@ -95,8 +95,8 @@ const QUICK_CHIPS: readonly {label: string; offset: number}[] = [
 ]
 
 interface ActiveSession {
-  adapter: BlockDateAdapter
   initialIso: string
+  write: (iso: string) => Promise<boolean>
 }
 
 export const ReschedulePicker = ({
@@ -107,13 +107,7 @@ export const ReschedulePicker = ({
 }: DialogContextProps<ReschedulePickerResult> & ReschedulePickerProps) => {
   const runtime = useAppRuntime()
   const repo = useRepo()
-  const isMobile = useIsMobile()
   const [session, setSession] = useState<ActiveSession | null>(null)
-  const [visibleMonth, setVisibleMonth] = useState(() => firstOfMonth(new Date()))
-  const [previewIso, setPreviewIso] = useState<string | null>(null)
-  const [pending, setPending] = useState(false)
-  const stripRef = useRef<HTMLDivElement | null>(null)
-  const stripDidScrollRef = useRef(false)
 
   // The finalize callbacks are fresh closures from the DialogHost each
   // render; read them through a ref so the mount-once load effect can
@@ -152,79 +146,121 @@ export const ReschedulePicker = ({
         resolvedIso = null
       }
       if (cancelled) return
-      const initialIso = resolvedIso ?? todayIso()
-      const initialDate = fromIso(initialIso) ?? new Date()
-      setSession({adapter, initialIso})
-      setVisibleMonth(firstOfMonth(initialDate))
-      setPreviewIso(initialIso)
+      setSession({
+        initialIso: resolvedIso ?? todayIso(),
+        write: async iso => {
+          const written = await adapter.setIso(block, iso)
+          if (!written) console.warn(`[reschedule] adapter ${adapter.id} refused write`)
+          return written
+        },
+      })
     })()
     return () => { cancelled = true }
   }, [repo, runtime, blockId])
 
+  return session && <DatePickerSheet
+    session={session}
+    anchorRect={anchorRect}
+    label="Reschedule block"
+    title="Reschedule to"
+    cancel={cancel}
+    finish={rescheduled => resolve({rescheduled})}
+  />
+}
+
+export interface DatePropertyPickerProps {
+  initialIso?: string
+  anchorRect: ReschedulePickerAnchorRect
+  write: ActiveSession['write']
+}
+
+export function DatePropertyPicker({initialIso, anchorRect, write, resolve, cancel}: DialogContextProps<void> & DatePropertyPickerProps) {
+  return <DatePickerSheet
+    session={{initialIso: initialIso ?? todayIso(), write}}
+    anchorRect={anchorRect}
+    label="Choose date"
+    title="Choose date"
+    cancel={cancel}
+    finish={() => resolve()}
+  />
+}
+
+function DatePickerSheet({session: {initialIso, write}, anchorRect, label, title, cancel, finish}: {
+  session: ActiveSession
+  anchorRect?: ReschedulePickerAnchorRect
+  label: string
+  title: string
+  cancel: () => void
+  finish: (written: boolean) => void
+}) {
+  const isMobile = useIsMobile()
+  const [visibleMonth, setVisibleMonth] = useState(() => firstOfMonth(fromIso(initialIso) ?? new Date()))
+  const [previewIso, setPreviewIso] = useState(initialIso)
+  const [pending, setPending] = useState(false)
+  const sheetRef = useRef<HTMLDivElement | null>(null)
+  const stripRef = useRef<HTMLDivElement | null>(null)
+
   useEffect(() => {
-    if (!session) return
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') cancelRef.current()
+      if (event.key === 'Escape') cancel()
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [session])
+  }, [cancel])
 
-  const stripCells = useMemo(
-    () => session ? buildStripCells(session.initialIso) : [],
-    [session],
-  )
-  const desktopFloating = useAnchoredFloating({
-    open: Boolean(session && !isMobile),
+  const stripCells = useMemo(() => buildStripCells(initialIso), [initialIso])
+  const {floatingStyle, setFloatingElement} = useAnchoredFloating({
+    open: !isMobile,
     anchorRect: anchorRect ?? null,
     gap: DESKTOP_PANEL_MARGIN,
     viewportMargin: DESKTOP_PANEL_MARGIN,
     fallbackStyle: DESKTOP_FALLBACK_POSITION,
   })
-  const desktopPosition = isMobile ? undefined : desktopFloating.floatingStyle
+  const desktopPosition = isMobile ? undefined : floatingStyle
+  const setSheetElement = useCallback((element: HTMLDivElement | null) => {
+    sheetRef.current = element
+    if (!isMobile) setFloatingElement(element)
+  }, [isMobile, setFloatingElement])
+  const visible = desktopPosition?.visibility !== 'hidden'
+  useEffect(() => {
+    if (visible) sheetRef.current?.focus({preventScroll: true})
+  }, [visible])
 
   // Center the strip on the initial date the first time it appears, then
   // never auto-scroll again — the user's manual scroll position is more
   // valuable than re-centering on each preview tick.
   useEffect(() => {
-    if (!session || !stripRef.current || stripDidScrollRef.current) return
     const container = stripRef.current
+    if (!container) return
     const initialOffset = STRIP_PAST_DAYS * STRIP_CELL_WIDTH_PX
     const targetScrollLeft = initialOffset - container.clientWidth / 2 + STRIP_CELL_WIDTH_PX / 2
     container.scrollLeft = Math.max(0, targetScrollLeft)
-    stripDidScrollRef.current = true
-  }, [session])
-
-  if (!session) return null
+  }, [])
 
   const today = todayIso()
 
   const commit = async (iso: string) => {
-    if (!session || pending) return
+    if (pending) return
     setPending(true)
     let wrote = false
     try {
-      const block = repo.block(blockId)
-      wrote = await session.adapter.setIso(block, iso)
-      if (!wrote) {
-        console.warn(`[reschedule] adapter ${session.adapter.id} refused write`)
-      }
+      wrote = await write(iso)
     } catch (error) {
       // Callers fire commit with `void commit(...)`, so a throw here
       // would surface only as an unhandled rejection while the sheet
       // closes silently. Catch + log so the failure is at least
       // visible to anyone with the console open. (No toast plumbing
       // in scope for the prototype.)
-      console.error(`[reschedule] adapter ${session.adapter.id} threw on write`, error)
+      console.error('[date picker] write failed', error)
     }
     // Report `rescheduled` only when the date actually landed; a refused
     // or thrown write is, for the opener's purposes, the same as a cancel
     // (the SRS review session must not advance past a card it never
     // moved).
-    resolve({rescheduled: wrote})
+    finish(wrote)
   }
 
-  const previewDate = previewIso ? fromIso(previewIso) : null
+  const previewDate = fromIso(previewIso)
   const previewLabel = previewDate ? formatDayLabel(previewDate) : '—'
 
   const sheetClassName = isMobile
@@ -244,9 +280,10 @@ export const ReschedulePicker = ({
         onClick={() => cancel()}
       />
       <div
-        ref={isMobile ? undefined : desktopFloating.setFloatingElement}
+        ref={setSheetElement}
         role="dialog"
-        aria-label="Reschedule block"
+        tabIndex={-1}
+        aria-label={label}
         aria-busy={pending || undefined}
         className={sheetClassName}
         style={desktopPosition}
@@ -258,7 +295,7 @@ export const ReschedulePicker = ({
         )}
 
         <div className="mb-3 flex items-baseline justify-between gap-3">
-          <div className="text-sm font-medium text-muted-foreground">Reschedule to</div>
+          <div className="text-sm font-medium text-muted-foreground">{title}</div>
           <div className="truncate text-base font-semibold">{previewLabel}</div>
         </div>
 

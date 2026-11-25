@@ -275,6 +275,46 @@ describe('parseReferences — ref-typed properties', () => {
     env = await setup(refSchemaExtension)
   })
 
+  it('stamps each whole date link and its property cell in the pass that creates the note', async () => {
+    await env.h.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'none', 'children')`, [WS])
+    const owners = ['first', 'second']
+    await env.repo.tx(async tx => {
+      for (const id of owners) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: id, properties: {reviewer: 'previous'}})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    const values = await env.h.db.getAll<{id: string}>("SELECT id FROM blocks WHERE content = '((previous))'")
+    expect(values).toHaveLength(2)
+    expect(await env.read(dailyId('2026-02-03'))).toBeNull()
+    await env.repo.tx(async tx => {
+      for (const row of values) await tx.update(row.id, {content: '[[February 3rd, 2026]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    const target = dailyId('2026-02-03')
+    expect(await env.read(target)).toBeTruthy()
+    for (const row of values) {
+      expect(await env.h.db.get('SELECT reference_target_id FROM blocks WHERE id = ?', [row.id]))
+        .toEqual({reference_target_id: target})
+    }
+    for (const id of owners) expect(JSON.parse((await env.read(id))!.properties_json).reviewer).toBe(target)
+  })
+
+  it('stamps a pending date whose backlink already exists when the parse pass begins', async () => {
+    await env.repo.tx(tx => tx.create({id: 'date-source', workspaceId: WS, parentId: null, orderKey: 'a',
+      content: '[[February 3rd, 2026]]'}), {scope: ChangeScope.BlockDefault})
+    await flush()
+    const target = dailyId('2026-02-03')
+    expect(JSON.parse((await env.read('date-source'))!.references_json)).toEqual([{id: target, alias: 'February 3rd, 2026'}])
+    await env.h.db.execute('UPDATE blocks SET reference_target_id = NULL WHERE id = ?', ['date-source'])
+    await env.repo.tx(tx => tx.update('date-source', {properties: {flag: true}}), {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await env.h.db.get('SELECT reference_target_id FROM blocks WHERE id = ?', ['date-source']))
+      .toEqual({reference_target_id: target})
+  })
+
   it('projects ref and refList properties with sourceField without alias-target creation', async () => {
     await env.repo.tx(
       tx => tx.create({

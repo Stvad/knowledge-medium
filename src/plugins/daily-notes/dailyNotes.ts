@@ -11,7 +11,7 @@ import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock, partitionClaimableAliases, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { decodeRowProperty, safeDecodeRowProperty } from '@/data/rowProperty'
-import { formatRoamDate, formatIsoDate } from '@/utils/dailyPage'
+import { formatRoamDate, formatIsoDate, isIsoDayShape, isValidIsoDay } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
 
 /** Build the indexable `Date` stored on `dailyNoteDateProp`. The
@@ -37,6 +37,9 @@ export const dailyNoteDateValue = (iso: string): Date => {
   }
   return d
 }
+
+export const dailyNoteTitle = (iso: string): string =>
+  formatRoamDate(dailyNoteDateValue(iso), 'UTC')
 
 // Namespace UUIDs — fixed constants so two clients computing the same
 // (workspaceId, isoDate) pair derive the same block id even before any
@@ -134,7 +137,7 @@ const dailyNoteOrderKey = (iso: string): string => {
 
 const dailyNoteShape = (workspaceId: string, iso: string) => {
   const date = dailyNoteDateValue(iso)
-  const title = formatRoamDate(date, 'UTC')
+  const title = dailyNoteTitle(iso)
   return {id: dailyNoteBlockId(workspaceId, iso), date, title, aliases: [title, iso], orderKey: dailyNoteOrderKey(iso)}
 }
 
@@ -235,8 +238,7 @@ export {dailyNoteCreatedAt}
  *  (e.g. extracting the iso from a daily-note's alias list) and the
  *  caller will tolerate a malformed-but-shaped result. Routing
  *  decisions (references processor) use `isValidDateAlias` instead. */
-export const isDateAlias = (alias: string): boolean =>
-  /^\d{4}-\d{2}-\d{2}$/.test(alias)
+export const isDateAlias = isIsoDayShape
 
 /** Shape + calendar-validity check. Returns `true` only for strings
  *  that parse to a real calendar day (rejects `2026-13-01`,
@@ -247,12 +249,7 @@ export const isDateAlias = (alias: string): boolean =>
  *  shape check fall through to `ensureAliasTarget` (regular alias
  *  target page) so the user's typo doesn't pollute the daily-note
  *  namespace with a wrong-but-deterministic seat. */
-export const isValidDateAlias = (alias: string): boolean => {
-  if (!isDateAlias(alias)) return false
-  const ms = Date.parse(`${alias}T00:00:00Z`)
-  if (Number.isNaN(ms)) return false
-  return new Date(ms).toISOString().slice(0, 10) === alias
-}
+export const isValidDateAlias = isValidIsoDay
 
 /** Legacy notes can have only an ISO alias. Validate the calendar day so February 30 cannot roll over to March 2. */
 export const dailyNoteIsoFromAliases = (

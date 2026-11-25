@@ -42,11 +42,32 @@ export const formatIsoDate = (date: Date): string => {
 export const dailyPageAliases = (date: Date): [string, string] =>
   [formatRoamDate(date), formatIsoDate(date)]
 
+export const isIsoDayShape = (text: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(text)
+
 /** Local midnight for a canonical ISO day. Parsing a full ISO string preserves years 0000–0099. */
 export const parseIsoDay = (iso: string): Date | null => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null
+  if (!isIsoDayShape(iso)) return null
   const date = new Date(`${iso}T00:00:00`)
   return formatIsoDate(date) === iso ? date : null
+}
+
+export const isValidIsoDay = (text: string): boolean => {
+  if (!isIsoDayShape(text)) return false
+  const ms = Date.parse(`${text}T00:00:00Z`)
+  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === text
+}
+
+const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)$/
+
+/** Read a literal ISO day or take the UTC calendar day of an explicit ISO instant. */
+export const storedIsoDay = (text: string): string | undefined => {
+  if (isValidIsoDay(text)) return text
+  const match = ISO_INSTANT.exec(text)
+  if (!match || !isValidIsoDay(match[1]!)) return undefined
+  const ms = Date.parse(text)
+  if (!Number.isFinite(ms)) return undefined
+  const utcDay = new Date(ms).toISOString().slice(0, 10)
+  return isIsoDayShape(utcDay) ? utcDay : undefined
 }
 
 /** Convert a user-entered Roam date to ISO, accepting month and ordinal letters in either case. */

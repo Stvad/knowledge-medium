@@ -22,12 +22,17 @@ import {
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import type { AppExtension } from '@/facets/facet'
 import { annotationsDataExtension } from '@/plugins/annotations/dataExtension'
 import { createThread } from '@/plugins/annotations/threads'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension'
+import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
+import { SRS_SM25_TYPE, srsNextReviewDateProp } from '@/plugins/srs-rescheduling/schema'
+import { buildDueCardsQuery } from '@/plugins/srs-review/dueQuery'
 import { dailyNoteBlockId, getOrCreateDailyNote, getOrCreateDailyNoteInTx } from '../dailyNotes'
 import { dailyNotesDataExtension } from '../dataExtension'
+import { referenceDateAdapter } from '../referenceDateAdapter'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '../schema'
 
 const WS = 'date-conversion-workspace'
@@ -46,7 +51,7 @@ beforeAll(async () => { testDb = await createTestDb() })
 afterAll(async () => { await testDb.cleanup() })
 beforeEach(async () => { await resetTestDb(testDb.db) })
 
-const setup = async (mode: 'cell' | 'children', defaultValue?: string) => {
+const setup = async (mode: 'cell' | 'children', defaultValue?: string, extensions: readonly AppExtension[] = []) => {
   await testDb.db.execute(
     `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
        encryption_mode, wk_canary, properties_migration)
@@ -56,7 +61,7 @@ const setup = async (mode: 'cell' | 'children', defaultValue?: string) => {
   const {repo} = createTestRepo({
     db: testDb.db,
     user: USER,
-    extensions: [dailyNotesDataExtension, referencesDataExtension, backlinksDataExtension, annotationsDataExtension],
+    extensions: [dailyNotesDataExtension, referencesDataExtension, backlinksDataExtension, annotationsDataExtension, ...extensions],
   })
   repo.setActiveWorkspaceId(WS)
   await repo.tx(tx => tx.create({
@@ -150,7 +155,7 @@ const childBackedDay = async (owners: string[]) => {
   return {repo, schema: repo.propertySchemas.get(NAME)!}
 }
 
-const createLongAliasOwner = async (repo: Repo, title = NEW_DAY_TITLE) => {
+const createAliasOwner = async (repo: Repo, title = NEW_DAY_TITLE) => {
   const id = 'ordinary-page'
   await repo.tx(tx => tx.create({
     id, workspaceId: WS, parentId: null, orderKey: 'claimant', content: title,
@@ -270,9 +275,9 @@ describe('child-backed daily-note references', () => {
     await expectBacklinksFrom(repo, note.id, ['named', 'legacy'])
   })
 
-  it.each(['setProperty', 'setProperties'] as const)('keeps the ordinary alias owner as the target on repeated %s writes', async writer => {
+  it.each(['setProperty', 'setProperties'] as const)('keeps the daily note on repeated %s writes when another page owns its title', async writer => {
     const {repo, schema} = await childBackedDay(['owner'])
-    const claimant = await createLongAliasOwner(repo)
+    const claimant = await createAliasOwner(repo)
     const note = await getOrCreateDailyNote(repo, WS, NEW_DAY)
     expect(note.id).not.toBe(claimant)
     expect(await expectNote(repo, NEW_DAY)).toBe(note.id)
@@ -284,23 +289,23 @@ describe('child-backed daily-note references', () => {
     await write()
     await repo.awaitProcessors()
     const child = await readValueChild('owner')
-    expect(child).toMatchObject({content: `[[${NEW_DAY_TITLE}]]`, reference_target_id: claimant})
-    expect((await storedProperties('owner'))[NAME]).toBe(claimant)
+    expect(child).toMatchObject({content: `((${note.id}))`, reference_target_id: note.id})
+    expect((await storedProperties('owner'))[NAME]).toBe(note.id)
 
     const before = await liveGraph()
     await write()
     await repo.awaitProcessors()
 
     expect(await readValueChild('owner')).toEqual(child)
-    expect((await storedProperties('owner'))[NAME]).toBe(claimant)
-    expect(await propertyBacklinks(claimant)).toEqual(['owner'])
-    expect(await propertyBacklinks(note.id)).toEqual([])
+    expect((await storedProperties('owner'))[NAME]).toBe(note.id)
+    expect(await propertyBacklinks(claimant)).toEqual([])
+    expect(await propertyBacklinks(note.id)).toEqual(['owner'])
     expect(await liveGraph()).toEqual(before)
   })
 
-  it.each([[NEW_DAY, NEW_DAY_TITLE], ['0900-03-01', 'March 1st, 900']])('projects the existing alias owner when converting %s to a day', async (day, title) => {
+  it.each([[NEW_DAY, NEW_DAY_TITLE], ['0900-03-01', 'March 1st, 900']])('keeps the note when converting %s and another page owns its title', async (day, title) => {
     const repo = await setup('children')
-    const claimant = await createLongAliasOwner(repo, title)
+    const claimant = await createAliasOwner(repo, title)
     await createOwners(repo, {owner: midnight(day)})
     const original = await readValueChild('owner')
     expect(original).toMatchObject({content: midnight(day), reference_target_id: null})
@@ -310,11 +315,38 @@ describe('child-backed daily-note references', () => {
 
     const note = await expectNote(repo, day)
     expect(await readValueChild('owner')).toEqual({
-      ...original, content: `[[${title}]]`, reference_target_id: claimant,
+      ...original, content: `((${note}))`, reference_target_id: note,
     })
-    expect((await storedProperties('owner'))[NAME]).toBe(claimant)
-    expect(await propertyBacklinks(claimant)).toEqual(['owner'])
-    expect(await propertyBacklinks(note)).toEqual([])
+    expect((await storedProperties('owner'))[NAME]).toBe(note)
+    expect(await propertyBacklinks(claimant)).toEqual([])
+    expect(await propertyBacklinks(note)).toEqual(['owner'])
+  })
+
+  it.each([
+    ['ISO', EXISTING_DAY, false],
+    ['ISO', EXISTING_DAY, true],
+    ['long-form', 'February 2nd, 2026', true],
+  ] as const)('scrubs a %s wikilink (%s) to the new note with a title conflict of %s', async (_form, alias, conflict) => {
+    const {repo, schema} = await childBackedDay(['owner'])
+    const initial = await getOrCreateDailyNote(repo, WS, EXISTING_DAY)
+    const claimant = conflict ? await createAliasOwner(repo) : null
+    await repo.tx(tx => tx.setProperty('owner', schema, initial.id), SCOPE)
+    const row = repo.block((await readValueChild('owner'))!.id)
+    await row.setContent(`[[${alias}]]`)
+    await repo.awaitProcessors()
+    expect(await referenceDateAdapter.getCurrentIso(row)).toBe(EXISTING_DAY)
+    expect((await storedProperties('owner'))[NAME]).toBe(initial.id)
+    const next = dailyNoteBlockId(WS, NEW_DAY)
+    expect(await repo.load(next)).toBeNull()
+
+    expect(await referenceDateAdapter.setIso(row, NEW_DAY)).toBe(true)
+
+    expect(await expectNote(repo, NEW_DAY)).toBe(next)
+    expect(await readValueChild('owner')).toMatchObject({
+      id: row.id, content: conflict ? `((${next}))` : `[[${NEW_DAY_TITLE}]]`, reference_target_id: next,
+    })
+    expect((await storedProperties('owner'))[NAME]).toBe(next)
+    expect(await repo.query.aliasLookup({workspaceId: WS, alias: NEW_DAY_TITLE}).load()).toMatchObject({id: claimant ?? next})
   })
 
   it.each(['typed write', 'value block edit'] as const)('clears a day to a blank on the same value row through a %s', async edit => {
@@ -647,24 +679,26 @@ it('reports completion for a conversion with only bag consumers', async () => {
   }
 })
 
-it('equal wikilink text with a new claimant reconciles target column', async () => {
+it('repairs a mismatched target column when the daily note owns the equal wikilink', async () => {
   const {repo, schema} = await childBackedDay(['owner'])
-  const claimant = await createLongAliasOwner(repo)
   const note = await getOrCreateDailyNote(repo, WS, NEW_DAY)
+  const other = await getOrCreateDailyNote(repo, WS, EXISTING_DAY)
   await repo.tx(tx => tx.setProperty('owner', schema, note.id), SCOPE)
   await repo.awaitProcessors()
   const child = (await readValueChild('owner'))!
-  expect(child).toMatchObject({content: `[[${NEW_DAY_TITLE}]]`, reference_target_id: claimant})
-  await testDb.db.execute('UPDATE blocks SET reference_target_id = ? WHERE id = ?', [note.id, child.id])
-  expect(await repo.query.aliasLookup({workspaceId: WS, alias: NEW_DAY_TITLE}).load()).toMatchObject({id: claimant})
+  expect(child).toMatchObject({content: `[[${NEW_DAY_TITLE}]]`, reference_target_id: note.id})
+  await testDb.db.execute('UPDATE blocks SET reference_target_id = ? WHERE id = ?', [other.id, child.id])
+  expect(await readValueChild('owner')).toEqual({...child, reference_target_id: other.id})
   await repo.tx(tx => tx.setProperty('owner', schema, note.id), SCOPE)
   await repo.awaitProcessors()
-  expect({child: (await readValueChild('owner'))?.reference_target_id, cell: (await storedProperties('owner'))[NAME]}).toEqual({child: claimant, cell: claimant})
+  expect(await readValueChild('owner')).toEqual(child)
+  expect((await storedProperties('owner'))[NAME]).toBe(note.id)
 })
 
 it.each([false, true])('materializes the converted bag and its resolved target with an alias conflict of %s', async conflict => {
   const repo = await setup('children')
-  const expected = conflict ? await createLongAliasOwner(repo) : dailyNoteBlockId(WS, NEW_DAY)
+  if (conflict) await createAliasOwner(repo)
+  const expected = dailyNoteBlockId(WS, NEW_DAY)
   await createOwners(repo, {owner: undefined})
   await repo.awaitProcessors()
   await testDb.db.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({[NAME]: midnight(NEW_DAY)}), 'owner'])
@@ -672,8 +706,40 @@ it.each([false, true])('materializes the converted bag and its resolved target w
 
   await retype(repo)
   await repo.awaitProcessors()
-  expect(await readValueChild('owner')).toMatchObject({content: `[[${NEW_DAY_TITLE}]]`, reference_target_id: expected})
+  expect(await readValueChild('owner')).toMatchObject({
+    content: conflict ? `((${expected}))` : `[[${NEW_DAY_TITLE}]]`, reference_target_id: expected,
+  })
   expect((await storedProperties('owner'))[NAME]).toBe(expected)
+})
+
+it('uses named links for SRS review dates and keeps cards due when another page owns the title', async () => {
+  const repo = await setup('children', undefined, [srsReschedulingDataExtension])
+  const claimant = await createAliasOwner(repo)
+  const initial = await getOrCreateDailyNote(repo, WS, EXISTING_DAY)
+  const note = await getOrCreateDailyNote(repo, WS, NEW_DAY)
+  const field = propertyDefinitionBlockId(WS, srsNextReviewDateProp.seedKey)
+  await repo.tx(async tx => {
+    await tx.create({id: 'card', workspaceId: WS, parentId: null, orderKey: 'card', content: 'card'})
+    await tx.setProperty('card', typesProp, [SRS_SM25_TYPE])
+    await tx.setProperty('card', srsNextReviewDateProp, initial.id)
+  }, SCOPE)
+  expect(await readValueChild('card', field)).toMatchObject({
+    content: '[[February 2nd, 2026]]', reference_target_id: initial.id,
+  })
+  const value = repo.block((await readValueChild('card', field))!.id)
+  await value.setContent(`((${initial.id}))`)
+  expect((await readValueChild('card', field))?.content).toBe(`((${initial.id}))`)
+  await repo.tx(tx => tx.setProperty('card', srsNextReviewDateProp, initial.id), SCOPE)
+  expect(await readValueChild('card', field)).toMatchObject({
+    id: value.id, content: '[[February 2nd, 2026]]', reference_target_id: initial.id,
+  })
+
+  await repo.tx(tx => tx.setProperty('card', srsNextReviewDateProp, note.id), SCOPE)
+  expect(await readValueChild('card', field)).toMatchObject({content: `((${note.id}))`, reference_target_id: note.id})
+  expect((await storedProperties('card'))[srsNextReviewDateProp.name]).toBe(note.id)
+  expect(await propertyBacklinks(claimant, srsNextReviewDateProp.name)).toEqual([])
+  const due = await repo.queryBlocks(buildDueCardsQuery({workspaceId: WS, now: new Date(2026, 1, 4)}))
+  expect(due.map(card => card.id)).toEqual(['card'])
 })
 
 it('first long alias claim on a self-referencing ISO seat survives the outer setter', async () => {
@@ -689,6 +755,24 @@ it('first long alias claim on a self-referencing ISO seat survives the outer set
   expect(await repo.query.aliasLookup({workspaceId: WS, alias: NEW_DAY_TITLE}).load()).toMatchObject({id: note.id})
   const child = await readValueChild(note.id)
   expect(child).toMatchObject({content: `[[${NEW_DAY_TITLE}]]`, reference_target_id: note.id})
+})
+
+it('claims a free long title on the requested daily note when another page owns its ISO alias', async () => {
+  const {repo, schema} = await childBackedDay(['owner'])
+  const note = await getOrCreateDailyNote(repo, WS, NEW_DAY)
+  await note.setContent(NEW_DAY)
+  await note.set(aliasesProp, [])
+  await repo.awaitProcessors()
+  const claimant = await createAliasOwner(repo, NEW_DAY)
+  expect(await repo.query.aliasLookup({workspaceId: WS, alias: NEW_DAY_TITLE}).load()).toBeNull()
+
+  await repo.tx(tx => tx.setProperty('owner', schema, note.id), SCOPE)
+  await repo.awaitProcessors()
+
+  expect(await readValueChild('owner')).toMatchObject({content: `[[${NEW_DAY_TITLE}]]`, reference_target_id: note.id})
+  expect((await storedProperties('owner'))[NAME]).toBe(note.id)
+  expect(await repo.query.aliasLookup({workspaceId: WS, alias: NEW_DAY_TITLE}).load()).toMatchObject({id: note.id})
+  expect((await storedProperties(claimant))[aliasesProp.name]).toEqual([NEW_DAY])
 })
 
 it('retyping authored named text into a day reuses its long wikilink', async () => {

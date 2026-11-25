@@ -294,6 +294,38 @@ it.each([
   }
 }, 20_000)
 
+it('shows a pending day reference in a table value cell while its target is missing', async () => {
+  const day = seedProperty({
+    seedKey: 'test/property/tables-gesture-pending-day', revision: 1, name: 'gesture:pending-day',
+    preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+  })
+  configureRuntime(dailyNotesPlugin({repo}), referencesPlugin, definitionSeedsFacet.of(day))
+  await materializePropertySeeds(repo, WS, [day])
+  const fieldId = propertyDefinitionBlockId(WS, day.seedKey)
+  const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
+  await addColumn(repo, viewId!, fieldId)
+  const initial = await getOrCreateDailyNote(repo, WS, '2026-07-02')
+  await repo.block('row-0').set(day, initial.id)
+  await repo.awaitProcessors()
+  const values = (await repo.query.propertyRows({ownerId: 'row-0', fieldId}).load())?.fields[0]?.values
+  const id = values?.[0]?.id
+  expect(id).toBeDefined()
+  await db.db.writeTransaction(tx => tx.execute(
+    "UPDATE blocks SET content = ?, reference_target_id = NULL, references_json = '[]', updated_at = updated_at + 1 WHERE id = ?",
+    ['[[July 3rd, 2026]]', id]))
+  expect(await repo.load(id!)).toMatchObject({content: '[[July 3rd, 2026]]', referenceTargetId: null})
+
+  mount()
+  const cell = await waitFor(() => {
+    const element = document.querySelector<HTMLElement>(`[data-table-value][data-block-id="${id}"]`)
+    expect(element).not.toBeNull()
+    return within(element!)
+  })
+  expect(await cell.findByRole('status', {name: 'Waiting for reference target'})).toBeInTheDocument()
+  expect(cell.getByText(/July 3rd, 2026/)).toBeInTheDocument()
+  expect(cell.queryByLabelText('Invalid property value')).toBeNull()
+})
+
 // The mounted grid and all three sort transitions take about a second locally.
 it('cycles the daily note reference header through date order and outline order', async () => {
   const planned = seedProperty({

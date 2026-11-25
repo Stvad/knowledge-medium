@@ -44,6 +44,8 @@
  * afterCommit schedule all commit together).
  */
 
+import { PROPERTY_VALUES_RESOLVED_EVENT } from '@/data/internals/propertyChildrenProcessor'
+import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import type { AnyPropertySchema } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import { buildSchemaOrNull } from '@/data/userSchemasService'
@@ -148,6 +150,7 @@ interface SourcePlan {
    *  the row — used to skip a no-op write that would re-fire the
    *  field-watcher and produce a useless row_events / ps_crud entry. */
   referencesChanged: boolean
+  stampDateLink: boolean
 }
 
 /** A new-page mark whose seat cannot be minted — no key could be read on this
@@ -321,8 +324,11 @@ const buildSourcePlan = async (
     JSON.stringify(source.references)
     !== JSON.stringify(normalizeReferences(references))
 
+  const pendingDate = source.referenceTargetId == null && dateRefs.length > 0
+    ? parseExactReferenceBlockContent(source.content) : null
   return {
     sourceId: source.id,
+    stampDateLink: pendingDate?.kind === 'alias' && !pendingDate.fieldForm,
     workspaceId: source.workspaceId,
     basis: planBasisOf(source),
     references,
@@ -398,14 +404,10 @@ const applySourcePlan = async (
     for (const alias of aliases) {
       retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id, alias)
     }
-    // §9 arrival-order repair (a whole-block `[[2026-01-05]]` — or
-    // long-form — row written before this daily-note target existed
-    // derived its reference_target_id to NULL) is no longer scheduled
-    // here: the kernel `core.aliasClaimRederive` hook observes this tx's
-    // alias gains (the seat insert AND any newly-claimed literal) and
-    // schedules the batched rederive centrally (issue #402 — per-caller
-    // schedule calls were the forget-me failure mode).
     await claimDailyNoteAliases(tx, ensured.id, aliases.filter(alias => alias !== iso))
+  }
+  if (plan.stampDateLink && current.referenceTargetId == null) {
+    tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId: plan.workspaceId, valueIds: [current.id]}, plan.workspaceId)
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     // The mode can turn sealed between the read phase and this lock. The
@@ -445,6 +447,7 @@ const applySourcePlan = async (
  *  a tx entirely when the parse came out idempotent. */
 const planNeedsWrite = (plan: SourcePlan): boolean =>
   plan.referencesChanged
+  || plan.stampDateLink
   || plan.aliasesToEnsure.length > 0
   || plan.datesToEnsure.length > 0
 
