@@ -1,1 +1,1 @@
-export{WP as ShortcutHelpHeaderItem}from"../../../chunks/app-DiCwYZ0-.js";
+export{WP as ShortcutHelpHeaderItem}from"../../../chunks/app-BcDSW_65.js";
