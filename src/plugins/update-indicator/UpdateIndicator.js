@@ -1,1 +1,1 @@
-export{wx as UpdateIndicator}from"../../../chunks/app-DmF83xgw.js";
+export{wx as UpdateIndicator}from"../../../chunks/app-CsM0Ag7D.js";

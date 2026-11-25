@@ -1,1 +1,1 @@
-export{kZ as tablesDataExtension}from"../../../chunks/app-DmF83xgw.js";
+export{kZ as tablesDataExtension}from"../../../chunks/app-CsM0Ag7D.js";

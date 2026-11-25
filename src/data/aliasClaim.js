@@ -1,1 +1,1 @@
-export{qtt as assertAliasClaimable,Jtt as claimedAliases}from"../../chunks/app-DmF83xgw.js";
+export{qtt as assertAliasClaimable,Jtt as claimedAliases}from"../../chunks/app-CsM0Ag7D.js";
