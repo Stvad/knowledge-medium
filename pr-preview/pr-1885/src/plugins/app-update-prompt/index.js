@@ -1,1 +1,0 @@
-export{XL as appUpdatePromptExtension}from"../../../chunks/app-BH24-13C.js";

@@ -1,1 +1,0 @@
-export{VS as Wikilink}from"../../../../../chunks/app-BH24-13C.js";

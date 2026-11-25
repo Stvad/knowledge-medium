@@ -1,1 +1,0 @@
-"use client";export{MW as Collapsible,NW as CollapsibleContent,PW as CollapsibleTrigger}from"../../../chunks/app-BH24-13C.js";

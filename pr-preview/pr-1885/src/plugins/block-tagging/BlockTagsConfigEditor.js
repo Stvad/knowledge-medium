@@ -1,1 +1,0 @@
-export{lp as BlockTagsConfigEditor}from"../../../chunks/app-BH24-13C.js";

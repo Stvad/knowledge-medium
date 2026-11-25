@@ -1,1 +1,0 @@
-export{gU as ExtensionRenderBoundary}from"../../chunks/app-BH24-13C.js";

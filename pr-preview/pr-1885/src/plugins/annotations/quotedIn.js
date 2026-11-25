@@ -1,1 +1,0 @@
-export{Bm as quotedInFooterContribution}from"../../../chunks/app-BH24-13C.js";

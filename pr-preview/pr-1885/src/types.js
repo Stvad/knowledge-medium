@@ -1,1 +1,0 @@
-export{vpt as isChildBackedPropertiesWorkspace}from"../chunks/app-BH24-13C.js";

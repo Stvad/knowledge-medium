@@ -1,1 +1,0 @@
-export{Kc as propertiesMigrationPlugin}from"../../../chunks/app-BH24-13C.js";

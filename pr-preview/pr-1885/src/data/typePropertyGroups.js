@@ -1,1 +1,0 @@
-export{sG as typePropertyGroups}from"../../chunks/app-BH24-13C.js";

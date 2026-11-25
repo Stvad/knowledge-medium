@@ -1,1 +1,0 @@
-export{s1 as matchCharTrigger}from"../../chunks/app-BH24-13C.js";

@@ -1,1 +1,0 @@
-export{DB as BlockTypeBlockRenderer,OB as BlockTypeContentRenderer,kB as writeBlockTypeLabel}from"../../../chunks/app-BH24-13C.js";

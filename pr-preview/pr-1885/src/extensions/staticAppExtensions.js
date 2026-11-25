@@ -1,1 +1,0 @@
-export{nn as staticAppExtensions}from"../../chunks/app-BH24-13C.js";

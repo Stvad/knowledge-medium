@@ -1,1 +1,0 @@
-export{OZ as tablesDataExtension}from"../../../chunks/app-BH24-13C.js";

@@ -1,1 +1,0 @@
-export{IB as ConfirmBulkDeleteDialog}from"../../chunks/app-BH24-13C.js";

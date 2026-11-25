@@ -1,1 +1,0 @@
-export{fG as declarationOnlyDefinitionForName,pG as declarationOnlyStatusText}from"../../../chunks/app-BH24-13C.js";

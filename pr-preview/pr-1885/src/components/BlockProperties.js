@@ -1,1 +1,0 @@
-export{IW as BlockProperties}from"../../chunks/app-BH24-13C.js";
