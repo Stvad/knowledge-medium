@@ -1,1 +1,1 @@
-export{SF as CommandPaletteHeaderItem}from"../../../chunks/app-EV9-BZEz.js";
+export{EF as CommandPaletteHeaderItem}from"../../../chunks/app-B3Pv9BLe.js";

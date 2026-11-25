@@ -1,1 +1,1 @@
-export{P8 as instrumentAdapter}from"../../../chunks/app-EV9-BZEz.js";
+export{W8 as instrumentAdapter}from"../../../chunks/app-B3Pv9BLe.js";
