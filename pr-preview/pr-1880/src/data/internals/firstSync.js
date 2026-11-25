@@ -1,1 +1,1 @@
-export{Ktt as onFirstSync,qtt as onSyncSettled}from"../../../chunks/app-0K6X37p7.js";
+export{qtt as onFirstSync,Jtt as onSyncSettled}from"../../../chunks/app-C0Os9LLH.js";
