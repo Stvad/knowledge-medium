@@ -24,6 +24,7 @@ import {
   ChangeScope,
   ProcessorRejection,
   propertyValue,
+  scalarConversionBetween,
   type AnyJoinedValuePreset,
   type AnyValuePresetCore,
   type BlockData,
@@ -77,6 +78,7 @@ type DefinitionFacts = ReturnType<typeof definitionFacts>
  *  stands when the queue admits it. */
 interface PlannedChange {
   change: Omit<ConfirmDefinitionChangeDialogProps, 'blockCount'>
+  scalarName?: string
   /** Everything the write REPLACES, still as the planner found it. Checked
    *  INSIDE the writing transaction, so it covers the only window left: the
    *  human pause of the confirmation, in which sync keeps running.
@@ -335,8 +337,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         if (planned.skip !== null) showError(planned.skip)
         return false
       }
-      const {change, stillCurrent, write} = planned
-      const consumers = await block.repo.countPropertyDefinitionConsumers(block.id, ws)
+      const {change, scalarName, stillCurrent, write} = planned
+      const consumers = kindAtStart !== 'definition' || scalarName === undefined
+        ? await block.repo.countPropertyDefinitionConsumers(block.id, ws)
+        : await block.repo.countPropertyDefinitionConsumers(block.id, ws, scalarName)
       // While blocks use it, every change to a definition whose CURRENT type
       // builds nothing here is refused in its transaction, which says why —
       // so there is nothing to ask the user to approve.
@@ -506,8 +510,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // which would clobber any sibling key written between render and commit.
     await throughFanoutGate(atStart => {
       if (atStart.presetId === next) return {skip: null}
+      const conversion = scalarConversionBetween(block.repo.valuePresetCores, atStart.presetId, next)
       return {
         change: {kind: 'type', propertyName: atStart.name},
+        scalarName: conversion ? atStart.name : undefined,
         // The CONFIG as well as the preset, because the write below replaces
         // both: resetting it to the new preset's default is the point, and a
         // config edit that landed since the planner looked is one this would

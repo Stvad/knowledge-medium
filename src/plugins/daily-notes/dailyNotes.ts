@@ -1,14 +1,14 @@
-import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { ChangeScope, propertyValue, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
-import { applyTypeTagInTx } from '@/data/typeTagger'
+import { requireTypeContribution } from '@/data/typeTagger'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
-import { aliasesProp, hasBlockType } from '@/data/properties'
+import { aliasesProp, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
+import { createOrRestoreTargetBlock, partitionClaimableAliases, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { decodeRowProperty } from '@/data/rowProperty'
 import { formatRoamDate, formatIsoDate } from '@/utils/dailyPage'
@@ -166,20 +166,31 @@ export const getOrCreateDailyNoteInTx = async (
     if (storedDate !== undefined && storedDate !== date.toISOString()) {
       throw new Error(`Cannot use the daily note for ${iso}: its stored date differs`)
     }
+  }
+  // Stored refs address this id even when a different page owns a date alias.
+  const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
+  if (existing) {
     if (existing.deleted) {
       const properties = await restorePropertiesStrippingAliases(tx, id)
       await tx.restore(id, {content: title, properties})
     }
-    const held = existing.deleted ? [] : stringListProperty(existing.properties[aliasesProp.name])
-    if (!includesAll(held, aliases)) await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...held]))
     if (existing.parentId !== parentId || existing.orderKey !== orderKey) {
       await tx.move(id, {parentId, orderKey}, {skipMetadata: true})
     }
   } else {
     await tx.create({id, workspaceId, parentId, orderKey, content: title}, {systemMint: true})
   }
-  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, initialValues: {[aliasesProp.name]: aliases}})
-  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: DAILY_NOTE_TYPE, initialValues: {[dailyNoteDateProp.name]: date}})
+  requireTypeContribution(snapshot.types, PAGE_TYPE)
+  requireTypeContribution(snapshot.types, DAILY_NOTE_TYPE)
+  const heldAliases = existing && !existing.deleted ? decodeRowProperty(existing, aliasesProp) : []
+  const heldTypes = existing ? decodeRowProperty(existing, typesProp) : []
+  // A definition conversion runs after the materializer. Typed writes also
+  // create the authoritative children of a note minted during that conversion.
+  await tx.setProperties(id, {set: [
+    propertyValue(typesProp, mergeStrings([...heldTypes, PAGE_TYPE, DAILY_NOTE_TYPE])),
+    propertyValue(aliasesProp, mergeStrings([...claimable, ...heldAliases])),
+    propertyValue(dailyNoteDateProp, date),
+  ]})
   return id
 }
 

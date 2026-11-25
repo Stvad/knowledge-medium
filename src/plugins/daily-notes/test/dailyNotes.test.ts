@@ -236,6 +236,20 @@ describe('getOrCreateDailyNote', () => {
     expect(aliases?.[0]).toMatch(/2026/)
   })
 
+  it('keeps the deterministic note live when another page owns its date aliases', async () => {
+    const {repo} = env
+    const title = 'April 28th, 2026'
+    await repo.tx(tx => tx.create({
+      id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Original page',
+      properties: {[aliasesProp.name]: [ISO, title]},
+    }), {scope: ChangeScope.BlockDefault})
+    const note = await getOrCreateDailyNote(repo, WS, ISO)
+    expect(note.id).toBe(dailyNoteBlockId(WS, ISO))
+    expect((await note.load())?.properties[dailyNoteDateProp.name]).toBe(ISO + 'T00:00:00.000Z')
+    expect((await repo.load('claimant'))?.properties[aliasesProp.name]).toEqual([ISO, title])
+    expect((await repo.query.aliasLookup({workspaceId: WS, alias: ISO}).load())?.id).toBe('claimant')
+  })
+
   it('populates the indexable date property at creation', async () => {
     const note = await getOrCreateDailyNote(env.repo, WS, ISO)
     const stored = note.peekProperty(dailyNoteDateProp)

@@ -39,7 +39,7 @@ export interface TypeTaggerHost {
   readonly propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
 
-const requireTypeContribution = (
+export const requireTypeContribution = (
   types: ReadonlyMap<string, TypeContribution>,
   typeId: string,
 ): TypeContribution => {

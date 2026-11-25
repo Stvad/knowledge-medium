@@ -36,6 +36,7 @@ import {
   todayIso,
 } from '@/plugins/daily-notes/dailyNotes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema'
 import { statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
@@ -145,6 +146,25 @@ const minimalExport: RoamExport = [
       {
         string: 'morning notes',
         uid: 'dailyChild',
+      },
+    ],
+  },
+]
+
+const srsMarkerExport: RoamExport = [
+  {
+    title: 'srs',
+    uid: 'srsPage',
+    children: [
+      {
+        string: 'parent',
+        uid: 'srsParent',
+        children: [
+          {
+            string: '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *',
+            uid: 'srsMarker',
+          },
+        ],
       },
     ],
   },
@@ -2327,26 +2347,7 @@ describe('importRoam', {timeout: 30_000}, () => {
   })
 
   it('imports Roam SRS SM-2.5 markers as typed parent metadata', async () => {
-    const srsExport: RoamExport = [
-      {
-        title: 'srs',
-        uid: 'srsPage',
-        children: [
-          {
-            string: 'parent',
-            uid: 'srsParent',
-            children: [
-              {
-                string: '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *',
-                uid: 'srsMarker',
-              },
-            ],
-          },
-        ],
-      },
-    ]
-
-    const summary = await importRoam(srsExport, env.repo, {
+    const summary = await importRoam(srsMarkerExport, env.repo, {
       workspaceId: WORKSPACE,
       currentUserId: USER_ID,
     })
@@ -2403,6 +2404,54 @@ describe('importRoam', {timeout: 30_000}, () => {
         alias: 'June 6th, 2026',
       },
     ]))
+  })
+
+  it('materialises the SRS review date when an ordinary page already claims its alias', async () => {
+    const alias = 'June 6th, 2026'
+    const claimantId = 'review-day-alias-claimant'
+    const noteId = dailyNoteBlockId(WORKSPACE, '2026-06-06')
+    const parentId = roamBlockId(WORKSPACE, 'srsParent')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: claimantId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Ordinary page content',
+        properties: addBlockTypeToProperties({
+          [aliasesProp.name]: aliasesProp.codec.encode([alias]),
+        }, PAGE_TYPE),
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await env.repo.query.aliasLookup({workspaceId: WORKSPACE, alias}).load())?.id)
+      .toBe(claimantId)
+    expect(await readBlock(noteId)).toBeNull()
+
+    await importRoam(srsMarkerExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const parent = await readBlock(parentId)
+    const props = JSON.parse(parent!.properties_json) as Record<string, unknown>
+    expect(props[typesProp.name]).toContain(SRS_SM25_TYPE)
+    expect(props[srsNextReviewDateProp.name]).toBe(noteId)
+    expect(await env.h.db.getAll<{target_id: string}>(
+      'SELECT target_id FROM block_references WHERE source_id = ? AND source_field = ?',
+      [parentId, srsNextReviewDateProp.name],
+    )).toEqual([{target_id: noteId}])
+
+    const claimant = await readBlock(claimantId)
+    expect(claimant).toMatchObject({deleted: 0, content: 'Ordinary page content'})
+    expect(JSON.parse(claimant!.properties_json)[aliasesProp.name]).toEqual([alias])
+    expect((await env.repo.query.aliasLookup({workspaceId: WORKSPACE, alias}).load())?.id)
+      .toBe(claimantId)
+
+    const note = await readBlock(noteId)
+    expect(note).toMatchObject({deleted: 0})
+    const noteProps = JSON.parse(note!.properties_json) as Record<string, unknown>
+    expect(noteProps[typesProp.name]).toContain(DAILY_NOTE_TYPE)
+    expect(noteProps[dailyNoteDateProp.name]).toBe('2026-06-06T00:00:00.000Z')
   })
 
   it('imports embedded Roam SRS SM-2.5 markers as typed block metadata', async () => {
