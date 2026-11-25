@@ -1,1 +1,1 @@
-export{wB as trimIfEdited}from"../../chunks/app-gDdb_EjD.js";
+export{DB as trimIfEdited}from"../../chunks/app-VgMHfoOf.js";

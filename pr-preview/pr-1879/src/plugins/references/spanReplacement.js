@@ -1,1 +1,1 @@
-export{MQ as preferredSpanReplacement}from"../../../chunks/app-gDdb_EjD.js";
+export{FQ as preferredSpanReplacement}from"../../../chunks/app-VgMHfoOf.js";

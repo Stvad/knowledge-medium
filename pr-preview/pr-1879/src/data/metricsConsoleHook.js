@@ -1,1 +1,1 @@
-export{HI as ensureMetricsConsoleHook}from"../../chunks/app-gDdb_EjD.js";
+export{GI as ensureMetricsConsoleHook}from"../../chunks/app-VgMHfoOf.js";

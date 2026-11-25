@@ -1,1 +1,1 @@
-export{i8 as SYNCED_TABLES,a8 as syncedWriteTarget,o8 as writeTargets}from"../../chunks/app-gDdb_EjD.js";
+export{s8 as SYNCED_TABLES,c8 as syncedWriteTarget,l8 as writeTargets}from"../../chunks/app-VgMHfoOf.js";

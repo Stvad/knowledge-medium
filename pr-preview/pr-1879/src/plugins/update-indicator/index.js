@@ -1,1 +1,1 @@
-export{bx as updateIndicatorPlugin}from"../../../chunks/app-gDdb_EjD.js";
+export{bx as updateIndicatorPlugin}from"../../../chunks/app-VgMHfoOf.js";

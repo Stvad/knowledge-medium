@@ -1,1 +1,1 @@
-export{NC as moveBlocksTo}from"../../../chunks/app-gDdb_EjD.js";
+export{FC as moveBlocksTo}from"../../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,1 @@
-export{UE as onboardingLanding}from"../../../chunks/app-gDdb_EjD.js";
+export{GE as onboardingLanding}from"../../../chunks/app-VgMHfoOf.js";

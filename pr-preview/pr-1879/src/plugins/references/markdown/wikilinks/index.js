@@ -1,1 +1,1 @@
-export{FS as wikilinkMarkdownExtension}from"../../../../../chunks/app-gDdb_EjD.js";
+export{LS as wikilinkMarkdownExtension}from"../../../../../chunks/app-VgMHfoOf.js";

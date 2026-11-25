@@ -1,1 +1,1 @@
-export{Bet as kernelDataExtension}from"../../chunks/app-gDdb_EjD.js";
+export{Uet as kernelDataExtension}from"../../chunks/app-VgMHfoOf.js";

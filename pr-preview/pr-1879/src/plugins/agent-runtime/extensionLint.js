@@ -1,1 +1,1 @@
-export{Bv as lintExtensionSource}from"../../../chunks/app-gDdb_EjD.js";
+export{Bv as lintExtensionSource}from"../../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,1 @@
-export{mv as extensionApiCatalog,hv as extensionApiRuntimeExports}from"../../chunks/app-gDdb_EjD.js";
+export{mv as extensionApiCatalog,hv as extensionApiRuntimeExports}from"../../chunks/app-VgMHfoOf.js";

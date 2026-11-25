@@ -1,1 +1,1 @@
-export{FX as omnilinerNamespace}from"../../chunks/app-gDdb_EjD.js";
+export{RX as omnilinerNamespace}from"../../chunks/app-VgMHfoOf.js";

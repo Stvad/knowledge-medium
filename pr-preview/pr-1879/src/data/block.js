@@ -1,1 +1,1 @@
-export{Let as Block,Ret as requireLoadedBlock}from"../../chunks/app-gDdb_EjD.js";
+export{Bet as Block,Vet as requireLoadedBlock}from"../../chunks/app-VgMHfoOf.js";

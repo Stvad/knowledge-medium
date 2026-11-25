@@ -1,1 +1,1 @@
-export{SY as usePropertySchemas}from"../../chunks/app-gDdb_EjD.js";
+export{TY as usePropertySchemas}from"../../chunks/app-VgMHfoOf.js";

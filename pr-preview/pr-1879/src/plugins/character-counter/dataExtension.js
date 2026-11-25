@@ -1,1 +1,1 @@
-export{S4 as characterCounterDataExtension}from"../../../chunks/app-gDdb_EjD.js";
+export{T4 as characterCounterDataExtension}from"../../../chunks/app-VgMHfoOf.js";

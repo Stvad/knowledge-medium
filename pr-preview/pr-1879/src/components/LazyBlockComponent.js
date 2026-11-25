@@ -1,1 +1,1 @@
-export{uz as LazyBlockComponent}from"../../chunks/app-gDdb_EjD.js";
+export{pz as LazyBlockComponent}from"../../chunks/app-VgMHfoOf.js";

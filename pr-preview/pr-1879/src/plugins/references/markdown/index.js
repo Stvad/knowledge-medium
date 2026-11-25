@@ -1,1 +1,1 @@
-export{NS as referencesMarkdownExtension}from"../../../../chunks/app-gDdb_EjD.js";
+export{FS as referencesMarkdownExtension}from"../../../../chunks/app-VgMHfoOf.js";

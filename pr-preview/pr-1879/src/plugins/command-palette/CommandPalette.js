@@ -1,1 +1,1 @@
-export{YP as CommandPalette}from"../../../chunks/app-gDdb_EjD.js";
+export{QP as CommandPalette}from"../../../chunks/app-VgMHfoOf.js";

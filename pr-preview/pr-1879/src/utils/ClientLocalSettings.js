@@ -1,1 +1,1 @@
-export{TR as ClientLocalSettings,ER as clientLocalSettings}from"../../chunks/app-gDdb_EjD.js";
+export{OR as ClientLocalSettings,kR as clientLocalSettings}from"../../chunks/app-VgMHfoOf.js";

@@ -1,1 +1,1 @@
-export{Z1 as annotationsDataExtension}from"../../../chunks/app-gDdb_EjD.js";
+export{e0 as annotationsDataExtension}from"../../../chunks/app-VgMHfoOf.js";

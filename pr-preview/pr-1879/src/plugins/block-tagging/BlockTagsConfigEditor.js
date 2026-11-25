@@ -1,1 +1,1 @@
-export{op as BlockTagsConfigEditor}from"../../../chunks/app-gDdb_EjD.js";
+export{op as BlockTagsConfigEditor}from"../../../chunks/app-VgMHfoOf.js";

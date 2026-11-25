@@ -1,1 +1,1 @@
-export{NA as usePendingInvitations}from"../../chunks/app-gDdb_EjD.js";
+export{FA as usePendingInvitations}from"../../chunks/app-VgMHfoOf.js";

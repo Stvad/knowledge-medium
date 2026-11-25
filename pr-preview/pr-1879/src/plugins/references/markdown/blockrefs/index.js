@@ -1,1 +1,1 @@
-export{RS as blockrefMarkdownExtension}from"../../../../../chunks/app-gDdb_EjD.js";
+export{BS as blockrefMarkdownExtension}from"../../../../../chunks/app-VgMHfoOf.js";

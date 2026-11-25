@@ -1,1 +1,1 @@
-export{xB as BlockTypeBlockRenderer,SB as BlockTypeContentRenderer,CB as writeBlockTypeLabel}from"../../../chunks/app-gDdb_EjD.js";
+export{wB as BlockTypeBlockRenderer,TB as BlockTypeContentRenderer,EB as writeBlockTypeLabel}from"../../../chunks/app-VgMHfoOf.js";
