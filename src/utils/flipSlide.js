@@ -1,1 +1,1 @@
-export{UI as withRowSlide}from"../../chunks/app-DbGqQMi1.js";
+export{qI as withRowSlide}from"../../chunks/app-l5obYlc2.js";

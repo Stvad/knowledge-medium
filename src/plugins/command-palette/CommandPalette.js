@@ -1,1 +1,1 @@
-export{UP as CommandPalette}from"../../../chunks/app-DbGqQMi1.js";
+export{qP as CommandPalette}from"../../../chunks/app-l5obYlc2.js";

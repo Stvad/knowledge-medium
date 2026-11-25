@@ -1,1 +1,1 @@
-export{jx as backlinksPlugin}from"../../../chunks/app-DbGqQMi1.js";
+export{Nx as backlinksPlugin}from"../../../chunks/app-l5obYlc2.js";
