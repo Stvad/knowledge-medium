@@ -1,1 +1,1 @@
-export{nF as COMMAND_PALETTE_ACTION_ID,rF as COMMAND_PALETTE_CONTEXT,iF as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,aF as commandPaletteActionContext}from"../../../chunks/app-C0Os9LLH.js";
+export{aF as COMMAND_PALETTE_ACTION_ID,oF as COMMAND_PALETTE_CONTEXT,sF as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,cF as commandPaletteActionContext}from"../../../chunks/app-DrOkKzpk.js";

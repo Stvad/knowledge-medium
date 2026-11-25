@@ -1,1 +1,1 @@
-export{Qr as perfMonitorPlugin}from"../../../chunks/app-C0Os9LLH.js";
+export{Qr as perfMonitorPlugin}from"../../../chunks/app-DrOkKzpk.js";

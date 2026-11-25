@@ -1,1 +1,1 @@
-export{Zf as ADD_TAG_ACTION_ID,Qf as ADD_TAG_BLOCKS_ACTION_ID,np as appendTagToBlocks,rp as appendTagToContent,Xf as blockTaggingPlugin,fp as blockTagsConfigProp}from"../../../chunks/app-C0Os9LLH.js";
+export{Zf as ADD_TAG_ACTION_ID,Qf as ADD_TAG_BLOCKS_ACTION_ID,np as appendTagToBlocks,rp as appendTagToContent,Xf as blockTaggingPlugin,fp as blockTagsConfigProp}from"../../../chunks/app-DrOkKzpk.js";
