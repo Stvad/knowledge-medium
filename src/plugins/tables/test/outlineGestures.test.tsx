@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { Suspense, useEffect } from 'react'
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorView } from '@codemirror/view'
 import * as structuralEdits from '@/data/structuralEditPolicy'
@@ -37,7 +37,7 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
-import { getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes'
+import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes'
 import { DAILY_NOTE_TYPE, dayValuePresetCore } from '@/plugins/daily-notes/schema'
 import * as toast from '@/utils/toast'
 import { disarmCut, getArmedCut } from '@/paste/armedCut'
@@ -220,19 +220,24 @@ it.each([
     seedKey: 'test/property/tables-gesture-legacy-day', revision: 1, name: 'gesture:legacy-day',
     preset: 'optional-ref', config: {targetTypes: [DAILY_NOTE_TYPE]}, changeScope: ChangeScope.BlockDefault,
   })
-  configureRuntime(dailyNotesDataExtension, [day, legacy].map(seed => definitionSeedsFacet.of(seed, {source: 'test'})))
+  const stale = seedProperty({
+    seedKey: 'test/property/tables-gesture-stale-day', revision: 1, name: 'gesture:stale-day',
+    preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+  })
+  const seeds = [day, legacy, stale]
+  configureRuntime(dailyNotesDataExtension, seeds.map(seed => definitionSeedsFacet.of(seed, {source: 'test'})))
   await repo.whenPropertyDefinitionsReady(WS)
-  await materializePropertySeeds(repo, WS, [day, legacy])
+  await materializePropertySeeds(repo, WS, seeds)
   const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
-  await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, day.seedKey))
-  await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, legacy.seedKey))
+  for (const seed of seeds) await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, seed.seedKey))
   const target = await getOrCreateDailyNote(repo, WS, '2026-01-06')
   const title = (await target.load())!.content
   await target.setContent('Trip planning')
   await repo.awaitProcessors()
   if (!childBacked) await db.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = ?", [WS])
+  const oldInstant = '2026-02-03T00:00:00.000Z'
   await db.db.execute("UPDATE blocks SET properties_json = json_patch(properties_json, ?), updated_at = updated_at + 1 WHERE id = 'row-0'",
-    [JSON.stringify({[day.name]: target.id, [legacy.name]: target.id})])
+    [JSON.stringify({[day.name]: target.id, [legacy.name]: target.id, [stale.name]: oldInstant})])
   await repo.load('row-0')
   expect(repo.block('row-0').peek()?.properties).toMatchObject({[day.name]: target.id, [legacy.name]: target.id})
   repo.setReadOnly(readOnly)
@@ -246,6 +251,20 @@ it.each([
     expect(cells.textContent).not.toContain(target.id)
     expect(cells.querySelector('[aria-label="Change day"], [aria-label="Choose day"]')).toBeNull()
   })
+  const row = within(document.querySelector<HTMLElement>('[data-table-row="row-0"]')!)
+  await row.findByText('2026-02-03, not linked')
+  const relink = row.queryByRole('button', {name: 'Relink day'})
+  const noteId = dailyNoteBlockId(WS, '2026-02-03')
+  expect(await repo.load(noteId)).toBeNull()
+  expect((await repo.load('row-0'))?.properties[stale.name]).toBe(oldInstant)
+  if (readOnly) {
+    expect(relink).toBeNull()
+  } else {
+    expect(relink).toBeEnabled()
+    fireEvent.click(relink!)
+    expect(await row.findByRole('link', {name: 'February 3rd, 2026'})).toHaveAttribute('href', `#${WS}/${noteId}`)
+    expect((await repo.load('row-0'))?.properties[stale.name]).toBe(noteId)
+  }
 })
 
 // The mounted grid and all three sort transitions take about a second locally.

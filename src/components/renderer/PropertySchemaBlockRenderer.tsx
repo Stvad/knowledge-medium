@@ -7,7 +7,7 @@ import { useBlockContext } from '@/context/block.js'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {readValuePresetRegistry, readValuePresets} from '@/data/valuePresetRegistry'
-import { definitionSchema, type UnbuildableCause } from '@/data/userSchemasService'
+import { buildSchemaOrNull, definitionSchema, type UnbuildableCause } from '@/data/userSchemasService'
 import { openExtensionsSettings } from '@/extensions/openExtensionsSettings.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
@@ -310,7 +310,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
    *  the fan-out's OWN total, so one that grew past the threshold meanwhile
    *  still shows its progress. */
   const throughFanoutGate = useCallback((
-    plan: (atStart: DefinitionFacts) => PlanResult,
+    plan: (atStart: DefinitionFacts, row: BlockData) => PlanResult,
   ): Promise<boolean> => queueDefinitionChange(async () => {
     // Every await from the read to the commit can throw, and one that escapes
     // leaves a void event handler holding the rejection and the caller's
@@ -332,7 +332,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       workspaceId = ws
       const kindAtStart = rowKind(atStart)
       if (kindAtStart === 'other') return false
-      const planned = plan(definitionFacts(atStart.properties))
+      const planned = plan(definitionFacts(atStart.properties), atStart)
       if ('skip' in planned) {
         if (planned.skip !== null) showError(planned.skip)
         return false
@@ -508,9 +508,15 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // setProperties applies a two-key DELTA read against the fresh in-tx row —
     // NOT a whole-bag replace off the (possibly stale) `data` render snapshot,
     // which would clobber any sibling key written between render and commit.
-    await throughFanoutGate(atStart => {
+    await throughFanoutGate((atStart, row) => {
       if (atStart.presetId === next) return {skip: null}
-      const conversion = scalarConversionBetween(block.repo.valuePresetCores, atStart.presetId, next)
+      const config = target.configCodec
+        ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown> : {}
+      const metadata = parsePropertyDefinitionMetadata(row)
+      const destination = metadata && buildSchemaOrNull({...row, properties: {
+        ...row.properties, [presetIdProp.name]: next, [presetConfigProp.name]: config,
+      }}, block.repo.valuePresetCores, metadata)
+      const conversion = destination && scalarConversionBetween(block.repo.valuePresetCores, atStart.presetId, destination)
       return {
         change: {kind: 'type', propertyName: atStart.name},
         scalarName: conversion ? atStart.name : undefined,
@@ -526,9 +532,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             // Reset config to the new preset's defaultConfig (re-encoded
             // through its configCodec, if any), since the previous preset's
             // config shape doesn't apply.
-            propertyValue(presetConfigProp, target.configCodec
-              ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown>
-              : {}),
+            propertyValue(presetConfigProp, config),
           ],
         }),
       }

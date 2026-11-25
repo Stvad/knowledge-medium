@@ -169,6 +169,7 @@ export const getOrCreateDailyNoteInTx = async (
       throw new Error(`Cannot use the daily note for ${iso}: its stored date differs`)
     }
   }
+  // Undo of a new note can hide later synced children until the note is reopened.
   if (existing) {
     if (existing.deleted) {
       const properties = await restorePropertiesStrippingAliases(tx, id)
@@ -190,7 +191,7 @@ export const getOrCreateDailyNoteInTx = async (
     set.push(propertyValue(typesProp, appendMissing(heldTypes, [PAGE_TYPE, DAILY_NOTE_TYPE])))
   }
   if (!live || !includesAll(heldAliases, aliases)) {
-    // A live alias remains its owner's. A restore must reclaim its prior aliases.
+    // If another page owns both date aliases, wiki links open that page and typed day refs open this alias-less note.
     const wanted = appendMissing(heldAliases, aliases)
     const claimable = await partitionClaimableAliases(tx, id, wanted, workspaceId)
     if (!live || (claimable.length > heldAliases.length && includesAll(claimable, heldAliases))) {

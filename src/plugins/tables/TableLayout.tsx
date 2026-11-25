@@ -6,6 +6,7 @@ import { BlockChildren, BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
 import { ReferenceLink } from '@/components/references/ReferenceLink'
+import { resolveAndWriteProperty } from '@/components/propertyPanel/actions'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { PropertyDisplayScopeContext, PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
@@ -105,7 +106,12 @@ const StoredValue = ({row, properties, schema}: {
 }) => {
   const stored = properties && storedPropertyValue(properties, schema.name)
   const targetId = isRefCodec(schema.codec) ? decodeRefId(schema.codec, stored) : undefined
-  if (targetId && isDayReferenceSchema(schema)) return <StoredDayReference block={row} targetId={targetId}/>
+  if (targetId && isDayReferenceSchema(schema)) {
+    return <StoredDayReference block={row} targetId={targetId}
+      resolveAndChange={!row.repo.isReadOnly && isPropertyValueEditable(schema)
+        ? resolve => resolveAndWriteProperty(row, schema, resolve, {expectedEncoded: stored})
+        : undefined}/>
+  }
   if (targetId) return <StoredReference row={row} targetId={targetId}/>
   const text = formatStored(stored)
   return text ? <span className="block truncate text-muted-foreground" title={text}>{text}</span> : null

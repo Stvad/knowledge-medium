@@ -10,10 +10,11 @@ import type { AppExtension } from '@/facets/facet.js'
 import type { ScalarPresetConversion } from '@/data/api'
 import { getOrCreateDailyNoteInTx, isValidDateAlias, journalPageSpec } from './dailyNotes.ts'
 import { dailyNotesLocalSchema } from './localSchema.ts'
-import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType, dayValuePresetCore } from './schema.ts'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType, dayValuePresetCore, isDayReferenceSchema } from './schema.ts'
 
 const convertDateToDay: ScalarPresetConversion = {
   from: 'date',
+  matchesTarget: isDayReferenceSchema,
   async convert(encoded, ctx, sourceText) {
     if (encoded === null) return {encoded: null}
     const raw = sourceText?.trim() ?? encoded

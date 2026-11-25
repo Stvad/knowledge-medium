@@ -10,6 +10,7 @@ import {
 } from '@/data/propertyDefinitionFanout'
 import {
   aliasesProp,
+  presetConfigProp,
   presetIdProp,
   propertyChangeScopeProp,
   propertyDefaultProp,
@@ -342,27 +343,81 @@ it.each(['free', 'orphan', 'swapped'] as const)(
   },
 )
 
-it.each(['cell owner', 'child-backed owner', 'owner missing its projected cell', 'field', 'value'] as const)(
-  'preserves restorable date values on a deleted %s', async deleted => {
-    const repo = await setup(deleted === 'cell owner' ? 'cell' : 'children')
-    await createOwners(repo, {owner: '2026-02-03T12:00:00.000Z', active: midnight(EXISTING_DAY)})
+describe.each(['cell', 'children'] as const)('historical values in %s storage', mode => {
+  it('converts the live dates after clearing an ordinary value', async () => {
+    const repo = await setup(mode)
+    await createOwners(repo, {cleared: '2026-02-03T12:00:00.000Z', active: midnight(EXISTING_DAY)})
+    const schema = repo.propertySchemas.get(NAME)!
+    const originalChild = await readValueChild('cleared')
+    await repo.tx(tx => tx.unsetProperty('cleared', schema), SCOPE)
     await repo.awaitProcessors()
+    expect(await storedProperties('cleared')).not.toHaveProperty(NAME)
+    expect(await readValueChild('cleared')).toBeNull()
+    const tombstone = originalChild && await testDb.db.get('SELECT * FROM blocks WHERE id = ?', [originalChild.id])
+    if (tombstone) expect(tombstone).toMatchObject({deleted: 1, content: '2026-02-03T12:00:00.000Z'})
+
+    await retype(repo)
+
+    expect(await storedProperties('cleared')).not.toHaveProperty(NAME)
+    expect(await readValueChild('cleared')).toBeNull()
+    if (originalChild) expect(await testDb.db.get('SELECT * FROM blocks WHERE id = ?', [originalChild.id])).toEqual(tombstone)
+    expect((await storedProperties('active'))[NAME]).toBe(await expectNote(repo, EXISTING_DAY))
+  })
+
+  it('restores the historical bytes of an owner deleted before conversion', async () => {
+    const repo = await setup(mode)
+    const historical = '2026-02-03T12:00:00.000Z'
+    await createOwners(repo, {owner: historical, active: midnight(EXISTING_DAY)})
+    const bag = await storedProperties('owner')
     const child = await readValueChild('owner')
-    const deletedId = deleted === 'field' ? child!.parent_id : deleted === 'value' ? child!.id : 'owner'
-    await repo.tx(tx => tx.delete(deletedId), SCOPE)
+    await repo.tx(tx => tx.delete('owner'), SCOPE)
     await repo.awaitProcessors()
-    if (deleted === 'owner missing its projected cell') {
-      await testDb.db.writeTransaction(tx => tx.execute(
-        'UPDATE blocks SET properties_json = json_remove(properties_json, ?) WHERE id = ?',
-        [`$."${NAME}"`, 'owner'],
-      ))
-      expect(await readValueChild('owner')).toMatchObject({content: '2026-02-03T12:00:00.000Z'})
-      expect((await storedProperties('owner'))[NAME]).toBeUndefined()
-    }
-    expect(await testDb.db.get('SELECT deleted FROM blocks WHERE id = ?', [deletedId])).toEqual({deleted: 1})
-    await expectRefusalPreservingRows(repo, () => retype(repo), /delet|restor|trash/i)
-  },
-)
+    const tombstone = await testDb.db.get('SELECT * FROM blocks WHERE id = ?', ['owner'])
+    expect(tombstone).toMatchObject({deleted: 1})
+    expect(bag[NAME]).toBe(historical)
+
+    await retype(repo)
+
+    expect(await testDb.db.get('SELECT * FROM blocks WHERE id = ?', ['owner'])).toEqual(tombstone)
+    expect(await readValueChild('owner')).toEqual(child)
+    expect((await storedProperties('active'))[NAME]).toBe(await expectNote(repo, EXISTING_DAY))
+    await repo.tx(tx => tx.restore('owner'), SCOPE)
+    await repo.awaitProcessors()
+    expect(await repo.load('owner')).toMatchObject({id: 'owner', deleted: false})
+    if (mode === 'cell') expect(await storedProperties('owner')).toEqual(bag)
+    else expect(await readValueChild('owner')).toEqual(child)
+  })
+
+  it('preserves an explicit null when the destination requires a reference', async () => {
+    const repo = await setup(mode)
+    await createOwners(repo, {unset: null})
+    expect((await storedProperties('unset'))[NAME]).toBeNull()
+    await expectRefusalPreservingRows(repo, () => repo.tx(async tx => {
+      await tx.setProperty(DEFINITION, presetIdProp, 'ref')
+      await tx.setProperty(DEFINITION, presetConfigProp, {targetTypes: [DAILY_NOTE_TYPE]})
+    }, SCOPE), /destination type/)
+  })
+
+  it.each(['ref', 'optional-ref'] as const)('converts date to a plain %s configured for daily notes', async preset => {
+    const repo = await setup(mode, midnight(DEFAULT_DAY))
+    await createOwners(repo, {owner: midnight(NEW_DAY)})
+    const child = await readValueChild('owner')
+
+    await repo.tx(async tx => {
+      await tx.setProperty(DEFINITION, presetIdProp, preset)
+      await tx.setProperty(DEFINITION, presetConfigProp, {targetTypes: [DAILY_NOTE_TYPE]})
+    }, SCOPE)
+
+    const note = await expectNote(repo, NEW_DAY)
+    const defaultNote = await expectNote(repo, DEFAULT_DAY)
+    expect((await storedProperties('owner'))[NAME]).toBe(note)
+    expect((await storedProperties(DEFINITION))[propertyDefaultProp.name]).toBe(defaultNote)
+    if (child) expect(await readValueChild('owner')).toEqual({
+      ...child, content: `((${note}))`, reference_target_id: note,
+    })
+    await expectBacklinksFrom(repo, note, ['owner'])
+  })
+})
 
 it.each(['absent', 'different'] as const)(
   'preserves the cell when its pre-flip child value is %s', async childState => {

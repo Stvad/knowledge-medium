@@ -1,11 +1,13 @@
 import type { Tx } from './tx'
 import type { TypeRegistrySnapshot } from './blockType'
 import type { Codec } from './codecs'
+import type { AnyPropertySchema } from './propertySchema'
 
 /** A semantic conversion between stored scalar presets, inside the definition edit.
  *  The optional source text preserves precision that an old decoder may normalize. */
 export interface ScalarPresetConversion {
   readonly from: string
+  matchesTarget(schema: AnyPropertySchema): boolean
   convert(
     encoded: unknown, context: TypeRegistrySnapshot & {tx: Tx; workspaceId: string}, sourceText?: string,
   ): Promise<{encoded: unknown} | {refused: string}>
@@ -30,10 +32,13 @@ export type AnyValuePresetCore = ValuePresetCore<any, any>
 export const scalarConversionBetween = (
   presets: ReadonlyMap<string, AnyValuePresetCore>,
   from: string | undefined,
-  to: string | undefined,
+  target: AnyPropertySchema,
 ): ScalarPresetConversion | undefined => {
-  const conversion = to === undefined ? undefined : presets.get(to)?.scalarConversion
-  return conversion?.from === from ? conversion : undefined
+  for (const preset of presets.values()) {
+    const conversion = preset.scalarConversion
+    if (conversion && conversion.from === from && conversion.matchesTarget(target)) return conversion
+  }
+  return undefined
 }
 
 export const definePresetCore = <TValue = unknown, TConfig = void>(

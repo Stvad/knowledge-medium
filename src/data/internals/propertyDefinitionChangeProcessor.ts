@@ -124,6 +124,7 @@ import {
   encodedToValueChildContent,
   valueChildContentToEncoded,
   fieldRowValues,
+  propertyCellValueRejection,
   projectedValueCount,
   propertiesEqual,
   unionValuesAcrossFieldRows,
@@ -496,7 +497,7 @@ const collectChanges = (
       continue
     }
     const conversion = scalarConversionBetween(
-      ctx.valuePresets, peekRowProperty(before, presetIdProp), peekRowProperty(after, presetIdProp),
+      ctx.valuePresets, peekRowProperty(before, presetIdProp), afterSchema,
     )
     // A legacy destination cell can hold an independent value with no definition.
     if (conversion && renamed) {
@@ -686,19 +687,6 @@ const liveBagConsumers = (workspaceId: string, name: string) => ({
   params: [workspaceId, jsonPathForProperty(name)],
 })
 
-/** Restoring any of these values would read its old encoding through the new codec. */
-const historicalScalarOwners = (ctx: SameTxCtx, workspaceId: string, change: DefinitionChange) =>
-  ctx.db.getAll<{id: string}>(`
-    SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 1
-      AND json_type(properties_json, ?) IS NOT NULL
-    UNION
-    SELECT owner.id FROM blocks field
-      JOIN blocks owner ON owner.id = field.parent_id
-      JOIN blocks value ON value.parent_id = field.id AND value.is_field_form IS NOT 1
-     WHERE field.workspace_id = ? AND field.reference_target_id = ? AND field.is_field_form = 1
-       AND (owner.deleted = 1 OR field.deleted = 1 OR value.deleted = 1)`,
-  [workspaceId, jsonPathForProperty(change.oldName), workspaceId, change.fieldId])
-
 /** Whether any block holds a live field row for one of `fieldIds`, a DELETED
  *  owner included — the question the contested and shared-name refusals ask,
  *  which is wider than the fan-out's. Declining to re-key a deleted owner is a
@@ -827,9 +815,11 @@ const convertedScalar = async (
   const result = await change.conversion!.convert(encoded, {tx: ctx.tx, types: ctx.types, propertySchemas: ctx.propertySchemas, workspaceId}, sourceText)
   if ('encoded' in result) {
     if (result.encoded === undefined) throw new Error('A scalar conversion must return a stored value')
-    return result.encoded
+    if (!propertyCellValueRejection(change.schema, result.encoded)) return result.encoded
+    recordRefusal(refusals, change.fieldId, ownerId, 'destination type cannot store this value')
+  } else {
+    recordRefusal(refusals, change.fieldId, ownerId, result.refused)
   }
-  recordRefusal(refusals, change.fieldId, ownerId, result.refused)
   return undefined
 }
 
@@ -1145,14 +1135,6 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     const conversions = changes.filter(change => change.conversion)
     const childBacked = conversions.length > 0 && await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId)
     for (const change of conversions) {
-      const historical = await historicalScalarOwners(ctx, event.workspaceId, change)
-      if (historical.length) {
-        throw new ProcessorRejection(
-          `Cannot convert "${change.oldName}". Restore the deleted values on ${historical.length} affected ${historical.length === 1 ? 'block' : 'blocks'} first.`,
-          'property.definition-change.deleted-values',
-          {fieldId: change.fieldId, blockIds: historical.map(owner => owner.id)},
-        )
-      }
       // Pre-children workspaces hold their editable values directly on the owner.
       const bags = liveBagConsumers(event.workspaceId, change.oldName)
       const rows = await ctx.db.getAll<{id: string}>(bags.sql, bags.params)
