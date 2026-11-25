@@ -1,0 +1,1 @@
+export{IS as EmbedComponent,LS as referenceTargetOf}from"../../../../chunks/app-DjHbCwY7.js";

@@ -1,0 +1,1 @@
+export{Tgt as defineQuery}from"../../../chunks/app-DjHbCwY7.js";

@@ -1,0 +1,1 @@
+export{BQ as htmlDocumentTypeSeed}from"../../../chunks/app-DjHbCwY7.js";
