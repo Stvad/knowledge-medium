@@ -1,1 +1,1 @@
-export{wW as BlockProperties}from"../../chunks/app-BH7RLhhx.js";
+export{wW as BlockProperties}from"../../chunks/app-D_QVbLAF.js";

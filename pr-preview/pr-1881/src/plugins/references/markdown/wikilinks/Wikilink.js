@@ -1,1 +1,1 @@
-export{NS as Wikilink}from"../../../../../chunks/app-BH7RLhhx.js";
+export{NS as Wikilink}from"../../../../../chunks/app-D_QVbLAF.js";
