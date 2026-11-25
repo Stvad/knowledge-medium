@@ -1,1 +1,0 @@
-export{UO as usePromotableBreadcrumb}from"../../../chunks/app-D_QVbLAF.js";

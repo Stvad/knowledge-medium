@@ -1,1 +1,0 @@
-export{r_ as HIGHLIGHT_CLASS,i_ as MOVED_HIGHLIGHT_CLASS,a_ as SUGGESTION_HIGHLIGHT_CLASS,o_ as coveringStyle,s_ as highlightClasses,c_ as highlightField,l_ as highlightRange,u_ as highlightRanges,d_ as threadHighlights,f_ as threadHighlightsContribution}from"../../../chunks/app-D_QVbLAF.js";

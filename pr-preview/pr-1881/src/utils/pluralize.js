@@ -1,1 +1,0 @@
-export{nnt as agree,rnt as pluralize}from"../../chunks/app-D_QVbLAF.js";

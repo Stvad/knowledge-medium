@@ -1,1 +1,0 @@
-export{Tgt as defineQuery}from"../../../chunks/app-D_QVbLAF.js";

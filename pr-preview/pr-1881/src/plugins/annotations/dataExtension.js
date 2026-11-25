@@ -1,1 +1,0 @@
-export{U1 as annotationsDataExtension}from"../../../chunks/app-D_QVbLAF.js";

@@ -1,1 +1,0 @@
-export{iz as LazyBlockComponent}from"../../chunks/app-D_QVbLAF.js";

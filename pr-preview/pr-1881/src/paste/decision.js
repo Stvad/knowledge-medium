@@ -1,1 +1,0 @@
-export{qV as defaultPasteDecision,JV as pasteDecisionVerb}from"../../chunks/app-D_QVbLAF.js";

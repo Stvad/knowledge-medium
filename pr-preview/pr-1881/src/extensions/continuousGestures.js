@@ -1,1 +1,0 @@
-export{kB as GESTURE_ACTIVE,AB as GESTURE_CANCEL,jB as GESTURE_IDLE,MB as NO_BLOCK_GESTURES_ATTRIBUTE,NB as TOUCH_HOLD_MS,PB as TOUCH_SLOP_PX,FB as allowsBlockGestures,IB as continuousGestureRecognizersFacet,LB as createBlockGestureController,RB as enabledTouchAction,zB as suppressNextClick,BB as unionTouchAction,VB as useContinuousGestures}from"../../chunks/app-D_QVbLAF.js";

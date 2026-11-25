@@ -1,1 +1,0 @@
-export{RL as appUpdatePromptExtension}from"../../../chunks/app-D_QVbLAF.js";

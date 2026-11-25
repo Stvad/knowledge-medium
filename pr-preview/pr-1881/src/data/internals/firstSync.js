@@ -1,1 +1,0 @@
-export{Ptt as onFirstSync,Ftt as onSyncSettled}from"../../../chunks/app-D_QVbLAF.js";

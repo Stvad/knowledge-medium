@@ -1,1 +1,0 @@
-export{kR as extensionDisplayName,AR as extensionName,jR as userExtensionShellToggle,MR as userExtensionToggle}from"../../chunks/app-D_QVbLAF.js";

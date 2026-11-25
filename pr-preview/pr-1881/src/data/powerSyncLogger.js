@@ -1,1 +1,0 @@
-export{v8 as powerSyncLogger}from"../../chunks/app-D_QVbLAF.js";

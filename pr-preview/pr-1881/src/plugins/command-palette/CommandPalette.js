@@ -1,1 +1,0 @@
-export{UP as CommandPalette}from"../../../chunks/app-D_QVbLAF.js";

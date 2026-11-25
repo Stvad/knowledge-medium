@@ -1,1 +1,0 @@
-export{wL as ExtensionPromptSurface,TL as extensionPromptsExtension}from"../../../chunks/app-D_QVbLAF.js";

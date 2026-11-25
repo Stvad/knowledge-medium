@@ -1,1 +1,0 @@
-export{TE as DEFAULT_VIDEO_NOTES_PANE_RATIO,EE as VIDEO_NOTES_VIEW_MODE,DE as videoNotesPaneRatioProp}from"../../../chunks/app-D_QVbLAF.js";

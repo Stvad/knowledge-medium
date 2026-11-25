@@ -1,1 +1,0 @@
-export{dV as useIsMobile,fV as usePointerCoarse}from"../../chunks/app-D_QVbLAF.js";

@@ -1,1 +1,0 @@
-export{yC as useIsReadOnly}from"../../chunks/app-D_QVbLAF.js";

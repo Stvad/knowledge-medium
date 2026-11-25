@@ -1,1 +1,0 @@
-export{Cft as deriveWorkspaceIdNamespace}from"../../../chunks/app-D_QVbLAF.js";

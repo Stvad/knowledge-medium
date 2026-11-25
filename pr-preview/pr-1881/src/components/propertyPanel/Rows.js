@@ -1,1 +1,0 @@
-export{TW as MetadataRow,EW as PropertySectionLabel}from"../../../chunks/app-D_QVbLAF.js";

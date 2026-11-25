@@ -1,1 +1,0 @@
-export{Qr as perfMonitorPlugin}from"../../../chunks/app-D_QVbLAF.js";

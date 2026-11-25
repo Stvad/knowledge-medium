@@ -1,1 +1,0 @@
-export{b4 as RAW_CHARACTER_COUNT_PROFILE_ID,x4 as WORDS_COUNT_PROFILE_ID,S4 as charLimitProp,C4 as charProfileProp,w4 as charScopeProp}from"../../../chunks/app-D_QVbLAF.js";

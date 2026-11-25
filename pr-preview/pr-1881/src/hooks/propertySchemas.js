@@ -1,1 +1,0 @@
-export{hY as usePropertySchemas}from"../../chunks/app-D_QVbLAF.js";

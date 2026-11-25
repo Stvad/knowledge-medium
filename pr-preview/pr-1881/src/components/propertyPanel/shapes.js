@@ -1,1 +1,0 @@
-export{yY as propertyShapeLabel}from"../../../chunks/app-D_QVbLAF.js";

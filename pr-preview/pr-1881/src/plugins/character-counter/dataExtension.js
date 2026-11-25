@@ -1,1 +1,0 @@
-export{m4 as characterCounterDataExtension}from"../../../chunks/app-D_QVbLAF.js";
