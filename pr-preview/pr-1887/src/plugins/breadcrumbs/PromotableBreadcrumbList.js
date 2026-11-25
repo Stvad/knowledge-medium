@@ -1,0 +1,1 @@
+export{QO as PromotableBreadcrumbList}from"../../../chunks/app-SnObPfS_.js";

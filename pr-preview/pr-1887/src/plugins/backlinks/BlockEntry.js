@@ -1,0 +1,1 @@
+export{rS as LazyBlockEntry}from"../../../chunks/app-SnObPfS_.js";

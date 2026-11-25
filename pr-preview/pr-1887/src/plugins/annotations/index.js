@@ -1,0 +1,1 @@
+export{Rm as annotationsPlugin}from"../../../chunks/app-SnObPfS_.js";

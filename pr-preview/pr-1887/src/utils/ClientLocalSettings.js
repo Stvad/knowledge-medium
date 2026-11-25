@@ -1,0 +1,1 @@
+export{jR as ClientLocalSettings,MR as clientLocalSettings}from"../../chunks/app-SnObPfS_.js";

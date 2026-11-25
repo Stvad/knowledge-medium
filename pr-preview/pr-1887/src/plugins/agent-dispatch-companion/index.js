@@ -1,0 +1,1 @@
+export{D_ as agentDispatchCompanionPlugin}from"../../../chunks/app-SnObPfS_.js";

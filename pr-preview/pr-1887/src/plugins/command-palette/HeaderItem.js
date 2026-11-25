@@ -1,0 +1,1 @@
+export{DF as CommandPaletteHeaderItem}from"../../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{wx as UpdateIndicator}from"../../../chunks/app-SnObPfS_.js";

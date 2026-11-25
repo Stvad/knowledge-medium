@@ -1,0 +1,1 @@
+export{vpt as isChildBackedPropertiesWorkspace}from"../chunks/app-SnObPfS_.js";

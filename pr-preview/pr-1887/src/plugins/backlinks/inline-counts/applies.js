@@ -1,0 +1,1 @@
+export{Wx as inlineBacklinksApplies}from"../../../../chunks/app-SnObPfS_.js";

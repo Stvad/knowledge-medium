@@ -1,0 +1,1 @@
+export{nw as richPastePlugin}from"../../../chunks/app-SnObPfS_.js";

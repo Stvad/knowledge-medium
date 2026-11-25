@@ -1,0 +1,1 @@
+export{rn as supertagsPlugin}from"../../../chunks/app-SnObPfS_.js";

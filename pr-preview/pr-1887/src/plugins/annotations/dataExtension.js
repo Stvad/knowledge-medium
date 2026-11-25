@@ -1,0 +1,1 @@
+export{i0 as annotationsDataExtension}from"../../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{HS as remarkWikilinks}from"../../../../../chunks/app-SnObPfS_.js";

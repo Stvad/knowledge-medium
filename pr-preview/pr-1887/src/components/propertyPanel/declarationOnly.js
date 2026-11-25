@@ -1,0 +1,1 @@
+export{fG as declarationOnlyDefinitionForName,pG as declarationOnlyStatusText}from"../../../chunks/app-SnObPfS_.js";

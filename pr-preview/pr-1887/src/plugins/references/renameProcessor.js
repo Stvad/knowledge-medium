@@ -1,0 +1,1 @@
+export{jQ as RENAME_BACKLINKS_PRECEDENCE,MQ as RENAME_BACKLINKS_PROCESSOR,NQ as applyRefRewrites,PQ as renameBacklinksProcessor,FQ as renameSameTxProcessors,IQ as replacementFor,LQ as splitBySurvivingSpan}from"../../../chunks/app-SnObPfS_.js";

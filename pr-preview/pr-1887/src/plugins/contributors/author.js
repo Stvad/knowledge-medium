@@ -1,0 +1,1 @@
+export{oy as authorIdOf}from"../../../chunks/app-SnObPfS_.js";

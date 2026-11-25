@@ -1,0 +1,1 @@
+export{wnt as agree,Tnt as pluralize}from"../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{Fj as useMinuteClock}from"../../chunks/app-SnObPfS_.js";

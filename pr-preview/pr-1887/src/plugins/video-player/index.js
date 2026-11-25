@@ -1,0 +1,1 @@
+export{dE as videoPlayerPlugin}from"../../../chunks/app-SnObPfS_.js";

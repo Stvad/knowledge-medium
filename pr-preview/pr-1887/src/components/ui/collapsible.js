@@ -1,0 +1,1 @@
+"use client";export{MW as Collapsible,NW as CollapsibleContent,PW as CollapsibleTrigger}from"../../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{Gft as deriveWorkspaceIdNamespace}from"../../../chunks/app-SnObPfS_.js";

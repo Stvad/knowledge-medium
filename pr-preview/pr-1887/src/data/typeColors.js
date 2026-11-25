@@ -1,0 +1,1 @@
+export{jI as DEFAULT_TYPE_COLORS,MI as defaultTypeColor,NI as pickLeastUsedTypeColor}from"../../chunks/app-SnObPfS_.js";

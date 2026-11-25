@@ -1,0 +1,1 @@
+export{Lj as openRecentsPage}from"../../../chunks/app-SnObPfS_.js";

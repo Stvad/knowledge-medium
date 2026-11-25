@@ -1,0 +1,1 @@
+export{Ax as backlinksViewPlugin}from"../../../chunks/app-SnObPfS_.js";

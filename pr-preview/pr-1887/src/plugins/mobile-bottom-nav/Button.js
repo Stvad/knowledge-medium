@@ -1,0 +1,1 @@
+export{GO as MobileBottomNavButton}from"../../../chunks/app-SnObPfS_.js";

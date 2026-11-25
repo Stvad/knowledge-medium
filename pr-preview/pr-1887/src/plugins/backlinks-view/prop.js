@@ -1,0 +1,1 @@
+export{qx as DEFAULT_BACKLINKS_VIEW_ID,Jx as FLAT_BACKLINKS_VIEW_ID,Yx as GROUPED_BACKLINKS_VIEW_ID,Xx as backlinksViewProp,Zx as defaultBacklinksViewIdForBlock}from"../../../chunks/app-SnObPfS_.js";

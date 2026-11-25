@@ -1,0 +1,1 @@
+export{l4 as contributorsDataExtension}from"../../../chunks/app-SnObPfS_.js";

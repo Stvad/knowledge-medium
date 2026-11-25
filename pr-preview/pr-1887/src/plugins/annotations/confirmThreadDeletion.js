@@ -1,0 +1,1 @@
+export{mg as confirmThreadDeletion}from"../../../chunks/app-SnObPfS_.js";

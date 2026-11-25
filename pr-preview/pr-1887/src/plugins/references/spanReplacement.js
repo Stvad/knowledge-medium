@@ -1,0 +1,1 @@
+export{RQ as preferredSpanReplacement}from"../../../chunks/app-SnObPfS_.js";

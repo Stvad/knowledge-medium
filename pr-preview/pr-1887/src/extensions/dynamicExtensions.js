@@ -1,0 +1,1 @@
+export{FR as dynamicExtensionsExtension}from"../../chunks/app-SnObPfS_.js";

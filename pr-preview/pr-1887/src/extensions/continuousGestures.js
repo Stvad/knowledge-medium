@@ -1,0 +1,1 @@
+export{VB as GESTURE_ACTIVE,HB as GESTURE_CANCEL,UB as GESTURE_IDLE,WB as NO_BLOCK_GESTURES_ATTRIBUTE,GB as TOUCH_HOLD_MS,KB as TOUCH_SLOP_PX,qB as allowsBlockGestures,JB as continuousGestureRecognizersFacet,YB as createBlockGestureController,XB as enabledTouchAction,ZB as suppressNextClick,QB as unionTouchAction,$B as useContinuousGestures}from"../../chunks/app-SnObPfS_.js";

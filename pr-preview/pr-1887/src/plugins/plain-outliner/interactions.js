@@ -1,0 +1,1 @@
+export{ok as blockEditingContentRenderer}from"../../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{NL as editorAutocompleteExtension}from"../../chunks/app-SnObPfS_.js";

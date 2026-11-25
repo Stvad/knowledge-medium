@@ -1,0 +1,1 @@
+export{RU as BLOCK_TITLE_TEXT_CLASS,zU as useBlockTitleTextClass}from"../../../chunks/app-SnObPfS_.js";

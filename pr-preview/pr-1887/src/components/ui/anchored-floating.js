@@ -1,0 +1,1 @@
+export{EY as floatingAnchorFromRect,DY as useAnchoredFloating}from"../../../chunks/app-SnObPfS_.js";

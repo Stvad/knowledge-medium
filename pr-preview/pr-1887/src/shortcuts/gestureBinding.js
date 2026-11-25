@@ -1,0 +1,1 @@
+export{vR as gestureBindingDescriptor,yR as matchesGestureEvent}from"../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{lp as BlockTagsConfigEditor}from"../../../chunks/app-SnObPfS_.js";

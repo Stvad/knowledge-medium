@@ -1,0 +1,1 @@
+export{ow as attachmentsPlugin}from"../../../chunks/app-SnObPfS_.js";

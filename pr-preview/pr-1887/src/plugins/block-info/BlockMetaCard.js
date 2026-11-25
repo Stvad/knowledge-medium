@@ -1,0 +1,1 @@
+export{Sx as BlockMetaCard}from"../../../chunks/app-SnObPfS_.js";

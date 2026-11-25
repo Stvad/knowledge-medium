@@ -1,0 +1,1 @@
+export{kI as TypeChip}from"../../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{Gz as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,Kz as openExtensionsSettings}from"../../chunks/app-SnObPfS_.js";

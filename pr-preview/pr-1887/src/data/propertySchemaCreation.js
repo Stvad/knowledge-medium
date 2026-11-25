@@ -1,0 +1,1 @@
+export{NY as adoptOrCreatePropertySchema}from"../../chunks/app-SnObPfS_.js";

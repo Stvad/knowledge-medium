@@ -1,0 +1,1 @@
+export{AS as geoContentDecoratorContribution}from"../../../chunks/app-SnObPfS_.js";

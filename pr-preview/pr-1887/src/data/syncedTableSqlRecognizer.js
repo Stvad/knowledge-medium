@@ -1,0 +1,1 @@
+export{m8 as SYNCED_TABLES,h8 as syncedWriteTarget,g8 as writeTargets}from"../../chunks/app-SnObPfS_.js";

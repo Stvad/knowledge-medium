@@ -1,0 +1,1 @@
+export{kD as SpatialNavigationShellDecorator}from"../../../chunks/app-SnObPfS_.js";

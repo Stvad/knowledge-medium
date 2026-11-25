@@ -1,0 +1,1 @@
+export{of as srsReviewDataExtension}from"../../../chunks/app-SnObPfS_.js";

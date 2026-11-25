@@ -1,0 +1,1 @@
+export{JV as canConvertEmptyChildBlockToProperty,YV as convertEmptyChildBlockToProperty}from"../../chunks/app-SnObPfS_.js";

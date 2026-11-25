@@ -1,0 +1,1 @@
+export{_v as extensionApiCatalog,vv as extensionApiRuntimeExports}from"../../chunks/app-SnObPfS_.js";

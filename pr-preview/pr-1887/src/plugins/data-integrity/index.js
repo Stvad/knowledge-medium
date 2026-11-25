@@ -1,0 +1,1 @@
+export{Ql as dataIntegrityPlugin}from"../../../chunks/app-SnObPfS_.js";

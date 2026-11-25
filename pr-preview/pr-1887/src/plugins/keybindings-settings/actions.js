@@ -1,0 +1,1 @@
+export{VP as openKeybindingsSettingsAction}from"../../../chunks/app-SnObPfS_.js";

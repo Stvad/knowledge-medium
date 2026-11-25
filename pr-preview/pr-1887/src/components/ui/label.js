@@ -1,0 +1,1 @@
+export{BM as Label}from"../../../chunks/app-SnObPfS_.js";

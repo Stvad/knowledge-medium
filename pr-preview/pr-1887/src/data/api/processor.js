@@ -1,0 +1,1 @@
+export{n_t as definePostCommitProcessor}from"../../../chunks/app-SnObPfS_.js";

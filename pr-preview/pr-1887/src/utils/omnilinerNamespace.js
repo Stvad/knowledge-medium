@@ -1,0 +1,1 @@
+export{VX as omnilinerNamespace}from"../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{NE as DEFAULT_VIDEO_NOTES_PANE_RATIO,PE as VIDEO_NOTES_VIEW_MODE,FE as videoNotesPaneRatioProp}from"../../../chunks/app-SnObPfS_.js";

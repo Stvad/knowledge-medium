@@ -1,0 +1,1 @@
+export{_8 as LOCAL_DB_VFS_OVERRIDE_KEY,v8 as LocalDbVfsHandoffError,y8 as asLostWriteAheadSupport,b8 as handoffErrorUserId,x8 as isLocalDbVfsHandoffError,S8 as markDbOpenFailure,C8 as prepareLocalDbForVfs,w8 as readLocalDbFileSizes,T8 as readLocalDbVfsOverride,E8 as resolveLocalDbVfs,D8 as supportsWriteAheadVfs,O8 as tagHandoffErrorUserId}from"../../chunks/app-SnObPfS_.js";

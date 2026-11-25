@@ -1,0 +1,1 @@
+export{Kc as propertiesMigrationPlugin}from"../../../chunks/app-SnObPfS_.js";

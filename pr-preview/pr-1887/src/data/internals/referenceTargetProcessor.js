@@ -1,0 +1,1 @@
+export{Frt as DERIVE_REFERENCE_TARGET_PROCESSOR,Irt as DERIVE_REFERENCE_TARGET_PROCESSOR_NAME,Lrt as deriveReferenceColumns,Rrt as sameTxReferenceTargetLookups}from"../../../chunks/app-SnObPfS_.js";

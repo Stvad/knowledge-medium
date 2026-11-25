@@ -1,0 +1,1 @@
+export{aft as getOrCreateTypesPage,oft as typesPageBlockId,sft as typesPageSpec}from"../../chunks/app-SnObPfS_.js";

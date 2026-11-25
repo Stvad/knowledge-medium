@@ -1,0 +1,1 @@
+export{v4 as CONTRIBUTOR_TYPE,y4 as attributionCreatorsProp,b4 as attributionEditorsProp,x4 as contributorForProp,S4 as contributorKindOf,C4 as contributorKindProp,w4 as contributorProfileType,T4 as contributorRoleProp}from"../../../chunks/app-SnObPfS_.js";

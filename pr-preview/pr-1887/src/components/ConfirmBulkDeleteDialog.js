@@ -1,0 +1,1 @@
+export{IB as ConfirmBulkDeleteDialog}from"../../chunks/app-SnObPfS_.js";

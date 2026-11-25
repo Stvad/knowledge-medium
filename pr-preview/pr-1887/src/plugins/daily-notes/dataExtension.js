@@ -1,0 +1,1 @@
+export{I1 as dailyNotesDataExtension}from"../../../chunks/app-SnObPfS_.js";

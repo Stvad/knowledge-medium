@@ -1,0 +1,1 @@
+export{dp as blockTaggingDataExtension}from"../../../chunks/app-SnObPfS_.js";

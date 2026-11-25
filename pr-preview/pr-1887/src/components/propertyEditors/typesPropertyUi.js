@@ -1,0 +1,1 @@
+export{wI as kernelPropertyUiExtension,TI as typesPropertyUi,EI as typesPropertyUiExtension}from"../../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{VS as Wikilink}from"../../../../../chunks/app-SnObPfS_.js";

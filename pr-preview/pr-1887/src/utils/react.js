@@ -1,0 +1,1 @@
+export{CV as useIsMobile,wV as usePointerCoarse}from"../../chunks/app-SnObPfS_.js";

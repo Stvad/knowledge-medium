@@ -1,0 +1,1 @@
+export{L1 as dailyNotesLocalSchema}from"../../../chunks/app-SnObPfS_.js";

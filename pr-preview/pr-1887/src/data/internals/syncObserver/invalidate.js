@@ -1,0 +1,1 @@
+export{k7 as applySyncInvalidation}from"../../../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{xrt as mergeProperties}from"../../chunks/app-SnObPfS_.js";

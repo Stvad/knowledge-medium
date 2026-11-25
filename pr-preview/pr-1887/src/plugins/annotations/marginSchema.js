@@ -1,0 +1,1 @@
+export{L2 as annotationMarginOpenProp,R2 as annotationMarginShareProp}from"../../../chunks/app-SnObPfS_.js";

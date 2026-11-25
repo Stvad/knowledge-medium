@@ -1,0 +1,1 @@
+export{wz as BlockLoadingPlaceholder}from"../../chunks/app-SnObPfS_.js";

@@ -1,0 +1,1 @@
+export{QQ as htmlDocumentDataExtension}from"../../../chunks/app-SnObPfS_.js";
