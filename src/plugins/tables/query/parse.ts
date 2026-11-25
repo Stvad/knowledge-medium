@@ -64,6 +64,8 @@ export type QueryField =
 export interface ParseOptions {
   /** The block `childof=self` names. */
   readonly selfId?: string
+  /** The caller restricts candidates before evaluating the query. */
+  readonly boundedCandidates?: boolean
   /** Epoch ms of local midnight starting the given calendar day (month 1-12),
    *  for date-only operands on fields. Defaults to this runtime's time zone. */
   readonly localDayStart?: DayStart
@@ -641,7 +643,7 @@ const UNBOUNDED_UNDER = 'under= needs another term that narrows the rows, such a
 
 /** The terms one query can hold: one `childof=`, one `|` group, and `under=`
  *  only beside a term that bounds it, counted among the terms that stay. */
-const survivors = (terms: readonly QueryTerm[], errors: QueryTermError[]): QueryTerm[] => {
+const survivors = (terms: readonly QueryTerm[], errors: QueryTermError[], options: ParseOptions): QueryTerm[] => {
   const kept: QueryTerm[] = []
   let parent = false
   let group = false
@@ -652,7 +654,7 @@ const survivors = (terms: readonly QueryTerm[], errors: QueryTermError[]): Query
     group ||= term.kind === 'anyOf'
     kept.push(term)
   }
-  if (kept.some(bounds)) return kept
+  if (options.boundedCandidates || kept.some(bounds)) return kept
   return kept.filter(term => {
     if (!hasUnder(term)) return true
     errors.push({...term, message: UNBOUNDED_UNDER})
@@ -699,7 +701,7 @@ export const parseQuery = (text: string, resolver: QueryResolver, options: Parse
     const item = readItem(reader, errors)
     if (item) terms.push(item)
   }
-  const kept = survivors(terms, errors)
+  const kept = survivors(terms, errors, options)
   errors.sort((a, b) => a.start - b.start || a.end - b.end)
   return {query: compile(kept, options), errors, terms: kept}
 }
