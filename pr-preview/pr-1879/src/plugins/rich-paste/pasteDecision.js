@@ -1,0 +1,1 @@
+export{QC as richPasteDecisionContribution}from"../../../chunks/app-8QyiJOIf.js";

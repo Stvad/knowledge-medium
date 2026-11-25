@@ -1,0 +1,1 @@
+export{t1 as matchCharTrigger}from"../../chunks/app-8QyiJOIf.js";

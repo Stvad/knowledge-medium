@@ -1,0 +1,1 @@
+export{A2 as annotationMarginOpenProp,j2 as annotationMarginShareProp}from"../../../chunks/app-8QyiJOIf.js";

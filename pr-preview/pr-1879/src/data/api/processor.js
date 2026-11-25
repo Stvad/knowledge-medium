@@ -1,0 +1,1 @@
+export{Wgt as definePostCommitProcessor}from"../../../chunks/app-8QyiJOIf.js";

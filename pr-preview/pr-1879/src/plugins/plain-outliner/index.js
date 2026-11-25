@@ -1,0 +1,1 @@
+export{QO as plainOutlinerPlugin}from"../../../chunks/app-8QyiJOIf.js";

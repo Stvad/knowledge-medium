@@ -1,0 +1,1 @@
+export{CI as TypeChip}from"../../../chunks/app-8QyiJOIf.js";

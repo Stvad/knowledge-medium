@@ -1,0 +1,1 @@
+export{WL as appUpdatePromptExtension}from"../../../chunks/app-8QyiJOIf.js";

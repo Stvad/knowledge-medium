@@ -1,0 +1,1 @@
+export{Igt as defineQuery}from"../../../chunks/app-8QyiJOIf.js";

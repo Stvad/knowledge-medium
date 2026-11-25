@@ -1,0 +1,1 @@
+export{Pft as deriveWorkspaceIdNamespace}from"../../../chunks/app-8QyiJOIf.js";

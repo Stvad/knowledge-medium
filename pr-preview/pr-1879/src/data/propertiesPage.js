@@ -1,0 +1,1 @@
+export{Zdt as getOrCreatePropertiesPage,Qdt as propertiesPageBlockId,$dt as propertiesPageSpec}from"../../chunks/app-8QyiJOIf.js";

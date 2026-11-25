@@ -1,0 +1,1 @@
+export{tw as attachmentsPlugin}from"../../../chunks/app-8QyiJOIf.js";

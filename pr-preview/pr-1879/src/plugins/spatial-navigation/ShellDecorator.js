@@ -1,0 +1,1 @@
+export{wD as SpatialNavigationShellDecorator}from"../../../chunks/app-8QyiJOIf.js";

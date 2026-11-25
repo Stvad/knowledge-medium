@@ -1,0 +1,1 @@
+export{LS as remarkWikilinks}from"../../../../../chunks/app-8QyiJOIf.js";

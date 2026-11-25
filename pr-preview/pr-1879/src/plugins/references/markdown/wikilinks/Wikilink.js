@@ -1,0 +1,1 @@
+export{IS as Wikilink}from"../../../../../chunks/app-8QyiJOIf.js";

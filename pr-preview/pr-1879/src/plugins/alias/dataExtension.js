@@ -1,0 +1,1 @@
+export{a6 as aliasDataExtension}from"../../../chunks/app-8QyiJOIf.js";

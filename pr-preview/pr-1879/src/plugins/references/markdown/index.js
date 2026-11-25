@@ -1,0 +1,1 @@
+export{NS as referencesMarkdownExtension}from"../../../../chunks/app-8QyiJOIf.js";

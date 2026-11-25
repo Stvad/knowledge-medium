@@ -1,0 +1,1 @@
+export{aJ as isIOS,oJ as isMacPlatform}from"../../chunks/app-8QyiJOIf.js";

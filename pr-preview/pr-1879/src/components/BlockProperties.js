@@ -1,0 +1,1 @@
+export{AW as BlockProperties}from"../../chunks/app-8QyiJOIf.js";

@@ -1,0 +1,1 @@
+export{Ogt as SYSTEM_AUTHOR_PREFIX,kgt as isSystemAuthor,Agt as systemAuthor}from"../../../chunks/app-8QyiJOIf.js";

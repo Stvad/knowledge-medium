@@ -1,0 +1,1 @@
+export{SZ as tablesDataExtension}from"../../../chunks/app-8QyiJOIf.js";

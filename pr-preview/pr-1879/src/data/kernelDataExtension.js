@@ -1,0 +1,1 @@
+export{Bet as kernelDataExtension}from"../../chunks/app-8QyiJOIf.js";

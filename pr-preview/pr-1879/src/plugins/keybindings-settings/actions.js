@@ -1,0 +1,1 @@
+export{FP as openKeybindingsSettingsAction}from"../../../chunks/app-8QyiJOIf.js";

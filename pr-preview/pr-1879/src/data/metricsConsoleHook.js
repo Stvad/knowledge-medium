@@ -1,0 +1,1 @@
+export{HI as ensureMetricsConsoleHook}from"../../chunks/app-8QyiJOIf.js";

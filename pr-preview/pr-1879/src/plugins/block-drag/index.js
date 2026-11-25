@@ -1,0 +1,1 @@
+export{fC as blockDragPlugin}from"../../../chunks/app-8QyiJOIf.js";

@@ -1,0 +1,1 @@
+export{AL as ExtensionPromptSurface,jL as extensionPromptsExtension}from"../../../chunks/app-8QyiJOIf.js";

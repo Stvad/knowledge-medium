@@ -1,0 +1,1 @@
+export{DL as editorAutocompleteExtension}from"../../chunks/app-8QyiJOIf.js";

@@ -1,0 +1,1 @@
+export{sZ as staticDataExtensions}from"../../chunks/app-8QyiJOIf.js";

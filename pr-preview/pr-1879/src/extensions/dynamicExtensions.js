@@ -1,0 +1,1 @@
+export{kR as dynamicExtensionsExtension}from"../../chunks/app-8QyiJOIf.js";

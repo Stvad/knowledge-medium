@@ -1,0 +1,1 @@
+export{lX as SuspenseFallback}from"../../../chunks/app-8QyiJOIf.js";

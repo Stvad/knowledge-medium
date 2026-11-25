@@ -1,0 +1,1 @@
+export{$I as insertDrawnBlock}from"../../chunks/app-8QyiJOIf.js";

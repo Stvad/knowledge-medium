@@ -1,0 +1,1 @@
+export{EY as propertyShapeLabel}from"../../../chunks/app-8QyiJOIf.js";

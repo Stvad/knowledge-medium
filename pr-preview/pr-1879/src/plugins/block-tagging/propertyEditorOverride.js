@@ -1,0 +1,1 @@
+export{ap as blockTagsConfigUi}from"../../../chunks/app-8QyiJOIf.js";

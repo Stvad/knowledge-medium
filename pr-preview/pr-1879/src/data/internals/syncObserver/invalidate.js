@@ -1,0 +1,1 @@
+export{v7 as applySyncInvalidation}from"../../../../chunks/app-8QyiJOIf.js";

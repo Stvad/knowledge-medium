@@ -1,0 +1,1 @@
+export{G5 as ProjectorRuntime}from"../../chunks/app-8QyiJOIf.js";

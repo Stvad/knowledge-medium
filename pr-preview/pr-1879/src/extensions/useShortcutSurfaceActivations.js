@@ -1,0 +1,1 @@
+export{_H as useShortcutSurfaceActivations}from"../../chunks/app-8QyiJOIf.js";

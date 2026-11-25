@@ -1,0 +1,1 @@
+export{spt as isChildBackedPropertiesWorkspace}from"../chunks/app-8QyiJOIf.js";

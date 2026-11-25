@@ -1,0 +1,1 @@
+export{nft as DerivedIdNamespaceUnavailableError,rft as derivedIdNamespaceInTx,ift as resolveDerivedIdNamespace}from"../../chunks/app-8QyiJOIf.js";

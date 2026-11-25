@@ -1,0 +1,1 @@
+export{Iut as MIGRATIONS_PAGE_ALIAS,Lut as getOrCreateMigrationsPage,Rut as migrationsPageBlockId,zut as migrationsPageSpec}from"../../chunks/app-8QyiJOIf.js";

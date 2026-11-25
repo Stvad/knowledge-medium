@@ -1,0 +1,1 @@
+export{SY as usePropertySchemas}from"../../chunks/app-8QyiJOIf.js";

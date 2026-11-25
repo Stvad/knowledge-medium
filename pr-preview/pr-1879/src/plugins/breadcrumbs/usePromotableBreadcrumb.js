@@ -1,0 +1,1 @@
+export{KO as usePromotableBreadcrumb}from"../../../chunks/app-8QyiJOIf.js";

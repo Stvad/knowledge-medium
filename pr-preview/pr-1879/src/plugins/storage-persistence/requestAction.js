@@ -1,0 +1,1 @@
+export{Lu as requestPersistenceActionContribution}from"../../../chunks/app-8QyiJOIf.js";

@@ -1,0 +1,1 @@
+export{ZC as richPastePlugin}from"../../../chunks/app-8QyiJOIf.js";

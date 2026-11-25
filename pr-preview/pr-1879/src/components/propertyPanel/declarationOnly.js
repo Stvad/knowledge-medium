@@ -1,0 +1,1 @@
+export{oG as declarationOnlyDefinitionForName,sG as declarationOnlyStatusText}from"../../../chunks/app-8QyiJOIf.js";

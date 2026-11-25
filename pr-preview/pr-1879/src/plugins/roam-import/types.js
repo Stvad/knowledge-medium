@@ -1,0 +1,1 @@
+export{Sm as getExtraRoamProps}from"../../../chunks/app-8QyiJOIf.js";

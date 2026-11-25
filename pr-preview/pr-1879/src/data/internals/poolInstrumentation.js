@@ -1,0 +1,1 @@
+export{k8 as instrumentAdapter}from"../../../chunks/app-8QyiJOIf.js";
