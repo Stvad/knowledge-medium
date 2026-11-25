@@ -1,4 +1,4 @@
-import { ChangeScope, propertyValue, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { ChangeScope, propertyValue, type AnyPropertyAssignment, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
 import { requireTypeContribution } from '@/data/typeTagger'
@@ -91,7 +91,8 @@ const stringListProperty = (value: unknown): string[] =>
 const includesAll = (existing: readonly string[], expected: readonly string[]): boolean =>
   expected.every(value => existing.includes(value))
 
-const mergeStrings = (values: readonly string[]): string[] => Array.from(new Set(values))
+const appendMissing = (held: readonly string[], required: readonly string[]): string[] =>
+  [...held, ...required.filter(item => !held.includes(item))]
 
 /** Get-or-create the workspace's Journal page.
  *
@@ -167,12 +168,10 @@ export const getOrCreateDailyNoteInTx = async (
       throw new Error(`Cannot use the daily note for ${iso}: its stored date differs`)
     }
   }
-  // Stored refs address this id even when a different page owns a date alias.
-  const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
   if (existing) {
     if (existing.deleted) {
       const properties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: title, properties})
+      await tx.restore(id, {properties})
     }
     if (existing.parentId !== parentId || existing.orderKey !== orderKey) {
       await tx.move(id, {parentId, orderKey}, {skipMetadata: true})
@@ -182,15 +181,26 @@ export const getOrCreateDailyNoteInTx = async (
   }
   requireTypeContribution(snapshot.types, PAGE_TYPE)
   requireTypeContribution(snapshot.types, DAILY_NOTE_TYPE)
-  const heldAliases = existing && !existing.deleted ? decodeRowProperty(existing, aliasesProp) : []
+  const heldAliases = existing ? decodeRowProperty(existing, aliasesProp) : []
   const heldTypes = existing ? decodeRowProperty(existing, typesProp) : []
-  // A definition conversion runs after the materializer. Typed writes also
-  // create the authoritative children of a note minted during that conversion.
-  await tx.setProperties(id, {set: [
-    propertyValue(typesProp, mergeStrings([...heldTypes, PAGE_TYPE, DAILY_NOTE_TYPE])),
-    propertyValue(aliasesProp, mergeStrings([...claimable, ...heldAliases])),
-    propertyValue(dailyNoteDateProp, date),
-  ]})
+  const live = existing && !existing.deleted
+  const set: AnyPropertyAssignment[] = []
+  if (!live || !includesAll(heldTypes, [PAGE_TYPE, DAILY_NOTE_TYPE])) {
+    set.push(propertyValue(typesProp, appendMissing(heldTypes, [PAGE_TYPE, DAILY_NOTE_TYPE])))
+  }
+  if (!live || !includesAll(heldAliases, aliases)) {
+    // A live alias remains its owner's. A restore must reclaim its prior aliases.
+    const wanted = appendMissing(heldAliases, aliases)
+    const claimable = await partitionClaimableAliases(tx, id, wanted, workspaceId)
+    if (!live || (claimable.length > heldAliases.length && includesAll(claimable, heldAliases))) {
+      set.push(propertyValue(aliasesProp, claimable))
+    }
+  }
+  if (!live || existing.properties[dailyNoteDateProp.name] === undefined) {
+    set.push(propertyValue(dailyNoteDateProp, date))
+  }
+  // Conversion runs after the materializer, so create the new note's value children here.
+  if (set.length) await tx.setProperties(id, {set})
   return id
 }
 

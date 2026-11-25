@@ -77,13 +77,8 @@
  *    alternative is keeping the arriving row's spelling, which is the #1055
  *    bug this pass exists to fix.
  *
- * The FAN-OUT is dormant until a definition has field rows — see
- * `consumingParentIds`, which is its gate. The refusals split on field rows and
- * the split is deliberate: `MIGRATION_RUNNING_REFUSAL` exists precisely because
- * a consumer with no field row YET is invisible to them, while the
- * unconvertible refusal is a fact about values this pass actually read and so
- * can only be reached through the walk. The contested and shared-name refusals
- * ask the wider `anyBlockHoldsFieldRowFor`.
+ * Ordinary re-encodings walk field rows. A semantic scalar conversion also
+ * visits owners holding the old encoding directly in their property bag.
  */
 
 import {
@@ -503,6 +498,13 @@ const collectChanges = (
     const conversion = scalarConversionBetween(
       ctx.valuePresets, peekRowProperty(before, presetIdProp), peekRowProperty(after, presetIdProp),
     )
+    // A legacy destination cell can hold an independent value with no definition.
+    if (conversion && renamed) {
+      throw new ProcessorRejection(
+        'Change the property type without renaming it in the same edit.',
+        'property.definition-change.rename-and-convert', {fieldId: after.id},
+      )
+    }
     const storedDefault = storedPropertyValue(after.properties, propertyDefaultProp.name)
     candidates.push({
       conversion,
@@ -684,6 +686,19 @@ const liveBagConsumers = (workspaceId: string, name: string) => ({
   params: [workspaceId, jsonPathForProperty(name)],
 })
 
+/** Restoring any of these values would read its old encoding through the new codec. */
+const historicalScalarOwners = (ctx: SameTxCtx, workspaceId: string, change: DefinitionChange) =>
+  ctx.db.getAll<{id: string}>(`
+    SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 1
+      AND json_type(properties_json, ?) IS NOT NULL
+    UNION
+    SELECT owner.id FROM blocks field
+      JOIN blocks owner ON owner.id = field.parent_id
+      JOIN blocks value ON value.parent_id = field.id AND value.is_field_form IS NOT 1
+     WHERE field.workspace_id = ? AND field.reference_target_id = ? AND field.is_field_form = 1
+       AND (owner.deleted = 1 OR field.deleted = 1 OR value.deleted = 1)`,
+  [workspaceId, jsonPathForProperty(change.oldName), workspaceId, change.fieldId])
+
 /** Whether any block holds a live field row for one of `fieldIds`, a DELETED
  *  owner included — the question the contested and shared-name refusals ask,
  *  which is wider than the fan-out's. Declining to re-key a deleted owner is a
@@ -838,6 +853,7 @@ const applyToParent = async (
   lostByField: Map<string, number>,
   lostParents: Set<string>,
   refusals: Map<string, ConversionRefusal>,
+  childBacked: boolean,
 ): Promise<void> => {
   const parent = await ctx.tx.get(parentId)
   // Tombstoned owners are excluded by `consumingParentsFromSql`, which is the
@@ -851,9 +867,7 @@ const applyToParent = async (
   const oldNames: string[] = []
   const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
   for (const change of changes) {
-    // `null` = this parent carries no field row for this definition, so its
-    // cell keys for it are none of this change's business. It is also the gate
-    // `childContentsToEncodedPropertyValue` is called under.
+    // Without a live field row a scalar conversion reads the stored cell directly.
     const perFieldRow = await fieldRowValues(
       ctx.tx, siblings, change.fieldId, isFieldDefinition,
     )
@@ -862,8 +876,7 @@ const applyToParent = async (
       if (!change.conversion || held === undefined) continue
       const converted = await convertedScalar(change, ctx, parent.workspaceId, held, refusals, parentId)
       if (converted === undefined) continue
-      if (change.oldName !== change.newName) oldNames.push(change.oldName)
-      if (await ctx.tx.isPropertyChildBackedWorkspace(parent.workspaceId)) {
+      if (childBacked) {
         const schema = {...change.schema, fieldId: change.fieldId}
         await materializePropertyChildrenForExistingRow(ctx.tx,
           {...parent, properties: {...parent.properties, [schema.name]: converted}},
@@ -871,6 +884,14 @@ const applyToParent = async (
       }
       assignments.push({name: change.newName, value: converted, unset: false})
       continue
+    }
+    if (change.conversion && !childBacked) {
+      const projected = childContentsToEncodedPropertyValue(change.beforeSchema,
+        unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow))
+      if (!jsonValuesEqual(storedPropertyValue(parent.properties, change.oldName), projected)) {
+        recordRefusal(refusals, change.fieldId, parentId, 'stored cell and field rows disagree')
+        continue
+      }
     }
     const canonicalized: Array<Array<Pick<BlockData, 'id' | 'content' | 'referenceTargetId'>>> = []
     for (const values of perFieldRow) {
@@ -1117,13 +1138,21 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     }
     if (changes.length === 0) return
-    const parentIds = await consumingParentIds(
+    const parents = new Set(await consumingParentIds(
       ctx.db, event.workspaceId, changes.map(c => c.fieldId),
-    )
+    ))
     const refusals = new Map<string, ConversionRefusal>()
-    const parents = new Set(parentIds)
-    for (const change of changes) {
-      if (!change.conversion) continue
+    const conversions = changes.filter(change => change.conversion)
+    const childBacked = conversions.length > 0 && await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId)
+    for (const change of conversions) {
+      const historical = await historicalScalarOwners(ctx, event.workspaceId, change)
+      if (historical.length) {
+        throw new ProcessorRejection(
+          `Cannot convert "${change.oldName}". Restore the deleted values on ${historical.length} affected ${historical.length === 1 ? 'block' : 'blocks'} first.`,
+          'property.definition-change.deleted-values',
+          {fieldId: change.fieldId, blockIds: historical.map(owner => owner.id)},
+        )
+      }
       // Pre-children workspaces hold their editable values directly on the owner.
       const bags = liveBagConsumers(event.workspaceId, change.oldName)
       const rows = await ctx.db.getAll<{id: string}>(bags.sql, bags.params)
@@ -1150,14 +1179,14 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     let done = 0
     for (const parentId of parents) {
       await applyToParent(
-        ctx, parentId, changes, isFieldDefinition, lostByField, lostParents, refusals,
+        ctx, parentId, changes, isFieldDefinition, lostByField, lostParents, refusals, childBacked,
       )
       done += 1
       // No-op unless a gesture's run is open. The first report replaces
       // 'Starting…', every stride moves the bar, and the last keeps a total
       // that is not a multiple of the stride from sitting short while the
       // transaction commits.
-      if (done === 1 || done === parentIds.length || done % FANOUT_REPORT_STRIDE === 0) {
+      if (done === 1 || done === parents.size || done % FANOUT_REPORT_STRIDE === 0) {
         reportPropertyDefinitionFanout(changingFieldIds, done, parents.size)
       }
     }

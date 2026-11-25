@@ -4,6 +4,11 @@ import { ChangeScope } from '@/data/api'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import {
+  beginPropertyDefinitionFanout,
+  markPropertyDefinitionFanoutRunning,
+  propertyDefinitionFanout,
+} from '@/data/propertyDefinitionFanout'
+import {
   aliasesProp,
   presetIdProp,
   propertyChangeScopeProp,
@@ -300,4 +305,93 @@ describe.each(['cell', 'children'] as const)('date to day in %s storage', mode =
 
     expect(await workspaceRows()).toEqual(before)
   })
+})
+
+const expectRefusalPreservingRows = async (repo: Repo, edit: () => Promise<void>, reason: RegExp) => {
+  await repo.awaitProcessors()
+  const original = await workspaceRows()
+  await expect(edit()).rejects.toThrow(reason)
+  await repo.awaitProcessors()
+  expect(await workspaceRows()).toEqual(original)
+}
+
+it.each(['free', 'orphan', 'swapped'] as const)(
+  'refuses a simultaneous date conversion and rename when the destination is %s', async destination => {
+    const repo = await setup('cell')
+    const otherName = 'test:label'
+    const otherDefinition = 'label-definition'
+    await createOwners(repo, {owner: midnight(NEW_DAY)})
+    if (destination === 'swapped') {
+      await repo.tx(tx => tx.create({
+        id: otherDefinition, workspaceId: WS, parentId: null, orderKey: 'label', content: otherName,
+        properties: {[typesProp.name]: [PROPERTY_SCHEMA_TYPE], [propertyNameProp.name]: otherName, [presetIdProp.name]: 'string'},
+      }), SCOPE)
+      await vi.waitFor(() => expect(repo.propertySchemas.get(otherName)?.codec.type).toBe('string'))
+      await repo.tx(tx => tx.setProperty('owner', repo.propertySchemas.get(otherName)!, 'label value'), SCOPE)
+    } else if (destination === 'orphan') {
+      await testDb.db.writeTransaction(tx => tx.execute(
+        'UPDATE blocks SET properties_json = json_set(properties_json, ?, ?) WHERE id = ?',
+        [`$."${otherName}"`, 'label value', 'owner'],
+      ))
+    }
+    expect((await storedProperties('owner'))[otherName]).toBe(destination === 'free' ? undefined : 'label value')
+    await expectRefusalPreservingRows(repo, () => repo.tx(async tx => {
+      await tx.setProperty(DEFINITION, propertyNameProp, otherName)
+      await tx.setProperty(DEFINITION, presetIdProp, 'day')
+      if (destination === 'swapped') await tx.setProperty(otherDefinition, propertyNameProp, NAME)
+    }, SCOPE), /renam/i)
+  },
+)
+
+it.each(['cell owner', 'child-backed owner', 'owner missing its projected cell', 'field', 'value'] as const)(
+  'preserves restorable date values on a deleted %s', async deleted => {
+    const repo = await setup(deleted === 'cell owner' ? 'cell' : 'children')
+    await createOwners(repo, {owner: '2026-02-03T12:00:00.000Z', active: midnight(EXISTING_DAY)})
+    await repo.awaitProcessors()
+    const child = await readValueChild('owner')
+    const deletedId = deleted === 'field' ? child!.parent_id : deleted === 'value' ? child!.id : 'owner'
+    await repo.tx(tx => tx.delete(deletedId), SCOPE)
+    await repo.awaitProcessors()
+    if (deleted === 'owner missing its projected cell') {
+      await testDb.db.writeTransaction(tx => tx.execute(
+        'UPDATE blocks SET properties_json = json_remove(properties_json, ?) WHERE id = ?',
+        [`$."${NAME}"`, 'owner'],
+      ))
+      expect(await readValueChild('owner')).toMatchObject({content: '2026-02-03T12:00:00.000Z'})
+      expect((await storedProperties('owner'))[NAME]).toBeUndefined()
+    }
+    expect(await testDb.db.get('SELECT deleted FROM blocks WHERE id = ?', [deletedId])).toEqual({deleted: 1})
+    await expectRefusalPreservingRows(repo, () => retype(repo), /delet|restor|trash/i)
+  },
+)
+
+it.each(['absent', 'different'] as const)(
+  'preserves the cell when its pre-flip child value is %s', async childState => {
+    const repo = await setup('children')
+    await createOwners(repo, {owner: midnight(NEW_DAY)})
+    await repo.awaitProcessors()
+    const child = (await readValueChild('owner'))!
+    // Before the flip, partial field rows can coexist with an authoritative owner cell.
+    await testDb.db.writeTransaction(async tx => {
+      await tx.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = ?", [WS])
+      if (childState === 'absent') await tx.execute('DELETE FROM blocks WHERE id = ?', [child.id])
+      else await tx.execute('UPDATE blocks SET content = ? WHERE id = ?', [midnight(EXISTING_DAY), child.id])
+    })
+    expect((await storedProperties('owner'))[NAME]).toBe(midnight(NEW_DAY))
+    expect((await readValueChild('owner'))?.content).toBe(childState === 'absent' ? undefined : midnight(EXISTING_DAY))
+    await expectRefusalPreservingRows(repo, () => retype(repo), /disagree|differ|conflict|match|inconsisten/i)
+  },
+)
+
+it('reports completion for a conversion with only bag consumers', async () => {
+  const repo = await setup('cell')
+  await createOwners(repo, {one: midnight(NEW_DAY), two: midnight(NEW_DAY)})
+  const run = beginPropertyDefinitionFanout(DEFINITION, NAME, 2)
+  try {
+    markPropertyDefinitionFanoutRunning(DEFINITION)
+    await retype(repo)
+    expect(propertyDefinitionFanout()).toMatchObject({done: 2, total: 2})
+  } finally {
+    run.end()
+  }
 })
