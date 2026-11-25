@@ -1,1 +1,1 @@
-export{OR as ClientLocalSettings,kR as clientLocalSettings}from"../../chunks/app-CTeBIUfi.js";
+export{OR as ClientLocalSettings,kR as clientLocalSettings}from"../../chunks/app-DiCwYZ0-.js";

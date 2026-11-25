@@ -1,1 +1,1 @@
-export{ss as queryCompletionExtension,cs as queryTriggerAt}from"../../../../chunks/app-CTeBIUfi.js";
+export{ss as queryCompletionExtension,cs as queryTriggerAt}from"../../../../chunks/app-DiCwYZ0-.js";

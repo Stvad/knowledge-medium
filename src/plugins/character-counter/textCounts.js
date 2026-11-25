@@ -1,1 +1,1 @@
-export{$n as countCharacters,er as countWords}from"../../../chunks/app-CTeBIUfi.js";
+export{$n as countCharacters,er as countWords}from"../../../chunks/app-DiCwYZ0-.js";

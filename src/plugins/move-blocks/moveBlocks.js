@@ -1,1 +1,1 @@
-export{FC as moveBlocksTo}from"../../../chunks/app-CTeBIUfi.js";
+export{FC as moveBlocksTo}from"../../../chunks/app-DiCwYZ0-.js";
