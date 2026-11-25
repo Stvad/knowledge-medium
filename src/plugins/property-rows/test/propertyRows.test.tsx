@@ -536,6 +536,45 @@ describe('editing through a property row', () => {
     const julyId = dailyNoteBlockId(WS, '2026-07-21')
     expect(owner.peekProperty(appointment)).toBe(julyId)
     expect((await repo.load(valueId))?.referenceTargetId).toBe(julyId)
+
+    fireEvent.click(within(inline).getByRole('button', {name: 'Change day'}))
+    const clearDialog = screen.getByRole('dialog', {name: 'Change day'})
+    const clearButton = within(clearDialog).getByRole('button', {name: 'Clear day'})
+    const refused = vi.spyOn(repo, 'tx').mockResolvedValueOnce(false)
+    fireEvent.click(clearButton)
+    try {
+      expect(await within(clearDialog).findByRole('alert')).toHaveTextContent('no longer editable')
+      expect(refused).toHaveBeenCalledOnce()
+      expect(owner.peekProperty(appointment)).toBe(julyId)
+    } finally {
+      refused.mockRestore()
+    }
+
+    fireEvent.click(clearButton)
+    await within(inline).findByRole('button', {name: 'Choose day'})
+    expect(owner.peekProperty(appointment)).toBeUndefined()
+    expect((await repo.load(valueId))?.content).toBe('null')
+    expect(await repo.load(julyId)).toBeTruthy()
+
+    await act(() => owner.set(appointment, julyId))
+    const restored = await within(inline).findByRole('link', {name: 'July 21st, 2026'})
+    expect(blockRow(restored).dataset.blockId).toBe(valueId)
+    fireEvent.click(within(inline).getByRole('button', {name: 'Change day'}))
+    const staleClear = screen.getByRole('button', {name: 'Clear day'})
+    const tx = repo.tx.bind(repo)
+    const repurpose = vi.spyOn(repo, 'tx').mockImplementationOnce((write, options) =>
+      tx(async session => {
+        await session.move(valueId, {parentId: OWNER, orderKey: 'z9'})
+        return write(session)
+      }, options))
+    try {
+      fireEvent.click(staleClear)
+      expect(await repurpose.mock.results[0]?.value).toBe(false)
+      expect((await repo.load(valueId))?.parentId).toBe(OWNER)
+      expect((await repo.load(valueId))?.referenceTargetId).toBe(julyId)
+    } finally {
+      repurpose.mockRestore()
+    }
   }, 20_000)
 
   it('keeps an unresolved field-form child out of the scalar inline editor', async () => {

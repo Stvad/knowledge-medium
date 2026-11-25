@@ -27,7 +27,7 @@ import {
   UnwritableLabelError,
 } from '@/data/referenceBlock'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
-import {readValuePresets} from '@/data/valuePresetRegistry'
+import {readValuePresets, resolveValuePresetPresentation} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
@@ -155,10 +155,10 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
   // (rather than silently dropping). Phase 1 only supports user-defined
   // schemas (block-id refs); kernel-schema support is an open design
   // question handled by the upcoming codec extension.
-  const resolvedEntries = useMemo(() => propertyRefs.map(refId => ({
-    refId,
-    schema: userSchemas.getSchemaForBlockId(refId),
-  })), [propertyRefs, userSchemas])
+  const resolvedEntries = useMemo(() => propertyRefs.map(refId => {
+    const schema = userSchemas.getSchemaForBlockId(refId)
+    return {refId, schema, preset: schema && resolveValuePresetPresentation(presets, schema)}
+  }), [propertyRefs, userSchemas, presets])
 
   const excludedNames = useMemo(
     () => resolvedEntries.flatMap(e => e.schema ? [e.schema.name] : []),
@@ -314,12 +314,12 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
                 <>
                   <PropertyShapeGlyph
                     shape={entry.schema.codec.type}
-                    Glyph={resolveEditorOverride(entry.schema.name, block.repo.propertyDefinitions, uis, entry.schema)?.Glyph ?? presets.get(entry.schema.codec.type)?.Glyph}
+                    Glyph={resolveEditorOverride(entry.schema.name, block.repo.propertyDefinitions, uis, entry.schema)?.Glyph ?? entry.preset?.Glyph}
                     className="text-muted-foreground"
                   />
                   <span className="flex-1 truncate">{entry.schema.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {presets.get(entry.schema.codec.type)?.label ?? propertyShapeLabel(entry.schema.codec.type)}
+                    {entry.preset?.label ?? propertyShapeLabel(entry.schema.codec.type)}
                   </span>
                 </>
               ) : (

@@ -16,7 +16,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, blockTypeDescriptionProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import { BlockCache } from '@/data/blockCache'
@@ -32,6 +32,7 @@ import {
   journalBlockId,
   todayIso,
 } from '@/plugins/daily-notes/dailyNotes'
+import { buildCalendarCells, firstOfMonth, fromIso } from '../calendar'
 import { resolveDayInput, setDayProperty } from '../dayProperty'
 import { definitionSeedsFacet } from '@/data/facets'
 import { dayValuePresetCore } from '../schema'
@@ -178,7 +179,7 @@ describe('writing calendar days', () => {
     await repo.tx(tx => setDayProperty(tx, snapshot, owner, day, iso), opts)
     expect((await getOrCreateDailyNote(repo, WS, iso)).id).toBe(note)
     expect((await repo.load(owner))?.properties[day.name]).toBe(note)
-    await expect(repo.tx(tx => setDayProperty(tx, snapshot, owner, aliasesProp as never, iso), opts)).rejects.toThrow('must reference daily notes')
+    await expect(repo.tx(tx => setDayProperty(tx, snapshot, owner, blockTypeDescriptionProp, iso), opts)).rejects.toThrow('must reference daily notes')
   })
 
   it('refuses to link a day whose target carries a different anchor', async () => {
@@ -190,6 +191,19 @@ describe('writing calendar days', () => {
     await expect(repo.tx(tx => getOrCreateDailyNoteInTx(tx, repo.snapshotTypeRegistries(), WS, iso),
       {scope: ChangeScope.BlockDefault})).rejects.toThrow('stored date differs')
     expect((await repo.load(note.id))?.properties[dailyNoteDateProp.name]).toBe(other.toISOString())
+  })
+
+  it('opens and picks four-digit calendar years below 0100 without a century shift', () => {
+    const iso = '0099-03-16'
+    const initial = fromIso(iso)
+    expect(initial?.getFullYear()).toBe(99)
+    expect(buildCalendarCells(firstOfMonth(initial!)).some(cell => cell.iso === iso)).toBe(true)
+  })
+
+  it('uses the UTC day to name a note even across a skipped local date', async () => {
+    const iso = '2011-12-30'
+    const daily = await getOrCreateDailyNote(env.repo, WS, iso)
+    expect((await daily.load())?.content).toBe('December 30th, 2011')
   })
 
   it('resolves relative input against local today and rejects impossible ISO days', () => {

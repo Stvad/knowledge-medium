@@ -41,7 +41,7 @@ describe('property panel action visibility guards', () => {
 
     await writeProperty(block, seedKeyProp, 'tampered/property/key')
     const resolve = vi.fn(async () => 'tampered/property/key')
-    await resolveAndWriteProperty(block, seedKeyProp, resolve)
+    await expect(resolveAndWriteProperty(block, seedKeyProp, resolve)).resolves.toBe(false)
     await deleteProperty({
       block,
       properties,
@@ -136,7 +136,7 @@ describe('property panel action visibility guards', () => {
     })).resolves.toBeUndefined()
 
     const resolve = vi.fn(async () => ({}))
-    await resolveAndWriteProperty(block, staleSchema, resolve)
+    await expect(resolveAndWriteProperty(block, staleSchema, resolve)).resolves.toBe(false)
 
     await deleteProperty({
       block,

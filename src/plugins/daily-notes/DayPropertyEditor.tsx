@@ -31,31 +31,29 @@ function SavedDay({targetId, workspaceId, label}: {targetId: string; workspaceId
 
 function DayCalendar({
   initialIso,
+  hasValue,
   pending,
   onPick,
 }: {
   initialIso: string | null
+  hasValue: boolean
   pending: boolean
-  onPick: (iso: string) => Promise<void>
+  onPick: (iso: string | undefined) => Promise<void>
 }) {
   const [input, setInput] = useState(initialIso ?? '')
   const [visibleMonth, setVisibleMonth] = useState(() => firstOfMonth(initialDateFromIso(initialIso ?? undefined)))
   const [error, setError] = useState<string>()
-  const choose = async (iso: string) => {
+  const choose = async (text: string | undefined) => {
     setError(undefined)
     try {
-      await onPick(iso)
+      await onPick(text === undefined ? undefined : resolveDayInput(text))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not set day')
     }
   }
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    try {
-      void choose(resolveDayInput(input))
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Enter a calendar day')
-    }
+    void choose(input)
   }
 
   return (
@@ -87,6 +85,11 @@ function DayCalendar({
           onSelect={iso => void choose(iso)}
         />
       </div>
+      {hasValue && (
+        <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => void choose(undefined)}>
+          Clear day
+        </Button>
+      )}
     </>
   )
 }
@@ -94,7 +97,6 @@ function DayCalendar({
 function BoundDayPropertyEditor({
   block,
   value,
-  onChange,
   resolveAndChange,
 }: PropertyEditorProps<string | undefined> & {block: Block}) {
   const [open, setOpen] = useState(false)
@@ -112,12 +114,16 @@ function BoundDayPropertyEditor({
     },
   })
   const editable = !block.repo.isReadOnly && workspaceId && resolveAndChange
-  const pick = async (iso: string) => {
+  const pick = async (iso: string | undefined) => {
     if (!workspaceId || !resolveAndChange || pending) return
     setPending(true)
     try {
-      const snapshot = block.repo.snapshotTypeRegistries()
-      await resolveAndChange(tx => getOrCreateDailyNoteInTx(tx, snapshot, workspaceId, iso))
+      const written = await resolveAndChange(async tx => {
+        // Both scalar ref codecs accept an empty string as their clear value.
+        if (iso === undefined) return ''
+        return getOrCreateDailyNoteInTx(tx, block.repo.snapshotTypeRegistries(), workspaceId, iso)
+      })
+      if (!written) throw new Error('The date property changed or is no longer editable')
       setOpen(false)
     } finally {
       setPending(false)
@@ -150,13 +156,7 @@ function BoundDayPropertyEditor({
             }}
           >
             <DialogTitle>{value ? 'Change day' : 'Choose day'}</DialogTitle>
-            <DayCalendar initialIso={saved?.iso ?? null} pending={pending} onPick={pick}/>
-            {value && (
-              <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => {
-                onChange('')
-                setOpen(false)
-              }}>Clear day</Button>
-            )}
+            <DayCalendar initialIso={saved?.iso ?? null} hasValue={Boolean(value)} pending={pending} onPick={pick}/>
           </DialogContent>
         </Dialog>
       ) : (!value && <span className="text-sm text-muted-foreground">Empty</span>)}

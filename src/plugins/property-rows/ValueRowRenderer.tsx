@@ -54,19 +54,20 @@ const InlineValue = ({block, Inner, fieldRowId, schema}: {
   if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return warning
     ? <div className="flex min-w-0 items-center gap-1">{warning}<Inner block={block}/></div> : <Inner block={block}/>
   const resolveAndChange: PropertyEditorProps<unknown>['resolveAndChange'] = async resolve => {
-    if (block.repo.isReadOnly || !isResolvedPropertySchema(schema) || isPropertyPanelReadOnlyProperty(schema.name)) return
-    await block.repo.tx(async tx => {
+    if (block.repo.isReadOnly || !isResolvedPropertySchema(schema) || isPropertyPanelReadOnlyProperty(schema.name)) return false
+    return block.repo.tx(async tx => {
       const row = await tx.get(block.id)
-      if (!row || row.deleted || row.isFieldForm || row.parentId !== fieldRowId || row.workspaceId !== schema.workspaceId) return
+      if (!row || row.deleted || row.isFieldForm || row.parentId !== fieldRowId || row.workspaceId !== schema.workspaceId) return false
       const field = await tx.get(fieldRowId)
       if (!field || field.deleted || !field.isFieldForm || field.parentId === null
-        || getPropertyFieldTargetId(field) !== schema.fieldId) return
+        || getPropertyFieldTargetId(field) !== schema.fieldId) return false
       const currentSchema = tx.resolvePropertyFieldSchema(row.workspaceId, schema.fieldId)
-      if (!currentSchema || currentSchema.codec !== schema.codec || isPropertyPanelReadOnlyProperty(currentSchema.name)) return
+      if (!currentSchema || currentSchema.codec !== schema.codec || isPropertyPanelReadOnlyProperty(currentSchema.name)) return false
       tx.assertWritableWorkspace(row.workspaceId)
       const next = await resolve(tx)
       const [content] = encodedPropertyValueToChildContents(currentSchema, currentSchema.codec.encode(next))
       await tx.update(block.id, {content})
+      return true
     }, {scope: ChangeScope.BlockDefault, description: `set content on ${block.id}`})
   }
   return (

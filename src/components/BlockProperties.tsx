@@ -253,7 +253,9 @@ export function BlockProperties({block}: BlockPropertiesProps) {
           void writeProperty(block, row.schema, next).then(clearSyntheticProperty)
         }}
         resolveAndChange={async resolve => {
-          if (await resolveAndWriteProperty(block, row.schema, resolve)) clearSyntheticProperty()
+          const written = await resolveAndWriteProperty(block, row.schema, resolve)
+          if (written) clearSyntheticProperty()
+          return written
         }}
         onDelete={() => void deleteProperty({
           block,

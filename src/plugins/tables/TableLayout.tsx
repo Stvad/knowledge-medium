@@ -5,10 +5,11 @@ import {
 import { BlockChildren, BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
+import { ReferenceLink } from '@/components/references/ReferenceLink'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { PropertyDisplayScopeContext, PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
-import { type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
+import { decodeRefId, isRefCodec, type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
 import { isPropertyValueEditable } from '@/data/internals/propertyValueEdits'
@@ -33,6 +34,7 @@ import { columnSortKeys, sortOrder, useViewSort, writeSort, type ViewSort } from
 import { notesAmong } from './childrenViews'
 import { registerGrid, tableRenderScopeId } from './registry'
 import { useIsMobile } from '@/utils/react'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete'
 import { GUTTER_VARIABLE, MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, gutterWidth } from './rowGutter'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
@@ -85,15 +87,30 @@ const formatStored = (value: unknown): string =>
     : typeof value === 'object' ? JSON.stringify(value)
     : String(value)
 
-/** The value as `properties_json` stores it, for cells that draw no rows. */
-const StoredValue = ({properties, schema}: {properties: BlockData['properties'] | undefined; schema: AnyPropertySchema}) => {
-  const text = properties ? formatStored(storedPropertyValue(properties, schema.name)) : ''
+const StoredReference = ({row, targetId}: {row: Block; targetId: string}) => {
+  const workspaceId = useWorkspaceId(row)
+  const target = row.repo.block(targetId)
+  const label = useHandle(target, {selector: data => data?.workspaceId === workspaceId
+    ? data.content.trim() || labelForBlockData(data, 'Untitled block')
+    : null})
+  return label ? <div className="truncate"><ReferenceLink block={target}>{label}</ReferenceLink></div>
+    : <span className="text-muted-foreground">Unavailable reference</span>
+}
+
+/** The value from the property bag, for cells that draw no value rows. */
+const StoredValue = ({row, properties, schema}: {
+  row: Block; properties: BlockData['properties'] | undefined; schema: AnyPropertySchema
+}) => {
+  const stored = properties && storedPropertyValue(properties, schema.name)
+  const targetId = isRefCodec(schema.codec) ? decodeRefId(schema.codec, stored) : undefined
+  if (targetId) return <StoredReference row={row} targetId={targetId}/>
+  const text = formatStored(stored)
   return text ? <span className="block truncate text-muted-foreground" title={text}>{text}</span> : null
 }
 
 const ReadOnlyCell = ({row, schema}: {row: Block; schema: AnyPropertySchema}) => {
   const properties = useHandle(row, {selector: data => data?.properties})
-  return <StoredValue properties={properties} schema={schema}/>
+  return <StoredValue row={row} properties={properties} schema={schema}/>
 }
 
 /** The block context a cell draws its blocks in: rooted at `scopeRootId`, out
@@ -124,7 +141,7 @@ const EditableCell = ({row, fieldId, schema}: {row: Block; fieldId: string; sche
   }})
   if (!cell) return null
   const {values} = cell
-  if (values.length === 0) return <StoredValue properties={cell.properties} schema={schema}/>
+  if (values.length === 0) return <StoredValue row={row} properties={cell.properties} schema={schema}/>
   // A list's members are drawn as the outline draws a field row's children:
   // bulleted blocks that split, merge, nest and show their own children. The
   // field row is their scope root and is not drawn (see `./keys`).

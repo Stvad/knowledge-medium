@@ -130,6 +130,22 @@ describe('agent runtime commands', () => {
     expect(replaced.properties[ref.name]).toBeUndefined()
   })
 
+  it('retains note repairs when an agent sets a day reference on its own target', async () => {
+    await getOrCreatePropertiesPage(env.repo, WS)
+    const due = await env.repo.userSchemas.addSchema({name: 'due', presetId: 'day'})
+    const iso = '2028-03-16'
+    const id = dailyNoteBlockId(WS, iso)
+    await env.repo.tx(tx => tx.create({
+      id, workspaceId: WS, parentId: null, orderKey: 'a0', content: iso,
+      properties: {[aliasesProp.name]: [iso]},
+    }), {scope: ChangeScope.BlockDefault})
+    const updated = await executeCommand({commandId: 'self-day', type: 'update-block',
+      id, properties: {[due.name]: iso}}, env.context) as BlockData
+    expect(updated.properties[due.name]).toBe(id)
+    expect(updated.properties[dailyNoteDateProp.name]).toBe(iso + 'T00:00:00.000Z')
+    expect(updated.properties[typesProp.name]).toContain(DAILY_NOTE_TYPE)
+  })
+
   it('rolls back day-note creation when another day property on the same update is invalid', async () => {
     await getOrCreatePropertiesPage(env.repo, WS)
     await env.repo.userSchemas.addSchema({name: 'start', presetId: 'day'})

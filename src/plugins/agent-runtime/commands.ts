@@ -1214,11 +1214,12 @@ const updateRuntimeBlock = async (
       )
     }
     const encoded = await resolveAgentDayProperties(repo, tx, before.workspaceId, input.properties)
+    // Resolving a day can repair this very owner when it references itself.
     const nextProperties = encoded === undefined
       ? undefined
       : input.replaceProperties
         ? structuredClone(encoded)
-        : {...before.properties, ...structuredClone(encoded)}
+        : {...(await tx.get(input.id))!.properties, ...encoded}
     // Agent properties arrive encoded. Pass the bag to tx.update so the
     // workspace's storage mode governs validation and child materialization.
     await tx.update(input.id, {

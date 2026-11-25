@@ -11,7 +11,7 @@ import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { decodeRowProperty } from '@/data/rowProperty'
-import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
+import { formatRoamDate, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
 
 /** Build the indexable `Date` stored on `dailyNoteDateProp`. The
@@ -129,7 +129,7 @@ const dailyNoteOrderKey = (iso: string): string => {
 
 const dailyNoteShape = (workspaceId: string, iso: string) => {
   const date = dailyNoteDateValue(iso)
-  const [title] = dailyPageAliases(new Date(`${iso}T12:00:00`))
+  const title = formatRoamDate(date, 'UTC')
   return {id: dailyNoteBlockId(workspaceId, iso), date, title, aliases: [title, iso], orderKey: dailyNoteOrderKey(iso)}
 }
 
