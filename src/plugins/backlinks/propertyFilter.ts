@@ -17,7 +17,8 @@ import {
   type AnyPropertySchema,
   type BlockPredicate,
 } from '@/data/api'
-import type { RefTargetComparableProperty } from '@/data/facets.js'
+import type { QueryableField, RefTargetComparableProperty } from '@/data/facets.js'
+import { resolveRefTargetComparableProperty } from '@/data/refTargetComparableProperty'
 
 export type PropertyFilterOperatorId =
   | 'eq' | 'lt' | 'lte' | 'gt' | 'gte' | 'between'
@@ -164,19 +165,14 @@ const presenceOnlyAffordance: PropertyFilterAffordance = {
 export const resolvePropertyFilter = (
   schema: AnyPropertySchema,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
-  refTargetDefaults: ReadonlyMap<string, RefTargetComparableProperty>,
+  targets: ReadonlyMap<string, RefTargetComparableProperty>,
+  fields: ReadonlyMap<string, QueryableField>,
 ): PropertyFilterAffordance => {
   if (isRefCodec(schema.codec) || isRefListCodec(schema.codec)) {
-    for (const targetType of schema.codec.targetTypes) {
-      const entry = refTargetDefaults.get(targetType)
-      if (!entry) continue
-      const innerSchema = schemas.get(entry.property)
-      if (!innerSchema) continue
-      const inner = resolvePropertyFilter(innerSchema, schemas, refTargetDefaults)
-      return targetTraversalAffordance(inner, entry.property)
-    }
-    // ref/refList without a matching target default: presence-only.
-    return presenceOnlyAffordance
+    const inner = resolveRefTargetComparableProperty(schema, schemas, {fields, targets, allowLists: true})
+    return inner
+      ? targetTraversalAffordance(scalarAffordance(inner.codec.type, true), inner.name)
+      : presenceOnlyAffordance
   }
   return scalarAffordance(schema.codec.type, schema.codec.where !== undefined)
 }

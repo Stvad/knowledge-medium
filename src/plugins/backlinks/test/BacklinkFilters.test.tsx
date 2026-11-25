@@ -50,13 +50,11 @@ vi.mock('@/hooks/propertySchemas.ts', () => ({
   usePropertySchemas: () => schemaStore.schemas,
 }))
 
-vi.mock('@/extensions/runtimeContext.ts', () => ({
-  useAppRuntime: () => ({
-    read: (facet: {id: string}) => {
-      if (facet.id === refTargetComparablePropertiesFacet.id) return schemaStore.refTargetDefaults
-      return new Map()
-    },
-  }),
+vi.mock('@/hooks/useFacetValue', () => ({
+  useFacetValue: (facet: {id: string}) => {
+    if (facet.id === refTargetComparablePropertiesFacet.id) return schemaStore.refTargetDefaults
+    return new Map()
+  },
 }))
 
 const setSchemas = (...schemas: AnyPropertySchema[]) => {
@@ -185,6 +183,30 @@ describe('BacklinkFilters', () => {
           },
         },
       }],
+      exclude: [],
+    })
+  })
+
+  it('offers presence filters for a refList whose target types do not share a comparison property', () => {
+    const datesOrPages = defineProperty<readonly string[]>('dates or pages', {
+      codec: codecs.refList({targetTypes: [DAILY_NOTE_TYPE, 'page']}),
+      defaultValue: [],
+      changeScope: ChangeScope.BlockDefault,
+    })
+    setSchemas(datesOrPages)
+    const onChange = vi.fn()
+    render(<BacklinkFilters workspaceId="ws-1" filter={{}} onChange={onChange} />)
+
+    fireEvent.change(screen.getByLabelText('Include property'), {
+      target: {value: datesOrPages.name},
+    })
+
+    const operator = screen.getByLabelText('operator') as HTMLSelectElement
+    expect([...operator.options].map(option => option.textContent)).toEqual(['is set', 'is unset'])
+    expect(screen.queryByLabelText('Include value')).toBeNull()
+    fireEvent.click(screen.getByRole('button', {name: 'Add include property filter'}))
+    expect(onChange).toHaveBeenCalledWith({
+      include: [{scope: 'ancestor', where: {[datesOrPages.name]: {exists: true}}}],
       exclude: [],
     })
   })
