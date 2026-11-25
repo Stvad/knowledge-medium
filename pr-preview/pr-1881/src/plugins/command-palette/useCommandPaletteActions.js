@@ -1,0 +1,1 @@
+export{WP as useCommandPaletteActions}from"../../../chunks/app-BH7RLhhx.js";

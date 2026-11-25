@@ -1,0 +1,1 @@
+export{QC as attachmentsPlugin}from"../../../chunks/app-BH7RLhhx.js";

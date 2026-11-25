@@ -1,0 +1,1 @@
+export{wx as backlinksViewPlugin}from"../../../chunks/app-BH7RLhhx.js";
