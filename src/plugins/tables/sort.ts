@@ -23,8 +23,10 @@ export const columnSortKeys = (
 ): readonly (SortKey | undefined)[] => {
   const properties = repo.propertySchemasFor(workspaceId)
   return schemas.map(schema => {
-    if (!schema || facets.fields?.has(schema.name) || memberCodecOf(schema.codec)) return undefined
-    if (schema.codec.where) return {property: schema.name}
+    if (!schema) return undefined
+    if (schema.codec.where) {
+      return facets.fields?.has(schema.name) || memberCodecOf(schema.codec) ? undefined : {property: schema.name}
+    }
     const target = refValueTarget(schema, properties, facets)
     return target ? {property: schema.name, target: target.name} : undefined
   })

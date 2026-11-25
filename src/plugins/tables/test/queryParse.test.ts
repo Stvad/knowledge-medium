@@ -197,6 +197,18 @@ describe('parseQuery reference ranges', () => {
     expect(result.query).toEqual({types: ['t-book'], match: [{where: {status: {eq: 'open'}}}]})
   })
 
+  it.each([
+    {operand: '[[January 5th, 2026]]', target: 'due', message: 'Compare assignee with a date like 2026-01-05'},
+    {operand: `((${MARY}))`, target: 'due', message: 'Compare assignee with a date like 2026-01-05'},
+    {operand: '[[A [[nested]] title]]', target: 'rating', message: 'Compare assignee with a number'},
+  ])('reports one range error for $operand and keeps the following term', ({operand, target, message}) => {
+    const text = `(assignee>${operand}|#book) status=open`
+    const result = through(text, target)
+    expect(result.errors.map(error => ({span: text.slice(error.start, error.end), message: error.message})))
+      .toEqual([{span: operand, message}])
+    expect(result.query).toEqual({match: [{where: {status: {eq: 'open'}}}]})
+  })
+
   it('rejects ranges through a text target', () => {
     expect(through('assignee>=A', 'label').errors.map(error => error.message))
       .toEqual(['assignee is a reference; compare it with = or !='])

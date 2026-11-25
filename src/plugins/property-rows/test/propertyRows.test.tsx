@@ -13,6 +13,7 @@ import { materializePropertySeeds } from '@/data/definitionSeeds'
 import { definitionSeedsFacet, propertyEditorOverridesFacet, valuePresetCoresFacet, valuePresetPresentationsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { valueChildContentToEncoded } from '@/data/propertyChildren'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
@@ -20,6 +21,7 @@ import { propertyDisplayProp, resolvePropertyDisplayMode, type PropertyDisplayMo
 import { useHandle } from '@/hooks/block'
 import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { DialogHost } from '@/extensions/dialogAppMount'
 import { actionContextsFacet, blockRenderersFacet } from '@/extensions/core'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -50,11 +52,13 @@ import {
   isCollapsedProp,
   isEditingProp,
   peekFocusedBlockLocation,
+  presetIdProp,
   showPropertiesProp,
 } from '@/data/properties'
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { setBlockPropertyDisplay } from '../actions'
+import { __resetDialogsForTests } from '@/utils/dialogs'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
@@ -129,6 +133,7 @@ beforeAll(async () => {
 afterAll(async () => { await sharedDb.cleanup() })
 afterEach(() => {
   cleanup()
+  __resetDialogsForTests()
   committedListings.clear()
   vi.unstubAllGlobals()
   __resetLazyMountRegistryForTesting()
@@ -197,12 +202,13 @@ const ListingProbe = ({parentId, mode}: {parentId: string; mode: PropertyDisplay
   return null
 }
 
-const outline = (scope: Scope) => (
+const outline = (scope: Scope, showDialogs = false) => (
     <RepoContext value={repo}>
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
           <HotkeyReconciler/>
           <Suspense fallback={null}>
+            {showDialogs && <DialogHost/>}
             <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: scope.renderScopeId}}>
               <PropertyDisplayScopeContext.Provider value={{
                 childBacked: scope.childBacked ?? true,
@@ -430,6 +436,90 @@ describe('editing through a property row', () => {
     expect(screen.queryByRole('checkbox', {name: 'Toggle rows:ready'})).toBeNull()
   })
 
+  it.each([
+    'deleted owner', 'deleted field', 'retargeted field', 'repurposed field',
+    'deleted value', 'moved value', 'repurposed value', 'retyped definition',
+  ])(
+    'refuses both inline editor writes for a %s', async stale => {
+      const renderedEditor = vi.fn<(props: PropertyEditorProps<boolean>) => void>()
+      const InlineEditor = (props: PropertyEditorProps<boolean>) => {
+        renderedEditor(props)
+        return <span>Captured boolean editor</span>
+      }
+      const presetId = 'test:boolean'
+      const codec = {...codecs.boolean, type: presetId}
+      const core = definePresetCore({id: presetId, build: () => codec, defaultValue: false})
+      addExtensions(valuePresetCoresFacet.of(core), valuePresetPresentationsFacet.of({
+        id: presetId, label: 'Test boolean', hideFromPicker: true, InlineEditor,
+      }))
+      await getOrCreatePropertiesPage(repo, WS)
+      const schema = await repo.userSchemas.addSchema({name: 'test:ready', presetId})
+      await repo.block(OWNER).set(schema, true)
+      const field = await fieldRow(schema.name)
+      const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+      mount({workspace: 'non-hidden'})
+      const editor = await screen.findByText('Captured boolean editor')
+      expect(blockRow(editor).dataset.blockId).toBe(value.id)
+      const props = renderedEditor.mock.lastCall![0]
+      expect(props.resolveAndChange).toBeTypeOf('function')
+
+      if (stale === 'retyped definition') {
+        await act(() => repo.block(schema.fieldId).set(presetIdProp, 'boolean'))
+        await waitFor(() => expect(repo.propertySchemas.get(schema.name)?.codec).toBe(codecs.boolean))
+      } else {
+        const otherField = await fieldRow(statusProp.name)
+        // Apply the row change without running a local projection.
+        await sharedDb.db.writeTransaction(async tx => {
+          switch (stale) {
+            case 'deleted owner':
+              await tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [OWNER])
+              break
+            case 'deleted field':
+              await tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [field.id])
+              break
+            case 'retargeted field':
+              await tx.execute('UPDATE blocks SET content = ?, reference_target_id = ? WHERE id = ?',
+                [otherField.content, otherField.referenceTargetId, field.id])
+              break
+            case 'repurposed field':
+              await tx.execute('UPDATE blocks SET content = ?, reference_target_id = NULL, is_field_form = NULL WHERE id = ?',
+                ['ordinary field text', field.id])
+              break
+            case 'moved value':
+              await tx.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [PANEL, value.id])
+              break
+            case 'deleted value':
+              await tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [value.id])
+              break
+            case 'repurposed value':
+              await tx.execute('UPDATE blocks SET content = ?, reference_target_id = ?, is_field_form = 1 WHERE id = ?',
+                [field.content, field.referenceTargetId, value.id])
+              break
+          }
+        })
+      }
+      const readRows = () => sharedDb.db.getAll(
+        'SELECT * FROM blocks WHERE id IN (?, ?, ?, ?) ORDER BY id', [OWNER, PANEL, field.id, value.id],
+      )
+      const before = await readRows()
+      const resolve = vi.fn(async () => false)
+      const transaction = vi.spyOn(repo, 'tx')
+      try {
+        await act(async () => {
+          props.onChange(false)
+          expect(transaction).toHaveBeenCalledOnce()
+          await transaction.mock.results[0]!.value
+        })
+        expect(await readRows()).toEqual(before)
+        await expect(props.resolveAndChange!(resolve)).resolves.toBe(false)
+      } finally {
+        transaction.mockRestore()
+      }
+      expect(resolve).not.toHaveBeenCalled()
+      expect(await readRows()).toEqual(before)
+    },
+  )
+
   it('resolves a complex preset value in the same write from its inline editor and property panel', async () => {
     const presetId = 'rows:dimensions'
     const core = definePresetCore<{width: number}>({
@@ -499,7 +589,7 @@ describe('editing through a property row', () => {
     const owner = repo.block(OWNER)
     const initial = await getOrCreateDailyNote(repo, WS, '2026-05-04')
     await owner.set(appointment, initial.id)
-    mount({workspace: 'non-hidden'})
+    await act(async () => { render(outline({workspace: 'non-hidden'}, true)) })
 
     await screen.findByRole('link', {name: 'May 4th, 2026'})
     await act(async () => {
@@ -507,11 +597,19 @@ describe('editing through a property row', () => {
       await initial.set(aliasesProp, ['2026-02-12', '2026-05-04'])
     })
     expect(initial.peekProperty(aliasesProp)?.[0]).toBe('2026-02-12')
-    const saved = await screen.findByRole('link', {name: 'Trip planning'})
+    const saved = await screen.findByRole('link', {name: 'May 4th, 2026'})
+    expect(saved).toHaveAttribute('title', 'Trip planning')
     expect(saved.getAttribute('href')).toContain(initial.id)
     const inline = blockRow(saved)
     const valueId = inline.dataset.blockId!
-    fireEvent.click(within(inline).getByRole('button', {name: 'Change day'}))
+    const changeDay = within(inline).getByRole('button', {name: 'Change day'})
+    fireEvent.click(changeDay)
+    const cancelDialog = screen.getByRole('dialog', {name: 'Change day'})
+    expect(within(cancelDialog).getByRole('textbox', {name: 'Day'})).toHaveFocus()
+    fireEvent.keyDown(cancelDialog, {key: 'Escape'})
+    await waitFor(() => expect(changeDay).toHaveFocus())
+    expect(owner.peekProperty(appointment)).toBe(initial.id)
+    fireEvent.click(changeDay)
     const dialog = screen.getByRole('dialog', {name: 'Change day'})
     expect(within(dialog).getByRole('button', {name: 'May 4, 2026', pressed: true})).toBeTruthy()
     fireEvent.click(within(dialog).getByRole('button', {name: 'Next month'}))
@@ -530,7 +628,7 @@ describe('editing through a property row', () => {
     fireEvent.click(within(panelDialog).getByRole('button', {name: 'Set day'}))
     expect(within(panelDialog).getByRole('alert')).toBeTruthy()
     expect(owner.peekProperty(appointment)).toBe(juneId)
-    fireEvent.change(input, {target: {value: 'July 21, 2026'}})
+    fireEvent.change(input, {target: {value: 'July 21st, 2026'}})
     fireEvent.click(within(panelDialog).getByRole('button', {name: 'Set day'}))
     await within(panel).findByRole('link', {name: 'July 21st, 2026'})
     const julyId = dailyNoteBlockId(WS, '2026-07-21')
@@ -541,8 +639,11 @@ describe('editing through a property row', () => {
     const clearDialog = screen.getByRole('dialog', {name: 'Change day'})
     const clearButton = within(clearDialog).getByRole('button', {name: 'Clear day'})
     const refused = vi.spyOn(repo, 'tx').mockResolvedValueOnce(false)
-    fireEvent.click(clearButton)
     try {
+      fireEvent.click(clearButton)
+      expect(clearDialog).toHaveAttribute('aria-busy', 'true')
+      expect(clearButton).toBeDisabled()
+      fireEvent.keyDown(clearDialog, {key: 'Escape'})
       expect(await within(clearDialog).findByRole('alert')).toHaveTextContent('no longer editable')
       expect(refused).toHaveBeenCalledOnce()
       expect(owner.peekProperty(appointment)).toBe(julyId)

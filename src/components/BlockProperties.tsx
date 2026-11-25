@@ -250,7 +250,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         onNavigate={handlePropertyRowKeyDown}
         onConfigure={() => void handleConfigure(row)}
         onChange={(next) => {
-          void writeProperty(block, row.schema, next).then(clearSyntheticProperty)
+          void writeProperty(block, row.schema, next).then(written => { if (written) clearSyntheticProperty() })
         }}
         resolveAndChange={async resolve => {
           const written = await resolveAndWriteProperty(block, row.schema, resolve)

@@ -1180,6 +1180,12 @@ export const TODO_WRITE_HELP =
   'A todo is a block with properties {"types": ["todo"], "status": "open"}; set "status" to "done" to complete '
   + 'it (properties merge).'
 
+/** Calendar inputs for single references targeting daily notes. */
+export const DAY_PROPERTY_WRITE_HELP =
+  'A single-reference property targeting only daily notes accepts a block ID, an ISO day, a zoned ISO instant '
+  + '(UTC day), a Roam date, today/tomorrow/yesterday, or a weekday with optional next. Calendar expressions '
+  + 'store the daily note ID, creating the note if needed.'
+
 /** Schema-derived registry of every known wire command. Typed as
  *  `Record<KnownCommandType, …>` so adding a variant to
  *  `knownCommandSchema` without a registry entry is a TypeScript error —
@@ -1227,7 +1233,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'create-block': {
     usage: 'kmagent create-block <json>',
     description: 'Create one block. Body: {parentId, content, properties?, position?: first|last}; parentId is a target '
-      + `as for append-markdown, or null for a top-level block (not a page — use create-page). ${TODO_WRITE_HELP}`,
+      + `as for append-markdown, or null for a top-level block (not a page — use create-page). ${TODO_WRITE_HELP} ${DAY_PROPERTY_WRITE_HELP}`,
     readOnly: false,
   },
   'create-contributor': {
@@ -1249,7 +1255,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent update-block <json>',
     description: 'Update a block. Body: {id, content?, properties?, replaceProperties?, expectedContent?}. Properties merge '
       + 'unless replaceProperties. With expectedContent the update is refused, showing the current content, unless '
-      + 'the block\'s content is exactly that (read it whole with get-block, not from an outline line).',
+      + `the block's content is exactly that (read it whole with get-block, not from an outline line). ${DAY_PROPERTY_WRITE_HELP}`,
     readOnly: false,
   },
   'move-block': {

@@ -23,9 +23,8 @@ import { annotationsDataExtension } from '@/plugins/annotations/dataExtension'
 import { createThread } from '@/plugins/annotations/threads'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension'
-import { dailyNoteBlockId, getOrCreateDailyNote } from '../dailyNotes'
+import { dailyNoteBlockId, getOrCreateDailyNote, getOrCreateDailyNoteInTx } from '../dailyNotes'
 import { dailyNotesDataExtension } from '../dataExtension'
-import { setDayProperty } from '../dayProperty'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '../schema'
 
 const WS = 'date-conversion-workspace'
@@ -235,7 +234,7 @@ describe.each(['cell', 'children'] as const)('date to day in %s storage', mode =
     expect((await storedProperties('converted'))[NAME]).toBe(convertedNote)
     const schema = repo.propertySchemas.get(NAME)!
     const snapshot = repo.snapshotTypeRegistries()
-    await repo.tx(tx => setDayProperty(tx, snapshot, 'normal', schema, NEW_DAY), SCOPE)
+    await repo.tx(async tx => tx.setProperty('normal', schema, await getOrCreateDailyNoteInTx(tx, snapshot, WS, NEW_DAY)), SCOPE)
     await repo.awaitProcessors()
 
     const normalNote = dailyNoteBlockId(WS, NEW_DAY)
@@ -244,7 +243,7 @@ describe.each(['cell', 'children'] as const)('date to day in %s storage', mode =
     expect(await propertyBacklinks(convertedNote)).toEqual(['converted'])
     expect(await propertyBacklinks(normalNote)).toEqual(['normal'])
 
-    await repo.tx(tx => setDayProperty(tx, snapshot, 'converted', schema, NEW_DAY), SCOPE)
+    await repo.tx(async tx => tx.setProperty('converted', schema, await getOrCreateDailyNoteInTx(tx, snapshot, WS, NEW_DAY)), SCOPE)
     await repo.awaitProcessors()
     expect((await storedProperties('converted'))[NAME]).toBe(normalNote)
     expect(await propertyBacklinks(convertedNote)).toEqual([])

@@ -228,6 +228,7 @@ it.each([
   await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, legacy.seedKey))
   const target = await getOrCreateDailyNote(repo, WS, '2026-01-06')
   const title = (await target.load())!.content
+  await target.setContent('Trip planning')
   await repo.awaitProcessors()
   if (!childBacked) await db.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = ?", [WS])
   await db.db.execute("UPDATE blocks SET properties_json = json_patch(properties_json, ?), updated_at = updated_at + 1 WHERE id = 'row-0'",
@@ -241,6 +242,7 @@ it.each([
     const cells = document.querySelector(`[data-table-row="row-0"]`)!
     const days = [...cells.querySelectorAll('a')].filter(link => link.textContent === title)
     expect(days.map(link => link.getAttribute('href'))).toEqual([`#${WS}/${target.id}`, `#${WS}/${target.id}`])
+    expect(days.map(link => link.getAttribute('title'))).toEqual(['Trip planning', 'Trip planning'])
     expect(cells.textContent).not.toContain(target.id)
     expect(cells.querySelector('[aria-label="Change day"], [aria-label="Choose day"]')).toBeNull()
   })

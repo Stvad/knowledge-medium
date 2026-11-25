@@ -205,7 +205,8 @@ export const getOrCreateDailyNoteInTx = async (
   return id
 }
 
-/** The Journal bootstraps outside the undoable note edit. A fully shaped
+/** Daily notes reconcile speculative date seats. Keep that policy outside getOrCreateKernelPage.
+ *  The Journal bootstraps outside the undoable note edit. A fully shaped
  *  live note is a read-only fast path, including when reopened offline. */
 export const getOrCreateDailyNote = async (
   repo: Repo, workspaceId: string, iso: string, {description}: {description?: string} = {},
