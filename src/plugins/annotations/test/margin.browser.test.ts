@@ -133,6 +133,9 @@ it('scrolls by each wheel delta over an active card and the blank margin', async
   await outline().evaluate(port => { port.scrollTop = port.scrollHeight })
   await expect.poll(() => textFrame.getByText(/^Outline row \d+ with alpha, beta, and gamma\.$/).count(), {timeout: 5_000})
     .toBe(fixture.rowCount)
+  await card(fixture.last).waitFor({timeout: 5_000})
+  // Measure native wheel movement without browser compensation for layout shifts.
+  await outline().evaluate(port => { port.style.overflowAnchor = 'none' })
   await positionCard(first, 94)
   const firstPill = row(fixture.first).getByRole('button', {name: '3 open comment threads'})
   const offsetAtSelection = await scrollTop()
@@ -142,8 +145,12 @@ it('scrolls by each wheel delta over an active card and the blank margin', async
   expect(await first.evaluate(element => element.contains(document.activeElement))).toBe(false)
   expect(await scrollTop()).toBe(offsetAtSelection)
   const start = await box(first)
-  await page.mouse.move(start.x + start.width / 2, start.y + 14)
-  for (const delta of [18, 18, -12, 18, -10]) await wheelOutline(delta)
+  const onCard = {x: start.x + start.width / 2, y: start.y + 14}
+  await page.mouse.move(onCard.x, onCard.y)
+  for (const delta of [18, 18, -12, 18, -10]) {
+    expect(await first.evaluate((el, {x, y}) => el.contains(document.elementFromPoint(x, y)), onCard)).toBe(true)
+    await wheelOutline(delta)
+  }
   const end = await box(first)
   expect(Math.abs(end.y - start.y + 32)).toBeLessThan(2)
 
