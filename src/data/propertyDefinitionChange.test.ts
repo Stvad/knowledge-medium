@@ -2520,6 +2520,26 @@ describe('sizing the fan-out before it starts', () => {
     expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toHaveLength(2)
   })
 
+  it('counts live field parents and stored scalar cells together', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'both', 'status', 'done')
+    await seedProperty(repo, 'field-only', 'status', 'done')
+    await createHost(repo, 'bag-only')
+    await createHost(repo, 'deleted-bag')
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute("UPDATE blocks SET properties_json = '{}' WHERE id = 'field-only'")
+      await tx.execute(
+        `UPDATE blocks SET properties_json = '{"status": null}' WHERE id IN ('bag-only', 'deleted-bag')`,
+      )
+      await tx.execute("UPDATE blocks SET deleted = 1 WHERE id = 'deleted-bag'")
+    })
+    expect((await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).sort()).toEqual(['both', 'field-only'])
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(2)
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS, 'status')).toBe(3)
+  })
+
   it('does not count a plain reference to the definition', async () => {
     // An unmarked `((fieldId))` row is a link somebody wrote, not a field row,
     // and the fan-out passes it by. Counting it would put a number in the

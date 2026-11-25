@@ -16,7 +16,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import { BlockCache } from '@/data/blockCache'
@@ -86,6 +86,10 @@ describe('addDaysIso', () => {
   it('moves across month and year boundaries using local calendar dates', () => {
     expect(addDaysIso('2026-05-01', -1)).toBe('2026-04-30')
     expect(addDaysIso('2026-12-31', 1)).toBe('2027-01-01')
+  })
+
+  it('keeps early UTC years when moving to the neighbouring note', () => {
+    expect(addDaysIso('0099-12-31', 1)).toBe('0100-01-01')
   })
 
   it('handles leap days', () => {
@@ -217,6 +221,20 @@ describe('getOrCreateDailyNote', () => {
     expect(aliases?.[0]).toMatch(/2026/)
   })
 
+  it('keeps the deterministic note live when another page owns its date aliases', async () => {
+    const {repo} = env
+    const title = 'April 28th, 2026'
+    await repo.tx(tx => tx.create({
+      id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Original page',
+      properties: {[aliasesProp.name]: [ISO, title]},
+    }), {scope: ChangeScope.BlockDefault})
+    const note = await getOrCreateDailyNote(repo, WS, ISO)
+    expect(note.id).toBe(dailyNoteBlockId(WS, ISO))
+    expect((await note.load())?.properties[dailyNoteDateProp.name]).toBe(ISO + 'T00:00:00.000Z')
+    expect((await repo.load('claimant'))?.properties[aliasesProp.name]).toEqual([ISO, title])
+    expect((await repo.query.aliasLookup({workspaceId: WS, alias: ISO}).load())?.id).toBe('claimant')
+  })
+
   it('populates the indexable date property at creation', async () => {
     const note = await getOrCreateDailyNote(env.repo, WS, ISO)
     const stored = note.peekProperty(dailyNoteDateProp)
@@ -302,13 +320,12 @@ describe('getOrCreateDailyNote', () => {
       .toBe('2026-04-28T00:00:00.000Z')
   })
 
-  it('restores a tombstone whose stored alias bag was squatted while it was dead (issue #378)', async () => {
-    // The generated stale alias is deliberately extra to the canonical
-    // long-form + ISO pair.
+  it('restores the stored title and unclaimed aliases of a deleted daily note', async () => {
     const note = await getOrCreateDailyNote(env.repo, WS, ISO)
     const canonicalAliases = note.peekProperty(aliasesProp) ?? []
     await env.repo.tx(async tx => {
-      await tx.setProperty(note.id, aliasesProp, [...canonicalAliases, 'stale-extra'])
+      await tx.update(note.id, {content: 'A renamed daily note'})
+      await tx.setProperty(note.id, aliasesProp, ['personal-alias', ...canonicalAliases, 'stale-extra'])
       await tx.delete(note.id)
     }, {scope: ChangeScope.BlockDefault})
 
@@ -325,12 +342,30 @@ describe('getOrCreateDailyNote', () => {
     expect(restored.hasType(DAILY_NOTE_TYPE)).toBe(true)
     expect(restored.peekProperty(dailyNoteDateProp)?.toISOString())
       .toBe('2026-04-28T00:00:00.000Z')
-    // Reclaims the canonical long-form + ISO aliases; the stale extra is
-    // NOT resurrected — it stays with the squatter.
-    const aliases = restored.peekProperty(aliasesProp)
-    expect(aliases).toHaveLength(2)
-    expect(aliases?.[1]).toBe(ISO)
+    expect(restored.peek()?.content).toBe('A renamed daily note')
+    expect(restored.peekProperty(aliasesProp)).toEqual(['personal-alias', ...canonicalAliases])
     expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
+  })
+
+  it('repairs a missing date anchor and placement without rewriting held aliases or tags', async () => {
+    const note = await getOrCreateDailyNote(env.repo, WS, ISO)
+    const heldAliases = ['personal-alias', ...(note.peekProperty(aliasesProp) ?? []), 'personal-alias']
+    const heldTypes = [DAILY_NOTE_TYPE, PAGE_TYPE]
+    await env.repo.tx(async tx => {
+      await tx.setProperty(note.id, aliasesProp, heldAliases)
+      await tx.setProperty(note.id, typesProp, heldTypes)
+      await tx.unsetProperty(note.id, dailyNoteDateProp)
+      await tx.move(note.id, {parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(note.peekProperty(aliasesProp)).toEqual(heldAliases)
+    expect(note.peekProperty(typesProp)).toEqual(heldTypes)
+    expect(note.peekProperty(dailyNoteDateProp)).toBeUndefined()
+
+    const repaired = await getOrCreateDailyNote(env.repo, WS, ISO)
+    expect(repaired.peek()?.parentId).toBe(journalBlockId(WS))
+    expect(repaired.peekProperty(dailyNoteDateProp)?.toISOString()).toBe('2026-04-28T00:00:00.000Z')
+    expect(repaired.peekProperty(aliasesProp)).toEqual(heldAliases)
+    expect(repaired.peekProperty(typesProp)).toEqual(heldTypes)
   })
 
   /** A row at this id belonging to another workspace is never ours to touch.

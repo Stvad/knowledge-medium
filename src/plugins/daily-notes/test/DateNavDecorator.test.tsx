@@ -23,6 +23,7 @@ import type { BlockResolveContext } from '@/extensions/blockInteraction'
 import type { BlockRendererProps } from '@/types'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import { insertPanelRow } from '@/utils/panelLayoutProjection'
+import { resolveCurrentDailyNoteIso } from '../actions'
 import { dateNavDecoratorContribution } from '../DateNavDecorator.tsx'
 import {
   dailyNoteBlockId,
@@ -116,10 +117,16 @@ describe('date-nav arrows', () => {
     expect(await topLevelOf(activePanelId)).toBe('other-block')
   }, 20_000)
 
-  it('steps forward a day from the note it is attached to', async () => {
+  it('steps forward from the stored day when another page owns its ISO alias', async () => {
+    const claimant = await createRootBlock('claimant', 'An independent page')
+    await claimant.set(aliasesProp, [TODAY])
     const note = await getOrCreateDailyNote(env.repo, WS, TODAY)
     await note.load()
     const panelId = await insertPanelRow(env.repo, env.layoutSession, note.id)
+
+    await env.layoutSession.set(activePanelIdProp, panelId)
+    expect(note.peekProperty(aliasesProp)).not.toContain(TODAY)
+    expect(await resolveCurrentDailyNoteIso(env.repo, WS)).toBe(TODAY)
 
     render(<InPanel panelId={panelId}><Decorated block={note}/></InPanel>)
     ;(await screen.findByRole('button', {name: 'Open next daily note'})).click()

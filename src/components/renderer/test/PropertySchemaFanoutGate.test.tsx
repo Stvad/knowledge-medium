@@ -3,7 +3,7 @@
  * The gate in front of a definition change big enough to stop the app
  * (#1112): ask first, then hold a progress surface up for the wait.
  *
- * The CONSUMER COUNT is stubbed. What it counts is pinned where it is
+ * Most tests stub the consumer count. What it counts is pinned where it is
  * answered — `propertyDefinitionChange.test.ts`, against real field rows — and
  * the threshold is in the thousands, so materializing enough consumers here
  * would only make these tests slow at proving something they are not about.
@@ -36,7 +36,9 @@ import {
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { type FacetRuntime } from '@/facets/facet'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
+import { dailyNotesPlugin } from '@/plugins/daily-notes'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { RepoContext } from '@/context/repo'
 import { __resetDialogsForTests, getDialogQueue, subscribeDialogs } from '@/utils/dialogs'
@@ -829,6 +831,35 @@ describe('two changes confirmed from one gesture', () => {
 })
 
 describe('re-typing a property with many consumers', () => {
+  it('asks before converting a legacy Date with bag-only consumers', async () => {
+    runtime = resolveFacetRuntimeSync([
+      kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension,
+      dailyNotesPlugin({repo}),
+    ])
+    repo.setFacetRuntime(runtime)
+    await repo.tx(tx => tx.setProperty(SCHEMA_ID, presetIdProp, 'date'), {
+      scope: ChangeScope.BlockDefault,
+    })
+    await sharedDb.db.execute(
+      `WITH RECURSIVE consumers(n) AS (
+         SELECT 1 UNION ALL SELECT n + 1 FROM consumers WHERE n < ?
+       )
+       INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+         properties_json, deleted, created_at, updated_at, user_updated_at, created_by, updated_by)
+       SELECT 'consumer-' || n, ?, 'root', 'c' || n, 'host', ?, 0, 1, 1, 1, 'user-1', 'user-1'
+       FROM consumers`,
+      [LARGE_FANOUT_CONSUMERS, WS, JSON.stringify({'test:myProp': '2026-01-02T00:00:00.000Z'})],
+    )
+    expect(await repo.countPropertyDefinitionConsumers(SCHEMA_ID, WS)).toBe(0)
+    renderSchema()
+
+    await user().selectOptions(screen.getByRole('combobox'), 'day')
+
+    expect(await screen.findByText(/Change the type of “test:myProp”\?/)).toBeTruthy()
+    expect(screen.getByText(/1,000 blocks use this property/)).toBeTruthy()
+    expect((await repo.load(SCHEMA_ID))?.properties[presetIdProp.name]).toBe('date')
+  })
+
   it('asks before a change that re-reads every stored value', async () => {
     consumersAre(4_000)
     renderSchema()

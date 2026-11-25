@@ -1,16 +1,16 @@
-import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { ChangeScope, propertyValue, type AnyPropertyAssignment, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
-import { applyTypeTagInTx } from '@/data/typeTagger'
+import { prepareTypeTags } from '@/data/typeTagger'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
-import { aliasesProp, hasBlockType } from '@/data/properties'
+import { aliasesProp, getAliases, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
+import { createOrRestoreTargetBlock, partitionClaimableAliases, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
-import { decodeRowProperty } from '@/data/rowProperty'
+import { decodeRowProperty, safeDecodeRowProperty } from '@/data/rowProperty'
 import { formatRoamDate, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
 
@@ -79,8 +79,9 @@ const dailyNoteCreatedAt = (iso: string): number => {
 }
 
 export const addDaysIso = (iso: string, days: number): string => {
-  const {year, month, day} = parseIsoParts(iso)
-  return formatIsoDate(new Date(year, month - 1, day + days))
+  const date = dailyNoteDateValue(iso)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().split('T')[0]!
 }
 
 const stringListProperty = (value: unknown): string[] =>
@@ -91,7 +92,11 @@ const stringListProperty = (value: unknown): string[] =>
 const includesAll = (existing: readonly string[], expected: readonly string[]): boolean =>
   expected.every(value => existing.includes(value))
 
-const mergeStrings = (values: readonly string[]): string[] => Array.from(new Set(values))
+const appendMissing = (held: readonly string[], required: readonly string[]): string[] =>
+  [...held, ...required.filter(item => !held.includes(item))]
+
+const canExtendLiveAliases = (held: readonly string[], claimable: readonly string[]): boolean =>
+  claimable.length > held.length && includesAll(claimable, held)
 
 /** Get-or-create the workspace's Journal page.
  *
@@ -149,7 +154,9 @@ const noteIsReady = (row: BlockData, shape: DailyNoteShape, parentId: string | n
 
 /** A property write may precede eager Journal bootstrap. A note can live at
  *  the root until navigation files it. Minting the shared Journal inside the
- *  property edit would let undo remove a container used by other devices. */
+ *  property edit would let undo remove a container used by other devices.
+ *  Undo can tombstone a newly created note with later synced children; reopening the day reveals them.
+ *  When a user page owns both date aliases, wiki links open it and day references open the separate canonical note. */
 export const getOrCreateDailyNoteInTx = async (
   tx: Tx, snapshot: TypeRegistrySnapshot, workspaceId: string, iso: string,
 ): Promise<string> => {
@@ -166,20 +173,35 @@ export const getOrCreateDailyNoteInTx = async (
     if (storedDate !== undefined && storedDate !== date.toISOString()) {
       throw new Error(`Cannot use the daily note for ${iso}: its stored date differs`)
     }
+  }
+  if (existing) {
     if (existing.deleted) {
       const properties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: title, properties})
+      await tx.restore(id, {properties})
     }
-    const held = existing.deleted ? [] : stringListProperty(existing.properties[aliasesProp.name])
-    if (!includesAll(held, aliases)) await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...held]))
     if (existing.parentId !== parentId || existing.orderKey !== orderKey) {
       await tx.move(id, {parentId, orderKey}, {skipMetadata: true})
     }
   } else {
     await tx.create({id, workspaceId, parentId, orderKey, content: title}, {systemMint: true})
   }
-  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, initialValues: {[aliasesProp.name]: aliases}})
-  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: DAILY_NOTE_TYPE, initialValues: {[dailyNoteDateProp.name]: date}})
+  const tags = (await prepareTypeTags(tx, snapshot, id, [PAGE_TYPE, DAILY_NOTE_TYPE]))!
+  const heldAliases = existing ? decodeRowProperty(existing, aliasesProp) : []
+  const live = existing && !existing.deleted
+  const set: AnyPropertyAssignment[] = []
+  if (!live || tags.changed) set.push(tags.assignment)
+  if (!live || !includesAll(heldAliases, aliases)) {
+    const wanted = appendMissing(heldAliases, aliases)
+    const claimable = await partitionClaimableAliases(tx, id, wanted, workspaceId)
+    if (!live || canExtendLiveAliases(heldAliases, claimable)) {
+      set.push(propertyValue(aliasesProp, claimable))
+    }
+  }
+  if (!live || existing.properties[dailyNoteDateProp.name] === undefined) {
+    set.push(propertyValue(dailyNoteDateProp, date))
+  }
+  // Conversion runs after the materializer, so create the new note's value children here.
+  if (set.length) await tx.setProperties(id, {set})
   return id
 }
 
@@ -232,27 +254,16 @@ export const isValidDateAlias = (alias: string): boolean => {
   return new Date(ms).toISOString().slice(0, 10) === alias
 }
 
-/** "Which daily note is this?" from a block's alias list — the ISO alias
- *  `getOrCreateDailyNote` writes via `dailyPageAliases`, or `null` for a block
- *  that isn't a daily note. The one definition of that read, shared by the
- *  prev/next keyboard actions (which peek it off a Block) and the title
- *  date-nav arrows (which get it from a reactive `aliases` hook).
- *
- *  `isValidDateAlias`, NOT `isDateAlias`: a date-SHAPED alias that isn't a
- *  calendar day (`2026-02-30`) belongs to an ordinary alias-target page — the
- *  references processor routes it to `ensureAliasTarget` precisely because
- *  `parseLiteralDailyPageTitle` rejects it. Treating such an alias as the
- *  block's date hands a normal page the daily-note affordances, and
- *  `addDaysIso` then reads it as March 2nd — so "previous day" lands on
- *  2026-03-01, forward by a month. Callers fall back to today instead, the
- *  same as on any other non-daily page.
- *
- *  Deliberately NOT a `DAILY_NOTE_TYPE` check: the ISO alias is the marker
- *  every daily-note writer sets, and gating on the type instead would couple
- *  these read paths to type-tagging having reached every historical row. */
+/** Legacy notes can have only an ISO alias. Validate the calendar day so February 30 cannot roll over to March 2. */
 export const dailyNoteIsoFromAliases = (
   aliases: readonly string[],
 ): string | null => aliases.find(isValidDateAlias) ?? null
+
+/** A canonical note can yield its ISO alias to another page. Its UTC anchor still identifies the day. */
+export const dailyNoteIsoFromRow = (row: Pick<BlockData, 'properties'> | null | undefined): string | null => {
+  if (!row) return null
+  return safeDecodeRowProperty(row, dailyNoteDateProp)?.toISOString().slice(0, 10) ?? dailyNoteIsoFromAliases(getAliases(row))
+}
 
 /** Ensure a daily-note **target seat** block exists for ISO date `date`
  *  in `workspaceId`. The seat is a reference target materialised at
