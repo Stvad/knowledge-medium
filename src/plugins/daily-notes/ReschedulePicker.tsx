@@ -175,14 +175,14 @@ export interface DatePropertyPickerProps {
   write: ActiveSession['write']
 }
 
-export function DatePropertyPicker({initialIso, anchorRect, write, resolve, cancel}: DialogContextProps<void> & DatePropertyPickerProps) {
+export function DatePropertyPicker({initialIso, anchorRect, write, resolve, cancel}: DialogContextProps<boolean> & DatePropertyPickerProps) {
   return <DatePickerSheet
     session={{initialIso: initialIso ?? todayIso(), write}}
     anchorRect={anchorRect}
     label="Choose date"
     title="Choose date"
     cancel={cancel}
-    finish={() => resolve()}
+    finish={resolve}
   />
 }
 

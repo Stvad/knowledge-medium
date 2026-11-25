@@ -24,7 +24,7 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { actionContextsFacet, blockRenderersFacet } from '@/extensions/core'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { DialogHost } from '@/extensions/dialogAppMount'
-import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
+import { ActiveContextsProvider, useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { BlockContextProvider, NestedBlockContextProvider } from '@/context/block'
@@ -37,8 +37,8 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import * as propertyRows from '../index'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
-import { dailyNotesPlugin, dateScrubOverlayMount } from '@/plugins/daily-notes'
-import { dailyNoteBlockId, dailyNoteDateProp, getOrCreateDailyNote } from '@/plugins/daily-notes'
+import { dailyNotesPlugin, dateScrubOverlayMount, DATE_SCRUB_CONTEXT } from '@/plugins/daily-notes'
+import { dailyNoteBlockId, dailyNoteDateProp, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { dayValuePresetCore } from '@/plugins/daily-notes/schema'
 import { annotationsDataExtension } from '@/plugins/annotations/dataExtension'
 import { createThread } from '@/plugins/annotations/threads'
@@ -191,7 +191,7 @@ const addExtensions = (...extensions: AppExtension[]) => {
   repo.setFacetRuntime(runtime)
 }
 
-type Scope = {childBacked?: boolean; workspace?: PropertyDisplaySetting; renderScopeId?: string; dateScrub?: boolean; withDialogs?: boolean}
+type Scope = {childBacked?: boolean; workspace?: PropertyDisplaySetting; renderScopeId?: string; onScrubBindingsReady?: () => void; withDialogs?: boolean}
 
 const mount = (scope: Scope = {}) => render(outline(scope))
 
@@ -205,13 +205,23 @@ const ListingProbe = ({parentId, mode}: {parentId: string; mode: PropertyDisplay
   return null
 }
 
+// HotkeyReconciler installs movement bindings in an effect after the scrub context activates.
+const ScrubBindingsProbe = ({ready}: {ready: () => void}) => {
+  const contexts = useActiveContextsState()
+  useEffect(() => { if (contexts.has(DATE_SCRUB_CONTEXT)) ready() }, [contexts, ready])
+  return null
+}
+
 const outline = (scope: Scope) => (
     <RepoContext value={repo}>
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
           <HotkeyReconciler/>
           <Suspense fallback={null}>
-            {scope.dateScrub && <dateScrubOverlayMount.component/>}
+            {scope.onScrubBindingsReady && <>
+              <dateScrubOverlayMount.component/>
+              <ScrubBindingsProbe ready={scope.onScrubBindingsReady}/>
+            </>}
             <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: scope.renderScopeId}}>
               <PropertyDisplayScopeContext.Provider value={{
                 childBacked: scope.childBacked ?? true,
@@ -706,6 +716,72 @@ describe('editing through a property row', () => {
     expect((await repo.load(OWNER))?.properties[appointment.name]).toBeNull()
   }, 20_000)
 
+  it('leaves the chosen day uncreated when an open picker’s property definition is retyped', async () => {
+    addExtensions(dailyNotesPlugin({repo}))
+    await materializePropertySeeds(repo, WS, [dailyNoteDateProp, aliasesProp])
+    const appointment = await repo.userSchemas.addSchema({name: 'rows:retyped-during-picker', presetId: 'day'})
+    const owner = repo.block(OWNER)
+    const initial = await getOrCreateDailyNote(repo, WS, '2026-05-04')
+    await owner.set(appointment, initial.id)
+    await owner.set(showPropertiesProp, true)
+    await act(async () => { mount({workspace: 'none', withDialogs: true}) })
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Choose date'}))
+    const picker = await screen.findByRole('dialog', {name: 'Choose date'})
+    const next = within(picker).getByRole('button', {name: 'May 12, 2026'})
+    const nextId = dailyNoteBlockId(WS, '2026-05-12')
+    expect(await repo.load(nextId)).toBeNull()
+
+    await act(async () => {
+      await repo.block(appointment.fieldId).set(presetIdProp, 'optional-ref')
+      await repo.awaitProcessors()
+    })
+    await waitFor(() => expect(repo.propertySchemas.get(appointment.name)?.codec).toMatchObject({type: 'ref', targetTypes: []}))
+    await act(async () => fireEvent.click(next))
+    await waitFor(() => expect(picker).not.toBeInTheDocument())
+    expect(await repo.load(nextId)).toBeNull()
+    expect((await repo.load(owner.id))?.properties[appointment.name]).toBe(initial.id)
+  }, 20_000)
+
+  it('undoes a new day and its panel assignment together without reviving the unsaved field', async () => {
+    const appointment = seedProperty({
+      seedKey: 'test/property/panel-date-undo', revision: 1, name: 'rows:panel-date-undo',
+      preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+    })
+    addExtensions(dailyNotesPlugin({repo}), definitionSeedsFacet.of(appointment))
+    await materializePropertySeeds(repo, WS, [appointment, dailyNoteDateProp, aliasesProp])
+    await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
+    const owner = repo.block(OWNER)
+    await owner.set(showPropertiesProp, true)
+    await act(async () => { mount({workspace: 'none', withDialogs: true}) })
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Field'}))
+    const name = screen.getByPlaceholderText('Field')
+    fireEvent.change(name, {target: {value: appointment.name}})
+    await act(async () => fireEvent.keyDown(name, {key: 'Enter'}))
+    expect(owner.peekProperty(appointment)).toBeUndefined()
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Choose date'}))
+    const picker = await screen.findByRole('dialog', {name: 'Choose date'})
+    const id = dailyNoteBlockId(WS, todayIso())
+    expect(await repo.load(id)).toBeNull()
+    repo.undoManager.clear()
+    await act(async () => fireEvent.click(within(picker).getByRole('button', {name: 'Today'})))
+    await waitFor(() => expect(owner.peekProperty(appointment)).toBe(id))
+    await waitFor(() => expect(picker).not.toBeInTheDocument())
+    expect(await repo.load(id)).not.toBeNull()
+    const field = await fieldRow(appointment.name)
+    const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    expect(value).toMatchObject({referenceTargetId: id})
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+
+    await act(async () => { expect(await repo.undo()).toBe(true) })
+    await waitFor(() => expect(screen.queryByRole('button', {name: 'Choose date'})).toBeNull())
+    expect((await repo.load(owner.id))?.properties).not.toHaveProperty(appointment.name)
+    expect(await repo.load(value.id)).toBeNull()
+    expect(await repo.load(id)).toBeNull()
+  }, 20_000)
+
   it('links to the selected day without rendering its journal entries in the property panel', async () => {
     const appointment = seedProperty({
       seedKey: 'test/property/panel-appointment', revision: 1, name: 'rows:panel-appointment',
@@ -986,15 +1062,17 @@ describe('a reference value', () => {
 
     const nextId = dailyNoteBlockId(WS, '2026-05-05')
     expect(await repo.load(nextId)).toBeNull()
-    mount({workspace: 'non-hidden', dateScrub: true})
+    const bindingsReady = vi.fn()
+    mount({workspace: 'non-hidden', onScrubBindingsReady: bindingsReady})
     const row = blockRow(await screen.findByRole('link', {name: /May 4th, 2026/}))
     expect(row.dataset.blockId).toBe(value.id)
     await act(() => focusBlock(repo.block(PANEL), value.id))
     fireEvent.keyDown(row, {key: 's', code: 'KeyS'})
     await screen.findByText('Mon, May 4')
-    fireEvent.keyDown(row, {key: 'k', code: 'KeyK'})
+    await waitFor(() => expect(bindingsReady).toHaveBeenCalled())
+    fireEvent.keyDown(window, {key: 'k', code: 'KeyK'})
     await screen.findByText('Tue, May 5')
-    fireEvent.keyUp(row, {key: 's', code: 'KeyS'})
+    fireEvent.keyUp(window, {key: 's', code: 'KeyS'})
 
     await waitFor(async () => {
       expect(await repo.load(value.id)).toMatchObject({content: '[[May 5th, 2026]]', referenceTargetId: nextId})

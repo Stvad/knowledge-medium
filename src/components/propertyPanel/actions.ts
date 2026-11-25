@@ -1,8 +1,10 @@
 import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 import {
   ChangeScope,
+  PropertySchemaIdentityError,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
+  type Tx,
   scopePoliciesEquivalent,
 } from '@/data/api'
 import type { Block } from '@/data/block'
@@ -23,15 +25,21 @@ export const writeProperty = async (
   block: Block,
   schema: AnyPropertySchema,
   value: unknown,
+  prepare?: {workspaceId: string; run: (tx: Tx) => Promise<void>},
 ): Promise<boolean> => {
   if (!canWriteProperty(block, schema)) return false
   return block.repo.tx(async tx => {
     const owner = await tx.get(block.id)
     if (owner?.deleted !== false) return false
-    const currentSchema = await tx.resolvePropertySchema(block.id, schema)
-    if (currentSchema.codec !== schema.codec || !scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
+    if (prepare && owner.workspaceId !== prepare.workspaceId) return false
+    const currentSchema = await tx.resolvePropertySchema(block.id, schema).catch((error: unknown) => {
+      if (error instanceof PropertySchemaIdentityError) return undefined
+      throw error
+    })
+    if (!currentSchema || currentSchema.codec !== schema.codec || !scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
       || !canWriteProperty(block, currentSchema)) return false
     tx.assertWritableWorkspace(owner.workspaceId)
+    if (prepare) await prepare.run(tx)
     await tx.setProperty(block.id, currentSchema, value)
     return true
   }, {scope: schema.changeScope, description: `set property ${schema.name} on ${block.id}`})
