@@ -2,7 +2,7 @@
  *  See user-defined-properties.md §1 for the full design. */
 
 import type { ComponentType } from 'react'
-import type { PropertyEditor } from './propertySchema'
+import type { AnyPropertySchema, PropertyEditor } from './propertySchema'
 import type { ValuePresetCore } from './valuePresetCore'
 
 export interface ValuePresetConfigEditorProps<TConfig> {
@@ -14,6 +14,8 @@ interface ValuePresetPresentationBase<TValue = unknown, TConfig = void> {
   /** Optional control for a scalar value block in the outline. Receives the
    *  value block itself; changes edit that row, not the owner's whole property. */
   readonly InlineEditor?: PropertyEditor<TValue>
+  /** Opt in to this presentation for schemas with a compatible codec configuration. */
+  readonly matchesSchema?: (schema: AnyPropertySchema) => boolean
   /** Stable join key; must match the corresponding codec core id. */
   readonly id: string
   /** Human label for the picker. */

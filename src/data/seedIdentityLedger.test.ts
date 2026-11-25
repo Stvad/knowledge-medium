@@ -20,6 +20,7 @@ import {
   describeHarvestConflicts,
   diffSeedLedger,
   frozenColumnNames,
+  FROZEN_DAY_PRESET,
   FROZEN_PROPERTY_SEEDS,
   FROZEN_TYPE_SEEDS,
   indexBySeedKey,
@@ -77,10 +78,19 @@ const shippedSeeds = () => {
   )
   const types = runtime.read(typeSeedsFacet)
   const properties = shippedPropertySeeds(runtime.read(definitionSeedsFacet), types)
-  return {properties: properties.seeds, conflicts: properties.conflicts, types}
+  return {properties: properties.seeds, conflicts: properties.conflicts, types, cores: runtime.read(valuePresetCoresFacet)}
 }
 
 describe('seed identity ledger', () => {
+  it('retains the optional-reference encoding for user-created day definitions', () => {
+    const core = shippedSeeds().cores.get(FROZEN_DAY_PRESET.id)!
+    const codec = core.build(undefined)
+    expect(codec.type).toBe(FROZEN_DAY_PRESET.codecType)
+    expect(codec.encode(core.defaultValue)).toBeNull()
+    expect(codec.decode(null)).toBeUndefined()
+    expect(codec.decode('daily-note-id')).toBe('daily-note-id')
+  })
+
   it('ships exactly the property seeds the ledger freezes', () => {
     const shipped = indexBySeedKey(shippedSeeds().properties,
       seed => seed.seedKey, seed => [seed.name, seed.presetId, seed.codec.type])

@@ -1,6 +1,7 @@
 import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
+import { applyTypeTagInTx } from '@/data/typeTagger'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
@@ -10,7 +11,7 @@ import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { decodeRowProperty } from '@/data/rowProperty'
-import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
+import { formatRoamDate, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
 
 /** Build the indexable `Date` stored on `dailyNoteDateProp`. The
@@ -82,15 +83,6 @@ export const addDaysIso = (iso: string, days: number): string => {
   return formatIsoDate(new Date(year, month - 1, day + days))
 }
 
-// Build the Date used to render display aliases. Uses local-midnight
-// of the same calendar day so dailyPageAliases — which reads
-// .getDate() / .getMonth() in local TZ — produces "April 28th, 2026"
-// for iso="2026-04-28" regardless of the user's timezone.
-const dailyNoteLocalDate = (iso: string): Date => {
-  const {year, month, day} = parseIsoParts(iso)
-  return new Date(year, month - 1, day)
-}
-
 const stringListProperty = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
@@ -135,144 +127,79 @@ const dailyNoteOrderKey = (iso: string): string => {
   return `${reverseYear}-${reverseMonth}-${reverseDay}`
 }
 
-/** Get-or-create today's daily note. Two clients calling concurrently
- *  with the same (workspaceId, iso) write to the same row, so the
- *  daily note never duplicates even when both are offline at boot.
- *
- *  On a soft-deleted row we resurrect rather than recreate from
- *  scratch — the row's content + descendant subtree may carry edits
- *  the user wants back. We also re-link to the journal because the
- *  resurrected row's parent_id may have drifted; `tx.move` sets it
- *  cleanly.
- *
- *  Runs under `repo.undoGroup`: journal bootstrap + note create/repair
- *  can be two txs — one undo entry for the pair, for every caller
- *  (callers handing us their own group facade fold us into theirs).
- *
- *  NOT a kernel page, though it looks like one and the Journal above IS
- *  one. The difference is that this row has a SECOND writer at the same
- *  derived id: `ensureDailyNoteTarget` materialises it seat-shaped at
- *  workspace root (content = iso, aliases = [iso]) when a `[[2026-07-24]]`
- *  reference resolves before anyone opened the day. So the "repair" branch
- *  below is not maintenance — it is the promotion of a seat-shaped row into
- *  a note-shaped one, which is why it checks `parentId`/`orderKey` and
- *  MERGES aliases rather than replacing them. A kernel page has one writer
- *  and one shape and can never grow those checks, so folding this into
- *  `getOrCreateKernelPage` would park seat-reconciliation behind a flag its
- *  other callers can't reach. */
+const dailyNoteShape = (workspaceId: string, iso: string) => {
+  const date = dailyNoteDateValue(iso)
+  const title = formatRoamDate(date, 'UTC')
+  return {id: dailyNoteBlockId(workspaceId, iso), date, title, aliases: [title, iso], orderKey: dailyNoteOrderKey(iso)}
+}
+
+type DailyNoteShape = ReturnType<typeof dailyNoteShape>
+
+const checkNoteWorkspace = (row: BlockData, workspaceId: string) => {
+  if (classifyOccupant(row, {workspaceId}).verdict === 'foreign') {
+    throw new DeterministicIdCrossWorkspaceError(row.id, row.workspaceId, workspaceId)
+  }
+}
+
+const noteIsReady = (row: BlockData, shape: DailyNoteShape, parentId: string | null) =>
+  row.parentId === parentId && row.orderKey === shape.orderKey &&
+  hasBlockType(row, PAGE_TYPE) && hasBlockType(row, DAILY_NOTE_TYPE) &&
+  includesAll(stringListProperty(row.properties[aliasesProp.name]), shape.aliases) &&
+  row.properties[dailyNoteDateProp.name] === shape.date.toISOString()
+
+/** A property write may precede eager Journal bootstrap. A note can live at
+ *  the root until navigation files it. Minting the shared Journal inside the
+ *  property edit would let undo remove a container used by other devices. */
+export const getOrCreateDailyNoteInTx = async (
+  tx: Tx, snapshot: TypeRegistrySnapshot, workspaceId: string, iso: string,
+): Promise<string> => {
+  const shape = dailyNoteShape(workspaceId, iso)
+  const {id, date, title, aliases, orderKey} = shape
+  const journal = await tx.get(journalBlockId(workspaceId))
+  if (journal) checkNoteWorkspace(journal, workspaceId)
+  const parentId = journal && !journal.deleted ? journal.id : null
+  const existing = await tx.get(id)
+  if (existing) {
+    checkNoteWorkspace(existing, workspaceId)
+    if (noteIsReady(existing, shape, parentId) && !existing.deleted) return id
+    const storedDate = existing.properties[dailyNoteDateProp.name]
+    if (storedDate !== undefined && storedDate !== date.toISOString()) {
+      throw new Error(`Cannot use the daily note for ${iso}: its stored date differs`)
+    }
+    if (existing.deleted) {
+      const properties = await restorePropertiesStrippingAliases(tx, id)
+      await tx.restore(id, {content: title, properties})
+    }
+    const held = existing.deleted ? [] : stringListProperty(existing.properties[aliasesProp.name])
+    if (!includesAll(held, aliases)) await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...held]))
+    if (existing.parentId !== parentId || existing.orderKey !== orderKey) {
+      await tx.move(id, {parentId, orderKey}, {skipMetadata: true})
+    }
+  } else {
+    await tx.create({id, workspaceId, parentId, orderKey, content: title}, {systemMint: true})
+  }
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, initialValues: {[aliasesProp.name]: aliases}})
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: DAILY_NOTE_TYPE, initialValues: {[dailyNoteDateProp.name]: date}})
+  return id
+}
+
+/** Daily notes reconcile speculative date seats. Keep that policy outside getOrCreateKernelPage.
+ *  The Journal bootstraps outside the undoable note edit. A fully shaped
+ *  live note is a read-only fast path, including when reopened offline. */
 export const getOrCreateDailyNote = async (
-  repo: Repo,
-  workspaceId: string,
-  iso: string,
-  /** Describes the note's own create / repair txs (the agent bridge marks its
-   *  writes this way); the Journal bootstrap keeps its own. */
-  {description}: {description?: string} = {},
+  repo: Repo, workspaceId: string, iso: string, {description}: {description?: string} = {},
 ): Promise<Block> => repo.undoGroup(async repo => {
-  const id = dailyNoteBlockId(workspaceId, iso)
-  const orderKey = dailyNoteOrderKey(iso)
-  const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
-  const dailyAliases = [longLabel, isoLabel]
-  const dateValue = dailyNoteDateValue(iso)
-
-  /** Same guard, and the same reasoning, as `getOrCreateKernelPage`'s: neither
-   *  read below is workspace-scoped (`repo.load` and `tx.get` both select on id
-   *  alone), and what they feed rewrites aliases and types, resurrects
-   *  tombstones, and — uniquely here — `tx.move`s the row under THIS
-   *  workspace's Journal, which would tear a page out of someone else's tree.
-   *
-   *  Worth being honest about reachability, because it differs from the kernel
-   *  page's by which half: `DAILY_NOTE_NS` is app-owned and the key already
-   *  carries the workspace, so a foreign occupant at rest needs a uuid
-   *  collision or a hand-written id. The window between `repo.load` and the
-   *  transaction is not hypothetical though — sync materialization rewrites
-   *  `workspace_id` along with every other column, so the row can change hands
-   *  mid-call whatever the namespace. */
-  const refuseForeign = (occupant: BlockData): void => {
-    if (classifyOccupant(occupant, {workspaceId}).verdict === 'foreign') {
-      throw new DeterministicIdCrossWorkspaceError(id, occupant.workspaceId, workspaceId)
-    }
-  }
-
-  const live = await repo.load(id)
+  const shape = dailyNoteShape(workspaceId, iso)
+  const live = await repo.load(shape.id)
   if (live) {
-    refuseForeign(live)
-    const aliases = stringListProperty(live.properties[aliasesProp.name])
-    const needsRepair =
-      live.parentId !== journalBlockId(workspaceId) ||
-      live.orderKey !== orderKey ||
-      !hasBlockType(live, PAGE_TYPE) ||
-      !hasBlockType(live, DAILY_NOTE_TYPE) ||
-      !includesAll(aliases, dailyAliases)
-    if (!needsRepair) {
-      return repo.block(id)
-    }
-    const journal = await getOrCreateJournalBlock(repo, workspaceId)
-    const typeSnapshot = repo.snapshotTypeRegistries()
-    await repo.tx(async tx => {
-      const current = await tx.get(id)
-      if (!current || current.deleted) return
-      refuseForeign(current)
-      const currentAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(currentAliases, dailyAliases)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
-      }
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await repo.addTypeInTx(
-        tx, id, DAILY_NOTE_TYPE,
-        {[dailyNoteDateProp.name]: dateValue},
-        typeSnapshot,
-      )
-      if (current.parentId !== journal.id || current.orderKey !== orderKey) {
-        await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
-      }
-    }, {scope: ChangeScope.BlockDefault, description})
-    return repo.block(id)
+    checkNoteWorkspace(live, workspaceId)
+    if (noteIsReady(live, shape, journalBlockId(workspaceId))) return repo.block(shape.id)
   }
-
-  const journal = await getOrCreateJournalBlock(repo, workspaceId)
-
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  await repo.tx(async tx => {
-    const existing = await tx.get(id)
-    if (existing) refuseForeign(existing)
-    if (existing && !existing.deleted) return
-    if (existing && existing.deleted) {
-      // The tombstone's stored alias bag can hold an entry a different
-      // live block claimed while the daily note was dead (issue #378) —
-      // restoring it as-is would re-insert that stale claim and abort
-      // the whole tx. Strip it here; the setProperty below re-claims
-      // exactly the canonical long-form + ISO aliases.
-      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: longLabel, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, dailyAliases)
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await repo.addTypeInTx(
-        tx, id, DAILY_NOTE_TYPE,
-        {[dailyNoteDateProp.name]: dateValue},
-        typeSnapshot,
-      )
-      // Re-parent under the journal in case the prior tombstoned row
-      // had drifted. tx.move sets parent_id + order_key in one
-      // primitive (with engine cycle check on parent_id mutation).
-      await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
-      return
-    }
-    await tx.create({
-      id,
-      workspaceId,
-      parentId: journal.id,
-      orderKey,
-      content: longLabel,
-    }, {systemMint: true})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-    await repo.addTypeInTx(
-      tx, id, DAILY_NOTE_TYPE,
-      {[dailyNoteDateProp.name]: dateValue},
-      typeSnapshot,
-    )
-  }, {scope: ChangeScope.BlockDefault, description})
-
-  return repo.block(id)
+  await getOrCreateJournalBlock(repo, workspaceId)
+  const snapshot = repo.snapshotTypeRegistries()
+  await repo.tx(tx => getOrCreateDailyNoteInTx(tx, snapshot, workspaceId, iso),
+    {scope: ChangeScope.BlockDefault, description})
+  return repo.block(shape.id)
 })
 
 // `dailyNoteCreatedAt` retained for callers that need a stable wall-

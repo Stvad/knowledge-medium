@@ -4,13 +4,15 @@ import {
   refTargetComparablePropertiesFacet,
   systemPagesFacet,
   typeSeedsFacet,
+  valuePresetCoresFacet,
 } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet.js'
 import { journalPageSpec } from './dailyNotes.ts'
 import { dailyNotesLocalSchema } from './localSchema.ts'
-import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType, dayValuePresetCore } from './schema.ts'
 
 export const dailyNotesDataExtension: AppExtension = [
+  valuePresetCoresFacet.of(dayValuePresetCore, {source: 'daily-notes'}),
   definitionSeedsFacet.of(dailyNoteDateProp, {source: 'daily-notes'}),
   typeSeedsFacet.of(dailyNoteType, {source: 'daily-notes'}),
   localSchemaFacet.of(dailyNotesLocalSchema, {source: 'daily-notes'}),

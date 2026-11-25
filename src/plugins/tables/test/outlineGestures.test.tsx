@@ -38,7 +38,7 @@ import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes'
-import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema'
+import { DAILY_NOTE_TYPE, dayValuePresetCore } from '@/plugins/daily-notes/schema'
 import * as toast from '@/utils/toast'
 import { disarmCut, getArmedCut } from '@/paste/armedCut'
 import { pasteArmedCut } from '@/paste/operations'
@@ -135,7 +135,7 @@ const ContextProbe = () => {
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
 
-const mount = () => render(
+const mount = (childBacked = true) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
@@ -144,7 +144,7 @@ const mount = () => render(
         <Suspense fallback={null}>
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: PARENT_SCOPE, scopeRootId: HOST}}>
             <GlobalShortcuts/>
-            <PropertyDisplayScopeContext value={{childBacked: true, workspace: 'non-hidden', panel: 'inherit'}}>
+            <PropertyDisplayScopeContext value={{childBacked, workspace: 'non-hidden', panel: 'inherit'}}>
               <BlockComponent blockId={HOST}/>
             </PropertyDisplayScopeContext>
           </BlockContextProvider>
@@ -207,6 +207,46 @@ const press = (view: EditorView, key: string, options: {shiftKey?: boolean} = {}
 }
 
 const focused = () => peekFocusedBlockLocation(ui())
+
+it.each([
+  {storage: 'old property bags', childBacked: false, readOnly: false},
+  {storage: 'read-only workspace', childBacked: true, readOnly: true},
+])('links stored days and legacy daily-note refs in $storage', async ({childBacked, readOnly}) => {
+  const day = seedProperty({
+    seedKey: 'test/property/tables-gesture-day', revision: 1, name: 'gesture:day',
+    preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+  })
+  const legacy = seedProperty({
+    seedKey: 'test/property/tables-gesture-legacy-day', revision: 1, name: 'gesture:legacy-day',
+    preset: 'optional-ref', config: {targetTypes: [DAILY_NOTE_TYPE]}, changeScope: ChangeScope.BlockDefault,
+  })
+  configureRuntime(dailyNotesDataExtension, [day, legacy].map(seed => definitionSeedsFacet.of(seed, {source: 'test'})))
+  await repo.whenPropertyDefinitionsReady(WS)
+  await materializePropertySeeds(repo, WS, [day, legacy])
+  const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
+  await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, day.seedKey))
+  await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, legacy.seedKey))
+  const target = await getOrCreateDailyNote(repo, WS, '2026-01-06')
+  const title = (await target.load())!.content
+  await target.setContent('Trip planning')
+  await repo.awaitProcessors()
+  if (!childBacked) await db.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = ?", [WS])
+  await db.db.execute("UPDATE blocks SET properties_json = json_patch(properties_json, ?), updated_at = updated_at + 1 WHERE id = 'row-0'",
+    [JSON.stringify({[day.name]: target.id, [legacy.name]: target.id})])
+  await repo.load('row-0')
+  expect(repo.block('row-0').peek()?.properties).toMatchObject({[day.name]: target.id, [legacy.name]: target.id})
+  repo.setReadOnly(readOnly)
+
+  mount(childBacked)
+  await waitFor(() => {
+    const cells = document.querySelector(`[data-table-row="row-0"]`)!
+    const days = [...cells.querySelectorAll('a')].filter(link => link.textContent === title)
+    expect(days.map(link => link.getAttribute('href'))).toEqual([`#${WS}/${target.id}`, `#${WS}/${target.id}`])
+    expect(days.map(link => link.getAttribute('title'))).toEqual(['Trip planning', 'Trip planning'])
+    expect(cells.textContent).not.toContain(target.id)
+    expect(cells.querySelector('[aria-label="Change day"], [aria-label="Choose day"]')).toBeNull()
+  })
+})
 
 // The mounted grid and all three sort transitions take about a second locally.
 it('cycles the daily note reference header through date order and outline order', async () => {

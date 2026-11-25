@@ -30,6 +30,7 @@ import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
   deleteProperty,
+  resolveAndWriteProperty,
   writeProperty,
 } from './propertyPanel/actions'
 import {
@@ -233,6 +234,11 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       row.schemaUnknown
       || block.repo.userSchemas.getSchemaBlockId(row.name) !== undefined
     )
+    const clearSyntheticProperty = () => {
+      setSyntheticProperties(refs =>
+        refs.filter(ref => ref.blockId !== block.id || ref.name !== row.name),
+      )
+    }
     return (
       <PropertyRow
         key={`${sectionId}:${row.name}`}
@@ -244,11 +250,12 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         onNavigate={handlePropertyRowKeyDown}
         onConfigure={() => void handleConfigure(row)}
         onChange={(next) => {
-          void writeProperty(block, row.schema, next).then(() => {
-            setSyntheticProperties(refs =>
-              refs.filter(ref => ref.blockId !== block.id || ref.name !== row.name),
-            )
-          })
+          void writeProperty(block, row.schema, next).then(written => { if (written) clearSyntheticProperty() })
+        }}
+        resolveAndChange={async resolve => {
+          const written = await resolveAndWriteProperty(block, row.schema, resolve)
+          if (written) clearSyntheticProperty()
+          return written
         }}
         onDelete={() => void deleteProperty({
           block,

@@ -29,6 +29,7 @@ import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
+import { resolveAgentDayProperties } from './dayPropertyInputs.ts'
 import { markDanglingReplyLinks, refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
 import { captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
@@ -951,15 +952,16 @@ const createRuntimeBlock = async (
     const parentRef = input.parentId
     // A [[page]] / date parent is created when missing; one undo entry for both.
     const id = await repo.undoGroup(async repo => {
+      const workspaceId = repo.activeWorkspaceId
       const parent = await resolveAgentTarget(repo, parentRef, 'create-block')
-      return runAgentMutator(repo, 'create-block', createChild, {
+      return repo.tx(async tx => tx.run(createChild, createChild.argsSchema.parse({
         parentId: parent.id,
         content,
-        properties,
+        properties: workspaceId ? await resolveAgentDayProperties(repo, tx, workspaceId, properties) : properties,
         references,
         position: mapPosition(input.position),
         id: explicitId,
-      })
+      })), agentTxOptions('create-block'))
     })
     return withGrainWarnings(repo, await repo.load(id), properties)
   }
@@ -976,7 +978,7 @@ const createRuntimeBlock = async (
       parentId: null,
       orderKey: (input.data?.orderKey as string | undefined) ?? 'a0',
       content,
-      properties,
+      properties: await resolveAgentDayProperties(repo, tx, workspaceId, properties),
       references,
     })
   }, agentTxOptions('create-block'))
@@ -1084,7 +1086,9 @@ const reconcileMarkdownSubtree = async (
     }
 
     const idMap = new Map<string, string>()          // parsed id → real id
-    const blockProps = {...(properties ?? {}), [SUBTREE_KEY_PROP]: key}
+    const blockProps = parsed.length > existing.length
+      ? {...await resolveAgentDayProperties(repo, tx, workspaceId, properties), [SUBTREE_KEY_PROP]: key}
+      : undefined
 
     for (let i = 0; i < parsed.length; i += 1) {
       const node = parsed[i]
@@ -1209,11 +1213,13 @@ const updateRuntimeBlock = async (
         + 'Re-plan against it, or use edit-block to change one passage.',
       )
     }
-    const nextProperties = input.properties === undefined
+    const encoded = await resolveAgentDayProperties(repo, tx, before.workspaceId, input.properties)
+    // Resolving a day can repair this very owner when it references itself.
+    const nextProperties = encoded === undefined
       ? undefined
       : input.replaceProperties
-        ? structuredClone(input.properties) as Record<string, unknown>
-        : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
+        ? structuredClone(encoded)
+        : {...(await tx.get(input.id))!.properties, ...encoded}
     // Agent properties arrive encoded. Pass the bag to tx.update so the
     // workspace's storage mode governs validation and child materialization.
     await tx.update(input.id, {
