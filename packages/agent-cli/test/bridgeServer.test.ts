@@ -349,6 +349,39 @@ describe('agent runtime bridge', () => {
       status: string, result?: {ok: boolean, value?: unknown, error?: {message: string}},
     }
 
+  // Each case waits for a one-second TTL on a relay with no other traffic.
+  it.each(['pending', 'delivered'] as const)('wakes a status reader when an idle %s command expires', async phase => {
+    const server = await spawnBridgeServer({
+      AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
+      AGENT_RUNTIME_CLIENT_TTL_MS: '1000',
+      AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS: '1000',
+    })
+    try {
+      await registerClient('alice-tab', {tokens: [{token: 'TOKEN-A'}]}, server.baseUrl)
+      const headers = {authorization: 'Bearer TOKEN-A'}
+      const submitted = await fetch(`${server.baseUrl}/runtime/commands`, {
+        method: 'POST', headers: {...headers, 'content-type': 'application/json'}, body: JSON.stringify({type: 'ping'}),
+      })
+      expect(submitted.status).toBe(202)
+      const {id} = await submitted.json()
+      if (phase === 'delivered') {
+        const next = await fetch(`${server.baseUrl}/runtime/commands/next?clientId=alice-tab`, {headers: bridgeHeaders})
+        expect((await next.json()).commandId).toBe(id)
+      }
+      expect((await statusOf(id, server.baseUrl)).status).toBe(phase)
+      const response = await fetch(`${server.baseUrl}/runtime/commands/${id}?timeoutMs=60000`, {
+        headers, signal: AbortSignal.timeout(5000),
+      })
+      if (phase === 'pending') {
+        expect(await response.json()).toMatchObject({status: 'failed', result: {error: {name: 'ClientGone'}}})
+      } else {
+        expect(response.status).toBe(404)
+      }
+    } finally {
+      await server.stop()
+    }
+  }, 20_000)
+
   it('returns the finished result to a waiting reader while ordinary status reads stay immediate', async () => {
     await registerClient('alice-tab', {tokens: [{token: 'TOKEN-A'}]})
     const id = await deliverPing()
