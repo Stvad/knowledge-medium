@@ -1,0 +1,1 @@
+export{cU as BlockReadText}from"../../../chunks/app-DmF83xgw.js";

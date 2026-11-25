@@ -1,1 +1,1 @@
-export{o3 as BACKLINKS_COUNT_FOR_BLOCK_QUERY,s3 as backlinksCountForBlockQuery}from"../../../../chunks/app-xoDwVA4C.js";
+export{s3 as BACKLINKS_COUNT_FOR_BLOCK_QUERY,c3 as backlinksCountForBlockQuery}from"../../../../chunks/app-DmF83xgw.js";
