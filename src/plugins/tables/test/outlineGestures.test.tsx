@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { EditorView } from '@codemirror/view'
 import * as structuralEdits from '@/data/structuralEditPolicy'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
-import { definitionSeedsFacet } from '@/data/facets'
+import { definitionSeedsFacet, queryableFieldsFacet, refTargetComparablePropertiesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -36,12 +36,17 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
+import { getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema'
 import * as toast from '@/utils/toast'
 import { disarmCut, getArmedCut } from '@/paste/armedCut'
 import { pasteArmedCut } from '@/paste/operations'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
 import { propertyDisplayProp } from '@/data/propertyDisplayMode'
 import { turnIntoTable } from '../convert'
+import { addColumn } from '../columns'
+import { viewQuery } from '../model'
 import { openQueryValue } from '../query/queryValue'
 import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { tablesPlugin } from '../index'
@@ -202,6 +207,98 @@ const press = (view: EditorView, key: string, options: {shiftKey?: boolean} = {}
 }
 
 const focused = () => peekFocusedBlockLocation(ui())
+
+// The mounted grid and all three sort transitions take about a second locally.
+it('cycles the daily note reference header through date order and outline order', async () => {
+  const planned = seedProperty({
+    seedKey: 'test/property/tables-gesture-planned', revision: 1,
+    name: 'gesture:planned', preset: 'optional-ref', changeScope: ChangeScope.BlockDefault,
+    config: {targetTypes: [DAILY_NOTE_TYPE]},
+  })
+  configureRuntime(dailyNotesDataExtension, definitionSeedsFacet.of(planned, {source: 'test'}))
+  await repo.whenPropertyDefinitionsReady(WS)
+  await materializePropertySeeds(repo, WS, [planned])
+  const earlier = await getOrCreateDailyNote(repo, WS, '2026-01-04')
+  const later = await getOrCreateDailyNote(repo, WS, '2026-01-06')
+  await repo.tx(async tx => {
+    await tx.setProperty('row-0', planned, later.id)
+    await tx.setProperty('row-1', planned, earlier.id)
+    await tx.create({id: 'row-2', workspaceId: WS, parentId: HOST, orderKey: 'a0V', content: 'unscheduled'})
+  }, {scope: ChangeScope.BlockDefault})
+  const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
+  const columnId = await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, planned.seedKey))
+
+  mount()
+  const header = await waitFor(() => {
+    const column = document.querySelector(`[data-table-column="${columnId}"]`)
+    expect(column).not.toBeNull()
+    return column!
+  })
+  const label = header.querySelector('[data-table-column-drag]')!
+  const order = () => [...document.querySelectorAll<HTMLElement>('[data-table-row]')].map(row => row.dataset.tableRow)
+  await waitFor(() => expect(order()).toEqual(['row-0', 'row-2', 'row-1']))
+  const clickHeader = () => {
+    const pointer = {pointerId: 1, button: 0, clientX: 10}
+    fireEvent.pointerDown(label, pointer)
+    fireEvent.pointerUp(label, pointer)
+  }
+  clickHeader()
+  await waitFor(() => {
+    expect(header).toHaveAttribute('aria-sort', 'ascending')
+    expect(order()).toEqual(['row-1', 'row-0', 'row-2'])
+  })
+  const replaceTarget = (property: string | undefined) => act(() => {
+    repo.setRuntimeContributions(refTargetComparablePropertiesFacet, 'test-override',
+      property ? [{targetType: DAILY_NOTE_TYPE, property}] : [], {workspaceId: WS})
+  })
+  replaceTarget(tags.name)
+  await waitFor(() => {
+    expect(header).not.toHaveAttribute('aria-sort')
+    expect(order()).toEqual(['row-0', 'row-2', 'row-1'])
+  })
+  replaceTarget(undefined)
+  await waitFor(() => {
+    expect(header).toHaveAttribute('aria-sort', 'ascending')
+    expect(order()).toEqual(['row-1', 'row-0', 'row-2'])
+  })
+  clickHeader()
+  await waitFor(() => {
+    expect(header).toHaveAttribute('aria-sort', 'descending')
+    expect(order()).toEqual(['row-0', 'row-1', 'row-2'])
+  })
+  clickHeader()
+  await waitFor(() => {
+    expect(header).not.toHaveAttribute('aria-sort')
+    expect(order()).toEqual(['row-0', 'row-2', 'row-1'])
+  })
+  await act(async () => {
+    await repo.block(HOST).set(queryProp, `childof=self ${planned.name}>=2026-01-05`)
+  })
+  await waitFor(() => expect(order()).toEqual(['row-0']))
+  replaceTarget(tags.name)
+  await waitFor(() => {
+    expect(document.querySelector('[data-table-query-errors]')).not.toBeNull()
+    expect(new Set(order())).toEqual(new Set(['row-0', 'row-1', 'row-2']))
+  })
+}, 20_000)
+
+it('reparses a mounted table when a queryable field becomes available', async () => {
+  await repo.block(HOST).set(queryProp, 'childof=self score>=1')
+  mount()
+  await waitFor(() => expect(document.querySelector('[data-table-query-errors]')).not.toBeNull())
+  act(() => {
+    repo.setRuntimeContributions(queryableFieldsFacet, 'test-override', [{
+      name: 'score',
+      value: alias => ({sql: `CASE WHEN ${alias}.id = ? THEN 1 ELSE 0 END`, params: ['row-1']}),
+      encode: operand => Number(operand),
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }], {workspaceId: WS})
+  })
+  await waitFor(() => {
+    expect(document.querySelector('[data-table-query-errors]')).toBeNull()
+    expect([...document.querySelectorAll<HTMLElement>('[data-table-row]')].map(row => row.dataset.tableRow)).toEqual(['row-1'])
+  })
+})
 
 describe('a list cell draws its members as outline blocks', () => {
   it('shows each member with a bullet, not as a bare cell value', async () => {

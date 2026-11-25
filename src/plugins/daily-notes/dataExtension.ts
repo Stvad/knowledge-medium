@@ -1,7 +1,7 @@
 import {
   definitionSeedsFacet,
   localSchemaFacet,
-  refTargetFilterDefaultsFacet,
+  refTargetComparablePropertiesFacet,
   systemPagesFacet,
   typeSeedsFacet,
 } from '@/data/facets'
@@ -17,7 +17,7 @@ export const dailyNotesDataExtension: AppExtension = [
   // Eagerly materialise the Journal page at bootstrap so `[[Journal]]` resolves
   // to it instead of auto-creating a rival claimant (alias.collision).
   systemPagesFacet.of({spec: journalPageSpec, eager: true}, {source: 'daily-notes'}),
-  refTargetFilterDefaultsFacet.of(
+  refTargetComparablePropertiesFacet.of(
     {targetType: DAILY_NOTE_TYPE, property: dailyNoteDateProp.name},
     {source: 'daily-notes'},
   ),

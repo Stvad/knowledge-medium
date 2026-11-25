@@ -506,26 +506,17 @@ export const systemPagesFacet = defineFacet<SystemPage, readonly SystemPage[]>({
   validate: isSystemPage,
 })
 
-/** Default inner-property to use when filtering a `ref`/`refList`
- *  property whose target is of a given block type. Contributed by the
- *  *target* type's plugin (e.g. daily-notes contributes
- *  `{targetType: 'daily-note', property: 'daily-note:date'}`) so that
- *  filter UIs can present "filter this ref as a date" without baking
- *  daily-note knowledge into the filter component. The compiled
- *  predicate uses the typed-query `target` traversal — no
- *  query-engine extension required.
- *
- *  Lookup is by target type id; last-wins on collision. Keyed by
- *  target type (not ref property name) because the contract belongs to
- *  the target — any user-defined ref pointing at a daily note should
- *  get the same affordance without per-property registration. */
-export interface RefTargetFilterDefault {
+/** The property used to compare references to a block type. Contributed by
+ *  the target type's plugin, so user-defined references get the same comparison
+ *  without per-property registration. Lookup is by target type, with the last
+ *  contribution winning on collision. */
+export interface RefTargetComparableProperty {
   readonly targetType: string
   /** Name of a registered `PropertySchema` on the target block type. */
   readonly property: string
 }
 
-export const refTargetFilterDefaultsFacet = keyedMapFacet<RefTargetFilterDefault>('data.refTargetFilterDefaults', d => d.targetType)
+export const refTargetComparablePropertiesFacet = keyedMapFacet<RefTargetComparableProperty>('data.refTargetComparableProperties', d => d.targetType)
 
 export const invalidationRulesFacet = defineFacet<InvalidationRule, readonly InvalidationRule[]>({
   id: 'data.invalidationRules',
