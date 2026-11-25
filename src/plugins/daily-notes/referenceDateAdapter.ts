@@ -18,19 +18,13 @@ import {
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
-import { getOrCreateDailyNoteInTx } from './dailyNotes.ts'
+import { dailyNoteDateValue, getOrCreateDailyNoteInTx } from './dailyNotes.ts'
 import { isDayReferenceSchema } from './schema.ts'
 
 export interface DateReferenceMatch {
   ref: ParsedReference
   iso: string
   style: 'iso' | 'long'
-}
-
-const isoToLocalDate = (iso: string): Date => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!match) throw new Error(`Invalid ISO date: ${iso}`)
-  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
 }
 
 const dateReferenceMatches = (content: string): DateReferenceMatch[] =>
@@ -57,7 +51,7 @@ export const replaceSingleDateReferenceContent = (
   if (!match) return null
   const nextAlias = match.style === 'iso'
     ? iso
-    : formatRoamDate(isoToLocalDate(iso))
+    : formatRoamDate(dailyNoteDateValue(iso), 'UTC')
   // Unreachable for a date alias (short, delimiter-free), but `null` is
   // already this function's "no rewrite" answer — and beats splicing the
   // string "null" into the user's content.

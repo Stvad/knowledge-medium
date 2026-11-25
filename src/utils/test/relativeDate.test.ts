@@ -125,6 +125,17 @@ describe('relativeDateCandidates', () => {
 })
 
 describe('parseLiteralDailyPageTitle', () => {
+  it.each([
+    ['0001-01-02', 'January 2nd, 1'],
+    ['0900-03-01', 'March 1st, 900'],
+  ])('reads both canonical aliases of %s in the same year', (iso, long) => {
+    for (const alias of [iso, long]) {
+      const parsed = parseLiteralDailyPageTitle(alias)
+      expect(parsed?.iso).toBe(iso)
+      expect(parsed?.date.getFullYear()).toBe(Number(iso.slice(0, 4)))
+    }
+  })
+
   it('accepts ISO dates', () => {
     expect(parseLiteralDailyPageTitle('2026-04-28', NOW)?.iso).toBe('2026-04-28')
     expect(parseLiteralDailyPageTitle('2026-12-25', NOW)?.iso).toBe('2026-12-25')

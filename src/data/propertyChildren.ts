@@ -744,8 +744,9 @@ export const valueChildContentToEncoded = (
  *  is not a loss — the projection may never have read it, or a sibling may
  *  carry the same member — and only the aggregate can say. That question has
  *  one owner, {@link projectedValueCount}, at the grain it is asked about. */
+// A newly spelled value carries its encoding so a transaction can choose its target's named link.
 export type ValueChildConversion =
-  | {readonly outcome: 'converted'; readonly content: string}
+  | {readonly outcome: 'converted'; readonly content: string; readonly encoded?: unknown}
   | {readonly outcome: 'unreadable'}
 
 /** How `to` would spell `held` so that it reads the same value back, at
@@ -820,7 +821,7 @@ const valueRoute = (
   // A reference must come from the authored span, not an ID manufactured by
   // encoding arbitrary text (including a name's bracket syntax) as an ID.
   if (isWholeContentReference(respelled)) return textRoute(to, content)
-  return {outcome: 'converted', content: respelled}
+  return {outcome: 'converted', content: respelled, encoded: held}
 }
 
 /** `content` re-read under `to`, as if it had just been typed into the row. */
@@ -835,7 +836,7 @@ const textRoute = (
     return {outcome: 'unreadable'}
   }
   try {
-    return {outcome: 'converted', content: encodedToValueChildContent(to, encoded)}
+    return {outcome: 'converted', content: encodedToValueChildContent(to, encoded), encoded}
   } catch {
     // DEFENCE IN DEPTH, and unreachable through any caller today: `to` just
     // produced `encoded` from this text, and the only writer that throws

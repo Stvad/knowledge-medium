@@ -672,7 +672,7 @@ describe('editing through a property row', () => {
     }, 20_000,
   )
 
-  it('uses the normal reference editor and preserves unmatched ISO text in the property panel', async () => {
+  it.each([false, true])('preserves unmatched ISO text and uses the normal property panel controls (read-only: %s)', async readOnly => {
     const content = '2026-05-04T00:00:00.000Z'
     const appointment = seedProperty({
       seedKey: 'test/property/legacy-appointment', revision: 1, name: 'rows:legacy-appointment',
@@ -689,26 +689,34 @@ describe('editing through a property row', () => {
     await materializePropertySeeds(repo, WS, [appointment, dailyNoteDateProp, aliasesProp])
     await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
     const owner = repo.block(OWNER)
+    const replacement = await getOrCreateDailyNote(repo, WS, '2026-06-08')
+    await owner.set(showPropertiesProp, true)
+    repo.setReadOnly(readOnly)
     await act(async () => { mount({childBacked: false}) })
-    await act(() => owner.set(showPropertiesProp, true))
 
     const label = await screen.findByText(content)
-    const panel = label.closest<HTMLElement>('.tm-property-fields')!
-    expect(panel).not.toBeNull()
+    const value = within(label.closest<HTMLElement>('[data-property-value]')!)
+    expect(label.closest('a')).toBeNull()
     const noteId = dailyNoteBlockId(WS, '2026-05-04')
     expect(await repo.load(noteId)).toBeNull()
     expect((await repo.load(OWNER))?.properties[appointment.name]).toBe(content)
 
-    await act(async () => {
-      const target = await getOrCreateDailyNote(repo, WS, '2026-05-04')
-      await owner.set(appointment, target.id)
-    })
-    const value = within(panel.querySelector<HTMLElement>('[data-property-name="rows:legacy-appointment"]')!)
-    expect(await value.findByText('May 4th, 2026')).toBeInTheDocument()
+    if (readOnly) {
+      expect(value.queryByRole('button', {name: 'Remove block reference'})).toBeNull()
+      expect(value.queryByRole('combobox')).toBeNull()
+      return
+    }
+
     fireEvent.click(value.getByRole('button', {name: 'Remove block reference'}))
-    expect(await value.findByRole('combobox', {name: 'Search block reference'})).toBeInTheDocument()
+    const search = await value.findByRole('combobox', {name: 'Search block reference'})
     expect(owner.peekProperty(appointment)).toBeUndefined()
-    expect(await repo.load(noteId)).not.toBeNull()
+    expect((await repo.load(OWNER))?.properties[appointment.name]).toBeNull()
+
+    fireEvent.change(search, {target: {value: 'June 8th, 2026'}})
+    fireEvent.click(await screen.findByRole('option', {name: /June 8th, 2026/}))
+    expect(await value.findByText('June 8th, 2026')).toBeInTheDocument()
+    expect(owner.peekProperty(appointment)).toBe(replacement.id)
+    expect(await repo.load(noteId)).toBeNull()
   }, 20_000)
 
   it('keeps an unresolved field-form child out of the scalar inline editor', async () => {

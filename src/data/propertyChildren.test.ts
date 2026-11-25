@@ -5199,34 +5199,34 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     convertValueChildContent(schemaOf(from), schemaOf(to), content)
 
   it('carries the VALUE across a pure spelling disagreement, both directions', () => {
-    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
-    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
+    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"', encoded: 'x'})
+    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x', encoded: 'x'})
   })
 
   it('re-reads the TEXT where the target cannot hold the value', () => {
     // The round trip fails on a type change, which is what routes every
     // coercion here without an ordering rule of its own. Asserted on the
     // canonicalized content: carrying the value would have kept the spacing.
-    expect(convert('string', 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
-    expect(convert('string', 'boolean', ' true ')).toEqual({outcome: 'converted', content: 'true'})
+    expect(convert('string', 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42', encoded: 42})
+    expect(convert('string', 'boolean', ' true ')).toEqual({outcome: 'converted', content: 'true', encoded: true})
   })
 
   it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
-    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
-    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
+    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"', encoded: '42'})
+    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"', encoded: '[1,2]'})
   })
 
   it('re-reads the text for a row the OLD codec cannot read', () => {
     // A decline that has nothing to do with the target: within ONE `number`
     // property re-typed to `list`, the readable row keeps its number while
     // this stale one is re-read as JSON.
-    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
+    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]', encoded: [1, 2]})
   })
 
   it('resolves the authored named reference when changing text to ref', () => {
     expect(convertValueChildContent(schemaOf('string'), schemaOf('ref'), {
       content: '[[Page]]', referenceTargetId: 'page-target',
-    })).toEqual({outcome: 'converted', content: '((page-target))'})
+    })).toEqual({outcome: 'converted', content: '((page-target))', encoded: 'page-target'})
     expect(convert('string', 'ref', '[[Page]]')).toEqual({outcome: 'unreadable'})
     expect(convert('string', 'ref', 'Mary')).toEqual({outcome: 'unreadable'})
   })
@@ -5234,7 +5234,7 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
   it('preserves named reference identity when changing ref to text or a list', () => {
     const row = {content: '[[Page]]', referenceTargetId: 'page-target'}
     expect(convertValueChildContent(schemaOf('ref'), schemaOf('string'), row))
-      .toEqual({outcome: 'converted', content: 'page-target'})
+      .toEqual({outcome: 'converted', content: 'page-target', encoded: 'page-target'})
     expect(convertValueChildContent(schemaOf('ref'), {...schemaOf('ref'), codec: codecs.refList()}, row))
       .toEqual({outcome: 'converted', content: '[[Page]]'})
   })
@@ -5244,7 +5244,7 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     // the spelling for truthiness rather than for null would fall through to
     // the text route and keep the JSON `""` verbatim — #1055 again, at the one
     // value where it is invisible.
-    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
+    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: '', encoded: ''})
   })
 
   it('keeps a bare `null` the OLD codec read as the literal word (#1030)', () => {
@@ -5253,7 +5253,7 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     // word and the value route carries it. Settled only where a spelling
     // holds: `list` -> `string` has none, and the text route decides it the
     // other way.
-    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
+    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"', encoded: 'null'})
   })
 })
 

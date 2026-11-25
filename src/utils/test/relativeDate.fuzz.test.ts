@@ -43,7 +43,7 @@ const roamOf = (y: number, m: number, d: number): string => `${MONTHS[m - 1]} ${
  *  whole accepted range so its edges are explored. */
 const yearArb = fc.oneof(
   {weight: 3, arbitrary: fc.integer({min: 1990, max: 2040})},
-  {weight: 1, arbitrary: fc.integer({min: 1000, max: 9999})},
+  {weight: 1, arbitrary: fc.integer({min: 0, max: 9999})},
 )
 
 const validDayArb = fc.tuple(yearArb, fc.integer({min: 1, max: 12}))

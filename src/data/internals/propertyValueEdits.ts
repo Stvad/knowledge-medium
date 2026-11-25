@@ -63,7 +63,7 @@ const appendValue = async (tx: Tx, field: Field, schema: AnyPropertySchema, text
   const keys = memberKeysFor(schema)
   const valueKey = keys.content(text)
   const occurrence = values.filter(value => keys.row(value).key === valueKey).length
-  return createValueChild(tx, field, text, freshSlots(values, 1)[0]!, {valueKey, occurrence})
+  return createValueChild(tx, field, {content: text}, freshSlots(values, 1)[0]!, {valueKey, occurrence})
 }
 
 const fieldValueUnion = (rows: PropertyRows) => {

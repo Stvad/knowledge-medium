@@ -10,7 +10,7 @@
  * (the whole codebase still hard-codes 'en-US' in a few date
  * formatters).
  */
-import { formatIsoDate } from '@/utils/dailyPage.js'
+import { formatIsoDate, parseIsoDay } from '@/utils/dailyPage.js'
 
 export interface CalendarCell {
   date: Date | null
@@ -39,23 +39,13 @@ export const firstOfMonth = (date: Date): Date =>
 export const addMonths = (date: Date, months: number): Date =>
   localDate(date.getFullYear(), date.getMonth() + months, 1)
 
-/** Parse an ISO date string into a local-midnight Date, or null if
- *  the string isn't a valid `YYYY-MM-DD`. The round-trip check
- *  guards against inputs like `2026-02-30` that JS Date silently
- *  rewrites. */
-export const fromIso = (iso: string): Date | null => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!match) return null
-  const date = localDate(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-  if (Number.isNaN(date.getTime())) return null
-  return formatIsoDate(date) === iso ? date : null
-}
+export {parseIsoDay as fromIso}
 
 /** Resolve a Date to seed the calendar's "visible month" state from
  *  an optional ISO string. Falls back to "now" if absent or invalid. */
 export const initialDateFromIso = (iso: string | undefined): Date => {
   if (!iso) return new Date()
-  return fromIso(iso) ?? new Date()
+  return parseIsoDay(iso) ?? new Date()
 }
 
 /** Build the 42-cell month grid, with leading/trailing empty cells

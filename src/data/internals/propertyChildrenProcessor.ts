@@ -128,11 +128,9 @@ export type ProjectableRow =
  * "nothing parses" as "unset" and drive materialize into tombstoning the
  * very rows it just recognized.
  *
- * `resolved` — `full`, except that while a field has a value row still awaiting
- * its reference target ({@link awaitsReferenceTarget}) the write may only ADD
- * to what the cell holds ({@link keepsStoredValue}). That member is unknown on
- * this device, not absent, so a projection without it is no evidence that it
- * was removed. Used where a stamp, not a user, dispatched the projection.
+ * A scalar awaiting its first reference target keeps its stored value in every mode.
+ * In `resolved` mode an incomplete list may only add members to the stored list
+ * ({@link keepsStoredValue}). An alias stamp on one member cannot establish the others were removed.
  */
 export type ProjectionMode = 'full' | 'additive' | 'resolved'
 
@@ -956,15 +954,15 @@ export const reconcileFieldValueChildren = async (
 export const createValueChild = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  content: string,
+  proposed: ProposedValueChild,
   orderKey: string,
   {valueKey, occurrence}: {valueKey: string; occurrence: number},
 ): Promise<string> => mintPropertyChildRow(tx, {
   workspaceId: fieldRow.workspaceId,
   parentId: fieldRow.id,
   orderKey,
-  content,
-  references: tx.derivedReferencesFor(content),
+  ...proposed,
+  references: tx.derivedReferencesFor(proposed.content),
 }, {kind: 'value', occurrence, valueKey})
 
 const reconcileSingleValueChild = async (
@@ -985,7 +983,7 @@ const reconcileSingleValueChild = async (
   const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
   const primary = scalarValueRow(schema, values, content)
   if (!primary) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
+    await createValueChild(tx, fieldRow, proposed, keyAtStart(values[0]?.orderKey ?? null), slot)
     return
   }
   let sameValue = primary.content === content
@@ -997,6 +995,9 @@ const reconcileSingleValueChild = async (
     }
   }
   if (!sameValue) await tx.update(primary.id, proposed)
+  else if (proposed.referenceTargetId && proposed.referenceTargetId !== primary.referenceTargetId) {
+    await tx.stampReferenceTarget(primary.id, proposed.referenceTargetId, false)
+  }
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as
@@ -1118,7 +1119,7 @@ const reconcileMemberValueChildren = async (
     const occurrence = occurrences.get(memberKey) ?? 0
     occurrences.set(memberKey, occurrence + 1)
     if (!existing) {
-      await createValueChild(tx, fieldRow, contents[i]!, orderKey, {valueKey: memberKey, occurrence})
+      await createValueChild(tx, fieldRow, {content: contents[i]!}, orderKey, {valueKey: memberKey, occurrence})
       continue
     }
     // Content is deliberately NOT rewritten to the canonical spelling: the row

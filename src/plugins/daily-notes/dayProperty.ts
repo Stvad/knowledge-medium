@@ -1,4 +1,4 @@
-import { formatRoamDate } from '@/utils/dailyPage'
+import { isoFromRoamDate } from '@/utils/dailyPage'
 import { dailyNoteDateValue, isDateAlias, isValidDateAlias, todayIso } from './dailyNotes'
 
 const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)$/
@@ -14,17 +14,7 @@ export const storedIsoDay = (text: string): string | undefined => {
   return isDateAlias(utcDay) ? utcDay : undefined
 }
 
-const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
 const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-
-const roamDay = (text: string): string | undefined => {
-  const match = /^([a-z]+) (\d{1,2})(?:st|nd|rd|th), (\d{4})$/.exec(text)
-  if (!match) return undefined
-  const month = MONTHS.indexOf(match[1]) + 1
-  const iso = `${match[3]}-${String(month).padStart(2, '0')}-${match[2].padStart(2, '0')}`
-  if (!isValidDateAlias(iso)) return undefined
-  return formatRoamDate(dailyNoteDateValue(iso), 'UTC').toLowerCase() === text ? iso : undefined
-}
 
 const relativeOffset = (text: string, now: Date): number | undefined => {
   if (text === 'today') return 0
@@ -46,7 +36,7 @@ export const resolveDayInput = (input: string, now = new Date()): string => {
   if (isDateAlias(text)) throw new Error(`Invalid calendar date: ${text}`)
 
   const lower = text.toLowerCase()
-  const roam = roamDay(lower)
+  const roam = isoFromRoamDate(lower)
   if (roam !== undefined) return roam
   const offset = relativeOffset(lower, now)
   if (offset !== undefined) {

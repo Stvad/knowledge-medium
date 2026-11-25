@@ -1,7 +1,6 @@
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 import { presetConfigProp, presetIdProp, propertyNameProp, typesProp } from '@/data/properties'
-import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import {
   typedBlocksReferenceKey,
   type ChangeSnapshotSide,
@@ -43,10 +42,9 @@ export const backlinkPresentationInvalidation: InvalidationRule = {
         && before?.referenceTargetId === after?.referenceTargetId) continue
       for (const side of [before, after]) {
         if (!side) continue
-        const exact = parseExactReferenceBlockContent(side.content ?? '')
-        const namedTarget = exact?.kind === 'alias' && !exact.fieldForm ? side.referenceTargetId : null
         for (const ref of side.references ?? []) {
-          if (!ref.sourceField && (side.content === `((${ref.id}))` || namedTarget === ref.id)) {
+          const named = side.referenceTargetId === ref.id && side.content?.startsWith('[[')
+          if (!ref.sourceField && (side.content === `((${ref.id}))` || named)) {
             emit(BACKLINK_PRESENTATION_CHANNEL, backlinkPresentationTargetKey(side.workspaceId, ref.id))
           }
         }
