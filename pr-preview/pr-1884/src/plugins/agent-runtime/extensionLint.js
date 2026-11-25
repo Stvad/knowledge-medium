@@ -1,1 +1,1 @@
-export{Bv as lintExtensionSource}from"../../../chunks/app-BPzxndrP.js";
+export{Bv as lintExtensionSource}from"../../../chunks/app-CzXsWXQ_.js";

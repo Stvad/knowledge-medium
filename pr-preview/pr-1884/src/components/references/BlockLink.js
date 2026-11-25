@@ -1,1 +1,1 @@
-export{Aj as BlockLink}from"../../../chunks/app-BPzxndrP.js";
+export{Aj as BlockLink}from"../../../chunks/app-CzXsWXQ_.js";

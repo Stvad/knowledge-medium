@@ -1,1 +1,1 @@
-export{SY as floatingAnchorFromRect,CY as useAnchoredFloating}from"../../../chunks/app-BPzxndrP.js";
+export{xY as floatingAnchorFromRect,SY as useAnchoredFloating}from"../../../chunks/app-CzXsWXQ_.js";

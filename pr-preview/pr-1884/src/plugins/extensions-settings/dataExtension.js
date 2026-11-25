@@ -1,1 +1,1 @@
-export{Br as extensionsDataExtension}from"../../../chunks/app-BPzxndrP.js";
+export{Br as extensionsDataExtension}from"../../../chunks/app-CzXsWXQ_.js";

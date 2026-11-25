@@ -1,1 +1,1 @@
-export{W6 as agentRuntimeDataExtension}from"../../../chunks/app-BPzxndrP.js";
+export{G6 as agentRuntimeDataExtension}from"../../../chunks/app-CzXsWXQ_.js";

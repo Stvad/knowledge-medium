@@ -1,1 +1,1 @@
-export{LP as openKeybindingsSettingsAction}from"../../../chunks/app-BPzxndrP.js";
+export{IP as openKeybindingsSettingsAction}from"../../../chunks/app-CzXsWXQ_.js";

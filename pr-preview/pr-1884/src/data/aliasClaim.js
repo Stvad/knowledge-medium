@@ -1,1 +1,1 @@
-export{Btt as assertAliasClaimable,Vtt as claimedAliases}from"../../chunks/app-BPzxndrP.js";
+export{Vtt as assertAliasClaimable,Htt as claimedAliases}from"../../chunks/app-CzXsWXQ_.js";
