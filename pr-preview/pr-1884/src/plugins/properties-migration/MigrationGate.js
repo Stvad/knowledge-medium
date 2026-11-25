@@ -1,1 +1,1 @@
-export{Wc as MigrationGate}from"../../../chunks/app-CzXsWXQ_.js";
+export{Wc as MigrationGate}from"../../../chunks/app-EV9-BZEz.js";

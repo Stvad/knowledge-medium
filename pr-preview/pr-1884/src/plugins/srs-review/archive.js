@@ -1,1 +1,1 @@
-export{Id as archiveSrsCard}from"../../../chunks/app-CzXsWXQ_.js";
+export{Id as archiveSrsCard}from"../../../chunks/app-EV9-BZEz.js";

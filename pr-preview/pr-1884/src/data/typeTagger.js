@@ -1,1 +1,1 @@
-export{K5 as TypeTagger,q5 as applyTypeTagInTx,J5 as prepareTypeTags}from"../../chunks/app-CzXsWXQ_.js";
+export{K5 as TypeTagger,q5 as applyTypeTagInTx,J5 as prepareTypeTags}from"../../chunks/app-EV9-BZEz.js";

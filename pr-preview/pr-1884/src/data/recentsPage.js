@@ -1,1 +1,1 @@
-export{Ktt as getOrCreateRecentsPage,qtt as recentsPageBlockId,Jtt as recentsPageSpec}from"../../chunks/app-CzXsWXQ_.js";
+export{Ktt as getOrCreateRecentsPage,qtt as recentsPageBlockId,Jtt as recentsPageSpec}from"../../chunks/app-EV9-BZEz.js";
