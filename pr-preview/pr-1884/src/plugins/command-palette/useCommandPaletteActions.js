@@ -1,0 +1,1 @@
+export{QP as useCommandPaletteActions}from"../../../chunks/app-BPzxndrP.js";

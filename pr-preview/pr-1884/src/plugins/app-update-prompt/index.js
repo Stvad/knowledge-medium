@@ -1,0 +1,1 @@
+export{KL as appUpdatePromptExtension}from"../../../chunks/app-BPzxndrP.js";

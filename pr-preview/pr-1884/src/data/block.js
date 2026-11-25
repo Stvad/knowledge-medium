@@ -1,0 +1,1 @@
+export{Het as Block,Uet as requireLoadedBlock}from"../../chunks/app-BPzxndrP.js";

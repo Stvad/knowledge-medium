@@ -1,0 +1,1 @@
+export{Xgt as definePostCommitProcessor}from"../../../chunks/app-BPzxndrP.js";

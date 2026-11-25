@@ -1,0 +1,1 @@
+export{gu as parsePropertiesJson}from"../../../chunks/app-BPzxndrP.js";

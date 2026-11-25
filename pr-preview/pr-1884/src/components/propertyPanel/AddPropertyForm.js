@@ -1,0 +1,1 @@
+export{uG as AddPropertyForm}from"../../../chunks/app-BPzxndrP.js";

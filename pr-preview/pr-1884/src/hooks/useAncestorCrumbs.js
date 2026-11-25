@@ -1,0 +1,1 @@
+export{oM as useAncestorCrumbs}from"../../chunks/app-BPzxndrP.js";

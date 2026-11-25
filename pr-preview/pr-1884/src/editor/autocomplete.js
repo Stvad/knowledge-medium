@@ -1,0 +1,1 @@
+export{kL as editorAutocompleteExtension}from"../../chunks/app-BPzxndrP.js";

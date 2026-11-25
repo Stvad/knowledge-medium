@@ -1,0 +1,1 @@
+export{jR as dynamicExtensionsExtension}from"../../chunks/app-BPzxndrP.js";

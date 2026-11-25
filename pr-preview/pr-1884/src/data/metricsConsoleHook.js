@@ -1,0 +1,1 @@
+export{WI as ensureMetricsConsoleHook}from"../../chunks/app-BPzxndrP.js";

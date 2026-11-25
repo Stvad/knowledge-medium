@@ -1,0 +1,1 @@
+export{Lm as quotedInFooterContribution}from"../../../chunks/app-BPzxndrP.js";

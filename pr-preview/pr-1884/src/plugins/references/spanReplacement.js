@@ -1,0 +1,1 @@
+export{PQ as preferredSpanReplacement}from"../../../chunks/app-BPzxndrP.js";

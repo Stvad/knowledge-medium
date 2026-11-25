@@ -1,0 +1,1 @@
+export{MB as ConfirmBulkDeleteDialog}from"../../chunks/app-BPzxndrP.js";
