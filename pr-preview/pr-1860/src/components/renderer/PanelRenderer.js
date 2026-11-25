@@ -1,1 +1,1 @@
-export{Gz as PanelRenderer}from"../../../chunks/app-Dz6uzPi0.js";
+export{Qz as PanelRenderer}from"../../../chunks/app-BXAQw1vl.js";

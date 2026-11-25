@@ -1,1 +1,1 @@
-export{Pz as ConfirmDefinitionChangeDialog}from"../../../chunks/app-Dz6uzPi0.js";
+export{Vz as ConfirmDefinitionChangeDialog}from"../../../chunks/app-BXAQw1vl.js";
