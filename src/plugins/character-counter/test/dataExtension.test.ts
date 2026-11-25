@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { CHAR_COUNTER_TYPE } from '../blockType'
-import { charLimitProp, charProfileProp, charScopeProp } from '../properties'
+import { charExcludeProp, charLimitProp, charProfileProp, charScopeProp } from '../properties'
 import { characterCounterDataExtension } from '../dataExtension'
 
 describe('characterCounterDataExtension', () => {
@@ -18,6 +18,7 @@ describe('characterCounterDataExtension', () => {
       charLimitProp.name,
       charScopeProp.name,
       charProfileProp.name,
+      charExcludeProp.name,
     ])
   })
 
@@ -26,6 +27,7 @@ describe('characterCounterDataExtension', () => {
       charLimitProp,
       charScopeProp,
       charProfileProp,
+      charExcludeProp,
     ]))
   })
 

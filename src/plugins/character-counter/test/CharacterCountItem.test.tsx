@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { ChangeScope } from '@/data/api'
+import { RepoContext } from '@/context/repo'
+import { ChangeScope, seedProperty, seedType } from '@/data/api'
+import { materializePropertySeeds } from '@/data/definitionSeeds'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { BlockGutterItem } from '@/extensions/blockInteraction.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
@@ -10,12 +13,19 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import { CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE } from '../blockType'
 import { characterCounterDataExtension } from '../dataExtension'
-import { charLimitProp, charProfileProp, charScopeProp, type CharacterCounterScope } from '../properties'
+import { charExcludeProp, charLimitProp, charProfileProp, charScopeProp, type CharacterCounterScope } from '../properties'
 import { builtinCountProfiles, characterCountProfilesFacet } from '../profiles'
 import { characterCountItemContribution } from '../CharacterCountItem'
 
 const WS = 'ws-char-counter'
 const TIMEOUT_MS = 3_000
+const draftType = seedType({seedKey: 'test:counter/type/draft', revision: 1, id: 'draft', label: 'Draft'})
+const publishProp = seedProperty({
+  seedKey: 'test:counter/property/publish', revision: 1, name: 'publish', preset: 'strict-enum',
+  config: {options: [{value: 'article', label: 'Article'}, {value: 'exclude', label: 'Exclude'}]},
+  defaultValue: 'article',
+  changeScope: ChangeScope.BlockDefault,
+})
 
 const useHookOnlyCount = (): number => 7
 const runtime = resolveFacetRuntimeSync([
@@ -36,7 +46,7 @@ beforeEach(async () => {
   repo = createTestRepo({
     db: sharedDb.db,
     user: {id: 'user-1'},
-    extensions: [characterCounterDataExtension],
+    extensions: [characterCounterDataExtension, typeSeedsFacet.of(draftType), definitionSeedsFacet.of(publishProp)],
   }).repo
   repo.setActiveWorkspaceId(WS)
 })
@@ -73,10 +83,12 @@ const seedTree = async (counter: {
 // nothing, so the sibling marker appearing is the fence for "the item has
 // rendered, and chose to show nothing".
 const renderBlock = (id: string) => render(
-  <AppRuntimeContextProvider value={runtime}>
-    <CountItem block={repo.block(id)}/>
-    <span data-testid="committed"/>
-  </AppRuntimeContextProvider>,
+  <RepoContext.Provider value={repo}>
+    <AppRuntimeContextProvider value={runtime}>
+      <CountItem block={repo.block(id)}/>
+      <span data-testid="committed"/>
+    </AppRuntimeContextProvider>
+  </RepoContext.Provider>,
 )
 
 const badgeText = () => screen.getByLabelText(/count/i).textContent
@@ -147,8 +159,50 @@ describe('CharacterCountItem', () => {
     await waitFor(() => expect(badgeText()).toBe('7'), {timeout: TIMEOUT_MS})
   })
 
+  it('skips an excluded publishing branch and follows live property and type changes', async () => {
+    await materializePropertySeeds(repo, WS, [publishProp])
+    await repo.awaitProcessors()
+    const root = await seedTree({type: WORD_COUNTER_TYPE})
+    await repo.mutate.createChild({parentId: ROOT, content: 'keep me'})
+    const child = repo.block(CHILD)
+    await root.set(charExcludeProp, 'publish=exclude | #Draft')
+    renderBlock(ROOT)
+    await waitFor(() => expect(badgeText()).toBe('9'), {timeout: TIMEOUT_MS})
+
+    await child.set(publishProp, 'exclude')
+    await waitFor(() => expect(badgeText()).toBe('4'), {timeout: TIMEOUT_MS})
+
+    await child.set(publishProp, 'article')
+    await waitFor(() => expect(badgeText()).toBe('9'), {timeout: TIMEOUT_MS})
+
+    await repo.addType(CHILD, 'draft')
+    await waitFor(() => expect(badgeText()).toBe('4'), {timeout: TIMEOUT_MS})
+
+    await repo.removeType(CHILD, 'draft')
+    await waitFor(() => expect(badgeText()).toBe('9'), {timeout: TIMEOUT_MS})
+  })
+
+  it('shows a query error until the exclusion is corrected', async () => {
+    const root = await seedTree({scope: 'subtree', profile: 'words'})
+    await root.set(charExcludeProp, '#Draft misspelled=exclude')
+    renderBlock(ROOT)
+    await screen.findByText('Invalid exclusion query')
+    await root.set(charExcludeProp, '#Draft')
+    await repo.addType(GRANDCHILD, 'draft')
+    await waitFor(() => expect(badgeText()).toBe('5'), {timeout: TIMEOUT_MS})
+  })
+
+  it('uses the counter subtree to bound an ancestor query', async () => {
+    const root = await seedTree({type: WORD_COUNTER_TYPE})
+    await root.set(charExcludeProp, `under=((${CHILD}))`)
+    renderBlock(ROOT)
+    await waitFor(() => expect(badgeText()).toBe('2'), {timeout: TIMEOUT_MS})
+  })
+
   it('a word counter configured for its children counts each child', async () => {
-    await seedTree({type: WORD_COUNTER_TYPE, scope: 'children'})
+    const root = await seedTree({type: WORD_COUNTER_TYPE, scope: 'children'})
+    await repo.addType(CHILD, 'draft')
+    await root.set(charExcludeProp, '#Draft')
     renderBlock(CHILD)
     await waitFor(() => expect(badgeText()).toBe('3'), {timeout: TIMEOUT_MS})
   })

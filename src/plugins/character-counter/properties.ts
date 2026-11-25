@@ -53,3 +53,13 @@ export const charProfileProp = seedProperty({
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
+
+/** A block query whose matches and their descendants are skipped in subtree totals. */
+export const charExcludeProp = seedProperty({
+  seedKey: 'system:character-counter/property/exclude',
+  revision: 1,
+  name: 'char:exclude',
+  preset: 'string',
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})

@@ -14,6 +14,7 @@
  *  applies. */
 
 import { useCallback } from 'react'
+import type { Handle, SubtreeRow } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { typesProp } from '@/data/properties.js'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
@@ -24,9 +25,12 @@ import type {
   BlockGutterItemContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
+import { useParsedBlockQuery } from '@/plugins/tables/query/source'
+import { useTableQueryFacets } from '@/plugins/tables/query/registrations'
 import { COUNTER_TYPES } from './blockType'
-import { charLimitProp, charProfileProp, charScopeProp } from './properties'
+import { charExcludeProp, charLimitProp, charProfileProp, charScopeProp } from './properties'
 import { charCountDisplay } from './charCount'
+import { COUNTER_SUBTREE_QUERY } from './subtree'
 import {
   characterCountProfilesFacet,
   profileFrom,
@@ -53,14 +57,17 @@ const BadgeText = ({
   profile,
   text,
   over = false,
+  title,
 }: {
   profile: CharacterCountProfile
   text: string
   over?: boolean
+  title?: string
 }) => (
   <span
     className={`select-none text-xs tabular-nums ${over ? 'text-destructive' : 'text-muted-foreground'}`}
     aria-label={`${profileLabel(profile)} count`}
+    title={title}
   >
     {text}
   </span>
@@ -77,25 +84,41 @@ const BlockCountBadge = ({block, profile, limit}: BadgeProps) => {
   return <BadgeText profile={profile} text={text} over={over}/>
 }
 
-const SubtreeCountBadge = ({
-  block,
+type TextCountBadgeProps = BadgeProps & {countText: (content: string) => number}
+
+const SubtreeTotal = ({
+  handle,
   profile,
   limit,
   countText,
-}: BadgeProps & {countText: (content: string) => number}) => {
+}: Omit<TextCountBadgeProps, 'block'> & {handle: Handle<SubtreeRow[]>}) => {
   const sumRows = useCallback(
     (rows: readonly {content: string}[] | undefined) =>
       rows?.reduce((sum, row) => sum + countText(row.content), 0),
     [countText],
   )
-  const total = useHandle(
-    block.repo.query.subtree({id: block.id, propertyChildren: 'none'}),
-    {selector: sumRows},
-  )
+  const total = useHandle(handle, {selector: sumRows})
   // Nothing until the subtree has loaded: an empty sum would read as a real 0.
   if (total === undefined) return null
   const {text, over} = charCountDisplay(total, limit)
   return <BadgeText profile={profile} text={text} over={over}/>
+}
+
+const FilteredSubtreeCount = ({block, query, ...badge}: TextCountBadgeProps & {query: string}) => {
+  const workspaceId = useHandle(block, {selector: row => row?.workspaceId ?? ''})
+  const facets = useTableQueryFacets(workspaceId)
+  const parsed = useParsedBlockQuery(block, workspaceId, query, facets, true)
+  if (!workspaceId || !parsed) return null
+  const error = parsed.errors[0]
+  if (error) return <BadgeText profile={badge.profile} text="Invalid exclusion query" title={error.message} over/>
+  const handle = block.repo.query[COUNTER_SUBTREE_QUERY]({id: block.id, exclude: {workspaceId, ...parsed.query}})
+  return <SubtreeTotal handle={handle} {...badge}/>
+}
+
+const SubtreeCountBadge = ({block, ...badge}: TextCountBadgeProps) => {
+  const [exclude] = useProperty(block, charExcludeProp)
+  if (exclude.trim()) return <FilteredSubtreeCount block={block} query={exclude} {...badge}/>
+  return <SubtreeTotal handle={block.repo.query.subtree({id: block.id, propertyChildren: 'none'})} {...badge}/>
 }
 
 const CountBadge = ({block, config}: {block: Block, config: CounterConfig}) => {

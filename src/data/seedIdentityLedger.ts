@@ -128,6 +128,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:backlinks/property/daily-note-backlinks-predicates', 'dailyNotes:backlinksPredicates', 'backlinks:predicates', 'backlinks:predicates'],
   ['system:backlinks/property/predicates', 'backlinks:predicates', 'backlinks:predicates', 'backlinks:predicates'],
   ['system:block-tagging/property/tags-config', 'blockTagging:tagsConfig', 'blockTagging:tagsConfig', 'blockTagging:tagsConfig'],
+  ['system:character-counter/property/exclude', 'char:exclude', 'string', 'string'],
   ['system:character-counter/property/limit', 'char:limit', 'optional-number', 'number'],
   ['system:character-counter/property/profile', 'char:profile', 'optional-string', 'string'],
   ['system:character-counter/property/scope', 'char:scope', 'strict-enum', 'enum'],

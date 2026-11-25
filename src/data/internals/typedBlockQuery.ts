@@ -571,8 +571,8 @@ export const hasCandidateAxis = (
  *  pre-fetch ancestor dep nodes (e.g. `resolveTypedBlocks`) call this
  *  before issuing the dep SQL so an invalid query doesn't trigger
  *  exactly the expensive walk the gate is meant to prevent. */
-export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery, context: WhereContext): void => {
-  if (needsAncestorChain(query) && !hasCandidateAxis(query, p => isSelfScope(p) && selfPredicateNarrows(p, context))) {
+const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery, context: WhereContext, candidateIds?: readonly string[]): void => {
+  if (candidateIds === undefined && needsAncestorChain(query) && !hasCandidateAxis(query, p => isSelfScope(p) && selfPredicateNarrows(p, context))) {
     throw new Error(
       '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +
       '(parentId, types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
@@ -585,6 +585,7 @@ const candidateSource = (
   normalized: ResolvedTypedBlockQuery,
   context: WhereContext,
   recognition: RecognitionParams,
+  candidateIds?: readonly string[],
 ): {sql: string; params: unknown[]; distinct: boolean} => {
   const types = normalized.types ?? []
   const matchPredicates = normalized.match ?? []
@@ -638,6 +639,8 @@ const candidateSource = (
     let index = ''
     if (normalized.anyOf?.length === 0) {
       // The group compiles to `0`, which SQLite plans with no index; forcing one leaves it no plan at all.
+    } else if (candidateIds !== undefined) {
+      index = ' INDEXED BY sqlite_autoindex_blocks_1'
     } else if (normalized.parentId !== undefined) {
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
@@ -655,6 +658,10 @@ const candidateSource = (
     params.push(normalized.workspaceId)
   }
 
+  if (candidateIds !== undefined) {
+    clauses.push('b.id IN (SELECT value FROM json_each(?))')
+    params.push(JSON.stringify(candidateIds))
+  }
   if (normalized.parentId !== undefined) {
     clauses.push('b.parent_id = ?')
     params.push(normalized.parentId)
@@ -707,8 +714,9 @@ export const buildCandidatesCte = (
   query: ResolvedTypedBlockQuery,
   context: WhereContext,
   recognition: RecognitionParams = NO_REGISTRY_RECOGNITION_PARAMS,
+  candidateIds?: readonly string[],
 ): CompiledTypedBlockQuery => {
-  const source = candidateSource(query, context, recognition)
+  const source = candidateSource(query, context, recognition, candidateIds)
   return {sql: `candidates AS (SELECT DISTINCT b.id ${source.sql})`, params: source.params}
 }
 
@@ -778,15 +786,15 @@ const resultOrder = (query: ResolvedTypedBlockQuery, context: WhereContext): Com
 export const compileTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
   context: WhereContext,
-  opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams} = {},
+  opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams; candidateIds?: readonly string[]} = {},
 ): CompiledTypedBlockQuery => {
   const normalized = normalizeTypedBlockQuery(query, opts.projection)
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
 
-  assertAncestorWalkBounded(normalized, context)
+  assertAncestorWalkBounded(normalized, context, opts.candidateIds)
 
-  const source = candidateSource(normalized, context, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS)
+  const source = candidateSource(normalized, context, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS, opts.candidateIds)
   const params = source.params
   const isCount = opts.projection === 'count'
   const select = opts.projection === 'ids' ? 'b.id AS id' : buildQualifiedBlockColumnsSql('b')
