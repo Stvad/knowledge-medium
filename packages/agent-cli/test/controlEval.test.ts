@@ -57,7 +57,7 @@ const startStubBridge = async (): Promise<StubBridge> => {
         }
         return send(202, {id})
       }
-      const commandMatch = req.method === 'GET' && req.url?.match(/^\/runtime\/commands\/([^/]+)$/)
+      const commandMatch = req.method === 'GET' && new URL(req.url!, 'http://localhost').pathname.match(/^\/runtime\/commands\/([^/]+)$/)
       if (commandMatch) {
         const id = decodeURIComponent(commandMatch[1]!)
         return send(200, {

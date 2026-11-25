@@ -363,7 +363,7 @@ export interface BridgeClientOptions {
   token?: string
   /** Default per-command completion timeout. */
   timeoutMs?: number
-  /** Poll cadence while waiting for a command result. */
+  /** Delay between status requests when the bridge returns an unfinished command. */
   pollIntervalMs?: number
   /** Workspace to name on every command that names none. Unpinned, such a
    *  command acts on whichever workspace the user's most recently focused app
@@ -478,10 +478,10 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     id: string,
     timeoutMs = defaultTimeoutMs,
   ): Promise<CommandResult> => {
-    const start = Date.now()
-
-    while (Date.now() - start < timeoutMs) {
-      const command = await authedRequest<CommandStatusResponse>(`${bridgeUrl}/runtime/commands/${id}`)
+    const deadline = Date.now() + timeoutMs
+    for (let remaining = timeoutMs; remaining > 0; remaining = deadline - Date.now()) {
+      const url = `${bridgeUrl}/runtime/commands/${id}?timeoutMs=${remaining}`
+      const command = await authedRequest<CommandStatusResponse>(url)
       if (command.status === 'completed') {
         return command.result
       }
@@ -490,7 +490,8 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
         throw new Error(neutralizeDisplayText(error?.message ?? `Runtime command ${id} failed`))
       }
 
-      await sleep(pollIntervalMs)
+      // Older bridges return a snapshot immediately. Limit their poll rate.
+      await sleep(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())))
     }
 
     throw new Error(`Timed out waiting for runtime command ${id}`)

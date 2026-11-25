@@ -349,6 +349,30 @@ describe('agent runtime bridge', () => {
       status: string, result?: {ok: boolean, value?: unknown, error?: {message: string}},
     }
 
+  it('returns the finished result to a waiting reader while ordinary status reads stay immediate', async () => {
+    await registerClient('alice-tab', {tokens: [{token: 'TOKEN-A'}]})
+    const id = await deliverPing()
+    const waitForResult = () => fetch(`${baseUrl}/runtime/commands/${id}?timeoutMs=60000`, {
+      headers: {authorization: 'Bearer TOKEN-A'},
+      signal: AbortSignal.timeout(3000),
+    }).then(response => response.json())
+    const waiting = waitForResult()
+    const unauthorized = await fetch(`${baseUrl}/runtime/commands/${id}?timeoutMs=60000`, {
+      headers: {authorization: 'Bearer TOKEN-B'},
+      signal: AbortSignal.timeout(3000),
+    })
+    expect(unauthorized.status).toBe(401)
+    expect((await statusOf(id)).status).toBe('delivered')
+    await fetch(`${baseUrl}/runtime/commands/${id}/result`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': 'alice-tab'},
+      body: JSON.stringify({ok: true, value: 'pong'}),
+    })
+    const done = await waiting
+    expect(done).toMatchObject({status: 'completed', result: {ok: true, value: 'pong'}})
+    expect(await waitForResult()).toEqual(done)
+  })
+
   it('reports a command completed only once its whole result has arrived', async () => {
     await registerClient('alice-tab', {tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice'}]})
     const id = await deliverPing()
@@ -705,12 +729,20 @@ describe('a token belongs to its user, not to a workspace', () => {
     })
     const {id} = await response.json()
 
+    const waiting = fetch(`${baseUrl}/runtime/commands/${id}?timeoutMs=60000`, {
+      headers: {authorization: 'Bearer TOKEN-A'},
+      signal: AbortSignal.timeout(3000),
+    }).then(response => response.json())
+    // A shorter wait expires with the pending snapshot; the command stays queued.
+    const pending = await fetch(`${baseUrl}/runtime/commands/${id}?timeoutMs=10`, {
+      headers: {authorization: 'Bearer TOKEN-A'},
+    })
+    expect((await pending.json()).status).toBe('pending')
+
     // Revoked in the app: the tab's next registration no longer lists it.
     await registerClient('alice-ws-1', {audience: {userId: 'alice', workspaceId: 'ws-1'}, tokens: []})
 
-    const status = await (await fetch(`${baseUrl}/runtime/commands/${id}`, {
-      headers: {authorization: 'Bearer TOKEN-A'},
-    })).json()
+    const status = await waiting
     expect(status.status).toBe('failed')
     expect(await nextFor('alice-ws-1')).toBeNull()
   })

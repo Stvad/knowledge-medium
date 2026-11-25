@@ -123,9 +123,7 @@ interface CommandRecord {
 
 // ----- long-poll waiter plumbing ---------------------------------------
 //
-// Shared by the command queue (clientId-keyed) and the events channel
-// (token-keyed): a parked waiter holds an open response, expires
-// after timeoutMs, and is dropped when the request closes.
+// A parked reader holds an open response until delivery, timeout or disconnect.
 
 interface ParkedWaiter {
   response: http.ServerResponse
@@ -192,6 +190,7 @@ const commands = new Map<CommandId, CommandRecord>()
 const pendingByClient = new Map<ClientId, CommandId[]>()
 // clientId -> Set<ParkedWaiter>
 const waitersByClient = new Map<ClientId, Set<ParkedWaiter>>()
+const resultWaiters = new Map<CommandId, Set<ParkedWaiter>>()
 // token hash -> the user whose tab last listed it, for the unknown-token
 // message. Never pruned: it holds one entry per token any tab ever listed.
 const tokenUsers = new Map<string, string>()
@@ -312,10 +311,32 @@ const tokenScope = (value: unknown): TokenScope =>
 // prefix check let a read-only token run `SELECT powersync_clear(1)`
 // (local-data wipe) or smuggle a second statement after a `;`.
 
-const failCommand = (command: CommandRecord, name: string, message: string): void => {
-  command.status = 'failed'
+const sendCommandStatus = (response: http.ServerResponse, command: CommandRecord): void => {
+  sendJson(response, 200, {
+    id: command.id,
+    status: command.status,
+    result: command.result,
+    clientId: command.clientId,
+    targetClientId: command.targetClientId,
+    createdAt: command.createdAt,
+    deliveredAt: command.deliveredAt,
+    completedAt: command.completedAt,
+  })
+}
+
+const finishCommand = (command: CommandRecord, status: 'completed' | 'failed', result: unknown): void => {
+  command.status = status
   command.completedAt = now()
-  command.result = {ok: false, error: {name, message}}
+  command.result = result
+  for (const waiter of resultWaiters.get(command.id) ?? []) {
+    clearTimeout(waiter.timeout)
+    sendCommandStatus(waiter.response, command)
+  }
+  resultWaiters.delete(command.id)
+}
+
+const failCommand = (command: CommandRecord, name: string, message: string): void => {
+  finishCommand(command, 'failed', {ok: false, error: {name, message}})
 }
 
 const dropClient = (clientId: ClientId): void => {
@@ -586,9 +607,9 @@ const appendEvent = (key: string, clientId: ClientId, event: Record<string, unkn
 /** Long-poll park duration. Clamped, and NaN (`?timeoutMs=abc`) falls
  *  back to the default instead of `setTimeout(…, NaN)` firing instantly
  *  and degenerating the long-poll into a hot poll. */
-const parseTimeoutMs = (requestUrl: URL): number => {
-  const raw = Number(requestUrl.searchParams.get('timeoutMs') ?? 25_000)
-  return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 60_000) : 25_000
+const parseTimeoutMs = (requestUrl: URL, defaultMs = 25_000): number => {
+  const raw = Number(requestUrl.searchParams.get('timeoutMs') ?? defaultMs)
+  return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 60_000) : defaultMs
 }
 
 const waitForNextEvents = (
@@ -697,9 +718,7 @@ const setCommandResult = async (
     failCommand(command, 'ResultUnreadable', `The app's result did not arrive whole: ${error instanceof Error ? error.message : String(error)}`)
     throw error
   }
-  command.status = 'completed'
-  command.completedAt = now()
-  command.result = result
+  finishCommand(command, 'completed', result)
   sendJson(response, 200, {ok: true})
 }
 
@@ -729,6 +748,7 @@ const getStatus = () => ({
 // an open response, so cancel + close those before dropping the maps.
 const resetState = (): void => {
   drainWaiters(waitersByClient)
+  drainWaiters(resultWaiters)
   drainWaiters(eventWaitersByToken)
   clients.clear()
   commands.clear()
@@ -918,16 +938,13 @@ const handleRequest = async (
         }
       }
 
-      sendJson(response, 200, {
-        id: command.id,
-        status: command.status,
-        result: command.result,
-        clientId: command.clientId,
-        targetClientId: command.targetClientId,
-        createdAt: command.createdAt,
-        deliveredAt: command.deliveredAt,
-        completedAt: command.completedAt,
-      })
+      const timeoutMs = parseTimeoutMs(requestUrl, 0)
+      const reply = () => sendCommandStatus(response, command)
+      if (timeoutMs > 0 && command.completedAt === null) {
+        parkWaiter(resultWaiters, command.id, request, {response}, timeoutMs, reply)
+      } else {
+        reply()
+      }
       return
     }
 

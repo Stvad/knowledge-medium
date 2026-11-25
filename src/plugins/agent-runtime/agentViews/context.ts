@@ -150,9 +150,13 @@ const visibleChildOfSql = (childRef: string, parentIdSql: string): string => `
 const visibleChildParams = (repo: Repo, workspaceId: string): unknown[] =>
   [workspaceId, ...registryRecognitionParams(repo)]
 
+/** Probe by parent for both the listing and its nested counts. A workspace
+ *  index here can visit the entire workspace once per candidate child. */
+const byParent = 'INDEXED BY idx_blocks_parent_order'
+
 /** Count of the children an outline shows; binds {@link visibleChildParams}. */
 const visibleChildCountSql = (rowRef: string): string => `
-  (SELECT count(*) FROM blocks vc WHERE ${visibleChildOfSql('vc', `${rowRef}.id`)})
+  (SELECT count(*) FROM blocks vc ${byParent} WHERE ${visibleChildOfSql('vc', `${rowRef}.id`)})
 `
 
 export const visibleChildCounts = async (
@@ -182,7 +186,7 @@ export const visibleChildrenLevel = async (
   const rows = await repo.db.getAll<BlockRow & {child_count: number}>(
     `SELECT child.*, ${visibleChildCountSql('child')} AS child_count
        FROM json_each(?) j
-       JOIN blocks child ON child.parent_id = j.value
+       JOIN blocks child ${byParent} ON child.parent_id = j.value
       WHERE ${visibleChildOfSql('child', 'j.value')}
       ORDER BY j.key, child.order_key, child.id
       LIMIT ? OFFSET ?`,
