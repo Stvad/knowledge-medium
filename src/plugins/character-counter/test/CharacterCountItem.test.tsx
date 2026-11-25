@@ -192,6 +192,18 @@ describe('CharacterCountItem', () => {
     await waitFor(() => expect(badgeText()).toBe('5'), {timeout: TIMEOUT_MS})
   })
 
+  it('shows a query error for a non-text value already stored on the counter', async () => {
+    const root = await seedTree({type: WORD_COUNTER_TYPE})
+    await repo.tx(async tx => {
+      await tx.update(ROOT, {properties: {...root.peek()!.properties, [charExcludeProp.name]: 42}})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(root.peek()!.properties[charExcludeProp.name]).toBe(42)
+
+    renderBlock(ROOT)
+    await screen.findByText('Invalid exclusion query')
+    expect(root.peek()!.properties[charExcludeProp.name]).toBe(42)
+  })
+
   it('uses the counter subtree to bound an ancestor query', async () => {
     const root = await seedTree({type: WORD_COUNTER_TYPE})
     await root.set(charExcludeProp, `under=((${CHILD}))`)

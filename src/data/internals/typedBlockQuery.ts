@@ -473,7 +473,7 @@ const compileAncestorPredicate = (
 }
 
 const compileAlternatives = (
-  predicates: readonly BlockPredicate[], context: WhereContext, workspaceId: string,
+  predicates: readonly BlockPredicate[], context: WhereContext, workspaceId?: string,
 ): CompiledClause => {
   const alternatives = predicates.map(predicate => isSelfScope(predicate)
     ? compilePredicateAgainstRow(predicate, 'b', context, workspaceId)
@@ -587,7 +587,11 @@ const candidateSource = (
   recognition: RecognitionParams,
   candidateIds?: readonly string[],
 ): {sql: string; params: unknown[]; distinct: boolean} => {
-  const types = normalized.types ?? []
+  // A caller-provided candidate set drives the block lookups. Membership
+  // predicates then probe each candidate instead of enumerating workspace matches.
+  const workspaceDriven = candidateIds === undefined
+  const indexedTypes = workspaceDriven ? normalized.types ?? [] : []
+  const indexedReference = workspaceDriven ? normalized.referencedBy : undefined
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
   const params: unknown[] = []
@@ -613,8 +617,8 @@ const candidateSource = (
   // `b.workspace_id = ?`. In the referencedBy branch there is no
   // `b.workspace_id = ?` to propagate from — scoping comes via
   // `br.workspace_id = ?` — and the planner uses the PK autoindex instead.
-  const membership = typeMembership('bt', types)
-  const typeJoin = types.length > 0
+  const membership = typeMembership('bt', indexedTypes)
+  const typeJoin = indexedTypes.length > 0
     ? `
       JOIN block_types bt
         ON bt.block_id = b.id
@@ -627,12 +631,12 @@ const candidateSource = (
   // `params` is still empty here, so one push before the branch covers both.
   params.push(...membership.params)
 
-  if (normalized.referencedBy !== undefined) {
+  if (indexedReference !== undefined) {
     from = `
       FROM block_references br
       JOIN blocks b ON b.id = br.source_id${typeJoin}
     `.trim()
-    const target = referenceTarget(normalized.referencedBy)
+    const target = referenceTarget(indexedReference)
     clauses.push('br.workspace_id = ?', target.sql, 'b.deleted = 0')
     params.push(normalized.workspaceId, ...target.params)
   } else {
@@ -644,11 +648,11 @@ const candidateSource = (
     } else if (normalized.parentId !== undefined) {
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
-    } else if (!types.length && normalized.anyOf?.length &&
+    } else if (!indexedTypes.length && normalized.anyOf?.length &&
       normalized.anyOf.every(p => isSelfScope(p) && hasIndexedMembershipTerm(p))) {
       // Before ANALYZE SQLite can scan the workspace index for a disjunction of indexed source-id lists.
       index = ' INDEXED BY sqlite_autoindex_blocks_1'
-    } else if (typeof normalized.order === 'object' && !types.length &&
+    } else if (typeof normalized.order === 'object' && !indexedTypes.length &&
       !normalized.where && predicateGroups(normalized).every(group => group.length === 0)) {
       // Arbitrary property sorts visit the workspace's live rows. Keep foreign workspaces off that path.
       index = ' INDEXED BY idx_blocks_workspace_active'
@@ -661,6 +665,12 @@ const candidateSource = (
   if (candidateIds !== undefined) {
     clauses.push('b.id IN (SELECT value FROM json_each(?))')
     params.push(JSON.stringify(candidateIds))
+    const {types, referencedBy} = normalized
+    if (types?.length || referencedBy !== undefined) {
+      const predicate = compilePredicateAgainstRow({types, referencedBy}, 'b', context)
+      clauses.push(predicate.sql)
+      params.push(...predicate.params)
+    }
   }
   if (normalized.parentId !== undefined) {
     clauses.push('b.parent_id = ?')
@@ -681,7 +691,7 @@ const candidateSource = (
   }
 
   if (normalized.anyOf !== undefined && !hasAncestorScope(normalized.anyOf)) {
-    const group = compileAlternatives(normalized.anyOf, context, normalized.workspaceId)
+    const group = compileAlternatives(normalized.anyOf, context, workspaceDriven ? normalized.workspaceId : undefined)
     clauses.push(group.sql)
     params.push(...group.params)
   }
@@ -706,7 +716,7 @@ const candidateSource = (
   }
 
   // An inner join can repeat a block through distinct matching types or reference fields.
-  const distinct = types.length > 1 || normalized.referencedBy !== undefined
+  const distinct = indexedTypes.length > 1 || indexedReference !== undefined
   return {sql: `${from} WHERE ${clauses.join(' AND ')}`, params, distinct}
 }
 
@@ -817,7 +827,7 @@ export const compileTypedBlockQuery = (
   const filterClauses: string[] = []
 
   if (normalized.anyOf && hasAncestorScope(normalized.anyOf)) {
-    const group = compileAlternatives(normalized.anyOf, context, normalized.workspaceId)
+    const group = compileAlternatives(normalized.anyOf, context, opts.candidateIds === undefined ? normalized.workspaceId : undefined)
     filterClauses.push(group.sql)
     params.push(...group.params)
   }

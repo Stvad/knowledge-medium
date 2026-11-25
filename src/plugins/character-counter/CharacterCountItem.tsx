@@ -17,7 +17,7 @@ import { useCallback } from 'react'
 import type { Handle, SubtreeRow } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { typesProp } from '@/data/properties.js'
-import { safeDecodeRowProperty } from '@/data/rowProperty'
+import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useHandle, useProperty } from '@/hooks/block.js'
 import type {
@@ -73,6 +73,9 @@ const BadgeText = ({
   </span>
 )
 
+const InvalidExclusionBadge = ({profile, message}: {profile: CharacterCountProfile; message: string}) =>
+  <BadgeText profile={profile} text="Invalid exclusion query" title={message} over/>
+
 interface BadgeProps {
   block: Block
   profile: CharacterCountProfile
@@ -110,14 +113,15 @@ const FilteredSubtreeCount = ({block, query, ...badge}: TextCountBadgeProps & {q
   const parsed = useParsedBlockQuery(block, workspaceId, query, facets, true)
   if (!workspaceId || !parsed) return null
   const error = parsed.errors[0]
-  if (error) return <BadgeText profile={badge.profile} text="Invalid exclusion query" title={error.message} over/>
+  if (error) return <InvalidExclusionBadge profile={badge.profile} message={error.message}/>
   const handle = block.repo.query[COUNTER_SUBTREE_QUERY]({id: block.id, exclude: {workspaceId, ...parsed.query}})
   return <SubtreeTotal handle={handle} {...badge}/>
 }
 
 const SubtreeCountBadge = ({block, ...badge}: TextCountBadgeProps) => {
-  const [exclude] = useProperty(block, charExcludeProp)
-  if (exclude.trim()) return <FilteredSubtreeCount block={block} query={exclude} {...badge}/>
+  const exclude = useHandle(block, {selector: row => row ? storedPropertyValue(row.properties, charExcludeProp.name) : undefined})
+  if (exclude !== undefined && typeof exclude !== 'string') return <InvalidExclusionBadge profile={badge.profile} message="Exclusion query must be text"/>
+  if (exclude?.trim()) return <FilteredSubtreeCount block={block} query={exclude} {...badge}/>
   return <SubtreeTotal handle={block.repo.query.subtree({id: block.id, propertyChildren: 'none'})} {...badge}/>
 }
 
