@@ -3,6 +3,8 @@ import {
   ChangeScope,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
+  scopePoliciesEquivalent,
+  type Tx,
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
@@ -13,17 +15,36 @@ import {
 import type { AddPropertyArgs } from './AddPropertyForm'
 import {declarationOnlyDefinitionForName} from './declarationOnly'
 
-export const writeProperty = (
+const canWriteProperty = (block: Block, schema: AnyPropertySchema): boolean =>
+  !block.repo.isReadOnly
+  && !isPropertyPanelReadOnlyProperty(schema.name)
+  && !declarationOnlyDefinitionForName(schema.name, block.repo.propertyDefinitions)
+
+export const writeProperty = async (
   block: Block,
   schema: AnyPropertySchema,
   decodedValue: unknown,
 ): Promise<void> => {
-  if (isPropertyPanelReadOnlyProperty(schema.name)) return Promise.resolve()
-  if (declarationOnlyDefinitionForName(
-    schema.name,
-    block.repo.propertyDefinitions,
-  )) return Promise.resolve()
-  return block.set(schema, decodedValue)
+  if (canWriteProperty(block, schema)) await block.set(schema, decodedValue)
+}
+
+export const resolveAndWriteProperty = async (
+  block: Block,
+  schema: AnyPropertySchema,
+  resolve: (tx: Tx) => Promise<unknown>,
+): Promise<boolean> => {
+  if (!canWriteProperty(block, schema)) return false
+  return block.repo.tx(async tx => {
+    if (!canWriteProperty(block, schema)) return false
+    const owner = await tx.get(block.id)
+    if (!owner || owner.deleted) return false
+    const currentSchema = await tx.resolvePropertySchema(block.id, schema)
+    if (!scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
+      || !canWriteProperty(block, currentSchema)) return false
+    tx.assertWritableWorkspace(owner.workspaceId)
+    await tx.setProperty(block.id, currentSchema, await resolve(tx))
+    return true
+  }, {scope: schema.changeScope, description: `set property ${schema.name} on ${block.id}`})
 }
 
 /** AddPropertyForm submit handler: adopt a registered schema if the

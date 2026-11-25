@@ -341,6 +341,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   },
   {
     category: 'data',
+    importPath: '@/plugins/daily-notes/dayProperty.js',
+    description: 'setDayProperty(tx, snapshot, ownerId, schema, day) links a UTC Date, ISO day or relative day in the same transaction.',
+    exports: ['setDayProperty'],
+    types: [],
+  },
+  {
+    category: 'data',
     importPath: '@/plugins/todo/schema.js',
     description: 'The built-in todo: type id + its `status` (open|done) property. Compose these onto your own record instead of declaring a private done flag — the block then renders as a checkbox and answers todo queries.',
     exports: ['TODO_TYPE', 'statusProp', 'todoType'],

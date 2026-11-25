@@ -1,5 +1,6 @@
 import type {
   AnyJoinedValuePreset,
+  AnyPropertySchema,
   AnyValuePresetCore,
   AnyValuePresetPresentation,
 } from '@/data/api'
@@ -46,3 +47,14 @@ export const readValuePresetRegistry = (runtime: FacetRuntime): ValuePresetRegis
 export const readValuePresets = (
   runtime: FacetRuntime,
 ): ReadonlyMap<string, AnyJoinedValuePreset> => readValuePresetRegistry(runtime).joined
+
+/** A config-sensitive presentation can specialize an existing storage codec. */
+export const resolveValuePresetPresentation = (
+  presets: ReadonlyMap<string, AnyJoinedValuePreset>,
+  schema: AnyPropertySchema,
+): AnyJoinedValuePreset | undefined => {
+  for (const preset of presets.values()) {
+    if (preset.matchesSchema?.(schema)) return preset
+  }
+  return presets.get(schema.codec.type)
+}

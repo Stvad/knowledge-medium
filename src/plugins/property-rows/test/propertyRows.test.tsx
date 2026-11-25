@@ -35,6 +35,8 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import * as propertyRows from '../index'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
+import { dailyNotesPlugin } from '@/plugins/daily-notes'
+import { dailyNoteBlockId, dailyNoteDateProp, getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { referencesPlugin } from '@/plugins/references'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModeInteractionExtension } from '@/plugins/vim-normal-mode'
@@ -428,7 +430,7 @@ describe('editing through a property row', () => {
     expect(screen.queryByRole('checkbox', {name: 'Toggle rows:ready'})).toBeNull()
   })
 
-  it('uses a complex preset’s opt-in editor with the value block as its subject', async () => {
+  it('resolves a complex preset value in the same write from its inline editor and property panel', async () => {
     const presetId = 'rows:dimensions'
     const core = definePresetCore<{width: number}>({
       id: presetId,
@@ -439,14 +441,23 @@ describe('editing through a property row', () => {
       seedKey: 'test/property/rows-dimensions', revision: 1, name: 'rows:dimensions',
       preset: core, changeScope: ChangeScope.BlockDefault,
     })
-    const InlineEditor = ({block, value, onChange}: PropertyEditorProps<{width: number}>) => (
-      <button type="button" data-editor-subject={block instanceof Block ? block.id : undefined}
-        onClick={() => onChange({width: value.width + 1})}>
-        Width {value.width}
-      </button>
+    const InlineEditor = ({block, value, onChange, resolveAndChange}: PropertyEditorProps<{width: number}>) => (
+      <>
+        <button type="button" data-editor-subject={block instanceof Block ? block.id : undefined}
+          onClick={() => onChange({width: value.width + 1})}>
+          Width {value.width}
+        </button>
+        <button type="button" onClick={() => void resolveAndChange?.(async tx => {
+          const next = {width: value.width + 1}
+          await tx.update(NOTE, {content: `Resolved width ${next.width}`})
+          return next
+        })}>
+          Resolve width
+        </button>
+      </>
     )
     addExtensions(valuePresetCoresFacet.of(core), definitionSeedsFacet.of(dimensions), valuePresetPresentationsFacet.of({
-      id: presetId, label: 'Dimensions', hideFromPicker: true, InlineEditor,
+      id: presetId, label: 'Dimensions', hideFromPicker: true, InlineEditor, Editor: InlineEditor,
     }))
     await materializePropertySeeds(repo, WS, [dimensions])
     await waitFor(() => expect(repo.propertySchemas.has(dimensions.name)).toBe(true))
@@ -460,7 +471,72 @@ describe('editing through a property row', () => {
     expect(await screen.findByRole('button', {name: 'Width 5'})).toBe(button)
     expect((await repo.load(valueId))?.content).toBe('{"width":5}')
     expect(owner.peekProperty(dimensions)).toEqual({width: 5})
+
+    fireEvent.click(screen.getByRole('button', {name: 'Resolve width'}))
+    expect(await screen.findByRole('button', {name: 'Width 6'})).toBe(button)
+    expect((await repo.load(valueId))?.content).toBe('{"width":6}')
+    expect((await repo.load(NOTE))?.content).toBe('Resolved width 6')
+    expect(owner.peekProperty(dimensions)).toEqual({width: 6})
+
+    await act(() => owner.set(showPropertiesProp, true))
+    const panel = document.querySelector<HTMLElement>('.tm-property-fields')!
+    const panelButton = await within(panel).findByRole('button', {name: 'Resolve width'})
+    fireEvent.click(panelButton)
+    await within(panel).findByRole('button', {name: 'Width 7'})
+    expect((await repo.load(valueId))?.content).toBe('{"width":7}')
+    expect((await repo.load(NOTE))?.content).toBe('Resolved width 7')
+    expect(owner.peekProperty(dimensions)).toEqual({width: 7})
   })
+
+  it('picks days from both surfaces for an existing daily-note reference', async () => {
+    const appointment = seedProperty({
+      seedKey: 'test/property/appointment', revision: 1, name: 'rows:appointment',
+      preset: 'optional-ref', config: {targetTypes: ['daily-note']}, changeScope: ChangeScope.BlockDefault,
+    })
+    addExtensions(dailyNotesPlugin({repo}), definitionSeedsFacet.of(appointment))
+    await materializePropertySeeds(repo, WS, [appointment, dailyNoteDateProp, aliasesProp])
+    await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
+    const owner = repo.block(OWNER)
+    const initial = await getOrCreateDailyNote(repo, WS, '2026-05-04')
+    await owner.set(appointment, initial.id)
+    mount({workspace: 'non-hidden'})
+
+    await screen.findByRole('link', {name: 'May 4th, 2026'})
+    await act(async () => {
+      await initial.setContent('Trip planning')
+      await initial.set(aliasesProp, ['2026-02-12', '2026-05-04'])
+    })
+    expect(initial.peekProperty(aliasesProp)?.[0]).toBe('2026-02-12')
+    const saved = await screen.findByRole('link', {name: 'Trip planning'})
+    expect(saved.getAttribute('href')).toContain(initial.id)
+    const inline = blockRow(saved)
+    const valueId = inline.dataset.blockId!
+    fireEvent.click(within(inline).getByRole('button', {name: 'Change day'}))
+    const dialog = screen.getByRole('dialog', {name: 'Change day'})
+    expect(within(dialog).getByRole('button', {name: 'May 4, 2026', pressed: true})).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Next month'}))
+    fireEvent.click(within(dialog).getByRole('button', {name: 'June 8, 2026'}))
+    await within(inline).findByRole('link', {name: 'June 8th, 2026'})
+    const juneId = dailyNoteBlockId(WS, '2026-06-08')
+    expect(owner.peekProperty(appointment)).toBe(juneId)
+    expect((await repo.load(valueId))?.referenceTargetId).toBe(juneId)
+
+    await act(() => owner.set(showPropertiesProp, true))
+    const panel = document.querySelector<HTMLElement>('.tm-property-fields')!
+    fireEvent.click(await within(panel).findByRole('button', {name: 'Change day'}))
+    const panelDialog = screen.getByRole('dialog', {name: 'Change day'})
+    const input = within(panelDialog).getByRole('textbox', {name: 'Day'})
+    fireEvent.change(input, {target: {value: '2026-02-30'}})
+    fireEvent.click(within(panelDialog).getByRole('button', {name: 'Set day'}))
+    expect(within(panelDialog).getByRole('alert')).toBeTruthy()
+    expect(owner.peekProperty(appointment)).toBe(juneId)
+    fireEvent.change(input, {target: {value: 'July 21, 2026'}})
+    fireEvent.click(within(panelDialog).getByRole('button', {name: 'Set day'}))
+    await within(panel).findByRole('link', {name: 'July 21st, 2026'})
+    const julyId = dailyNoteBlockId(WS, '2026-07-21')
+    expect(owner.peekProperty(appointment)).toBe(julyId)
+    expect((await repo.load(valueId))?.referenceTargetId).toBe(julyId)
+  }, 20_000)
 
   it('keeps an unresolved field-form child out of the scalar inline editor', async () => {
     const InlineEditor = ({value}: PropertyEditorProps<string>) => <button type="button">Edit {value}</button>

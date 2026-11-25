@@ -14,7 +14,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, seedProperty } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -27,15 +27,24 @@ import {
   addDaysIso,
   dailyNoteBlockId,
   getOrCreateDailyNote,
+  getOrCreateDailyNoteInTx,
   getOrCreateJournalBlock,
   journalBlockId,
   todayIso,
 } from '@/plugins/daily-notes/dailyNotes'
+import { resolveDayInput, setDayProperty } from '../dayProperty'
+import { definitionSeedsFacet } from '@/data/facets'
+import { dayValuePresetCore } from '../schema'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
 import { compileTypedBlockQuery } from '@/data/internals/typedBlockQuery'
 
 const WS = 'ws-1'
+
+const day = seedProperty({
+  seedKey: 'test/property/day', revision: 1, name: 'appointment-day',
+  preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+})
 
 interface Harness {
   h: TestDb
@@ -50,7 +59,7 @@ const setup = async (): Promise<Harness> => {
   const { repo, cache } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    extensions: [dailyNotesDataExtension],
+    extensions: [dailyNotesDataExtension, definitionSeedsFacet.of(day, {source: 'test'})],
   })
   return {h, cache, repo}
 }
@@ -147,6 +156,48 @@ describe('getOrCreateJournalBlock', () => {
     // Reclaims the canonical alias; the stale extra is NOT resurrected.
     expect(restored.peekProperty(aliasesProp)).toEqual(['Journal'])
     expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
+  })
+})
+
+describe('writing calendar days', () => {
+  it('shares the note, typed ref, and rollback with the calling transaction', async () => {
+    const {repo} = env
+    const snapshot = repo.snapshotTypeRegistries()
+    const opts = {scope: ChangeScope.BlockDefault}
+    const owner = await repo.tx(tx => tx.create({workspaceId: WS, parentId: null, orderKey: 'a'}), opts)
+    const iso = '2026-11-19'
+    const note = dailyNoteBlockId(WS, iso)
+    await expect(repo.tx(async tx => {
+      await setDayProperty(tx, snapshot, owner, day, new Date('2026-11-18T23:30:00-02:00'))
+      expect((await tx.get(owner))?.properties[day.name]).toBe(note)
+      expect((await tx.get(note))?.properties[dailyNoteDateProp.name]).toBe(iso + 'T00:00:00.000Z')
+      throw new Error('cancel edit')
+    }, opts)).rejects.toThrow('cancel edit')
+    expect(await repo.load(note)).toBeNull()
+    expect((await repo.load(owner))?.properties[day.name]).toBeUndefined()
+    await repo.tx(tx => setDayProperty(tx, snapshot, owner, day, iso), opts)
+    expect((await getOrCreateDailyNote(repo, WS, iso)).id).toBe(note)
+    expect((await repo.load(owner))?.properties[day.name]).toBe(note)
+    await expect(repo.tx(tx => setDayProperty(tx, snapshot, owner, aliasesProp as never, iso), opts)).rejects.toThrow('must reference daily notes')
+  })
+
+  it('refuses to link a day whose target carries a different anchor', async () => {
+    const {repo} = env
+    const iso = '2026-03-01'
+    const note = await getOrCreateDailyNote(repo, WS, iso)
+    const other = new Date('2026-03-02T00:00:00Z')
+    await note.set(dailyNoteDateProp, other)
+    await expect(repo.tx(tx => getOrCreateDailyNoteInTx(tx, repo.snapshotTypeRegistries(), WS, iso),
+      {scope: ChangeScope.BlockDefault})).rejects.toThrow('stored date differs')
+    expect((await repo.load(note.id))?.properties[dailyNoteDateProp.name]).toBe(other.toISOString())
+  })
+
+  it('resolves relative input against local today and rejects impossible ISO days', () => {
+    const now = new Date(2026, 10, 18, 14)
+    expect(resolveDayInput('tomorrow', now)).toBe('2026-11-19')
+    expect(resolveDayInput('next friday', now)).toBe('2026-11-27')
+    expect(() => resolveDayInput('2026-02-30', now)).toThrow('Invalid calendar date')
+    expect(() => resolveDayInput('gibberish', now)).toThrow('Invalid calendar day')
   })
 })
 

@@ -14,6 +14,7 @@ import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry
 import {
   addProperty,
   deleteProperty,
+  resolveAndWriteProperty,
   writeProperty,
 } from './actions'
 
@@ -39,6 +40,8 @@ describe('property panel action visibility guards', () => {
     }
 
     await writeProperty(block, seedKeyProp, 'tampered/property/key')
+    const resolve = vi.fn(async () => 'tampered/property/key')
+    await resolveAndWriteProperty(block, seedKeyProp, resolve)
     await deleteProperty({
       block,
       properties,
@@ -49,6 +52,7 @@ describe('property panel action visibility guards', () => {
 
     expect(set).not.toHaveBeenCalled()
     expect(tx).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
   })
 
   it('refuses add and delete when only projected metadata marks an ordinary schema hidden', async () => {
@@ -131,6 +135,9 @@ describe('property panel action visibility guards', () => {
       presetId: staleSchema.codec.type,
     })).resolves.toBeUndefined()
 
+    const resolve = vi.fn(async () => ({}))
+    await resolveAndWriteProperty(block, staleSchema, resolve)
+
     await deleteProperty({
       block,
       properties,
@@ -141,6 +148,7 @@ describe('property panel action visibility guards', () => {
 
     expect(tx).not.toHaveBeenCalled()
     expect(addSchema).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
   })
 
   // deleteProperty now routes a SCHEMA'd key through tx.unsetProperty, which
