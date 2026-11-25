@@ -27,6 +27,7 @@ import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, LIST_CONTEXT_KEY, ROW_CONTEXT_KEY, 
 import { ColumnHeaders, ColumnToolbar, type ResizePreview } from './ColumnHeaders'
 import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
 import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
+import { useTableQueryFacets, type TableQueryFacets } from './query/registrations'
 import { useTableQuery, type TableQuery } from './query/source'
 import { columnSortKeys, sortOrder, useViewSort, writeSort, type ViewSort } from './sort'
 import { notesAmong } from './childrenViews'
@@ -351,12 +352,13 @@ interface GridProps {
  *  never flashes as empty. */
 const TableGrid = (props: GridProps) => {
   const viewIds = useViewIds(props.host, props.workspaceId)
-  const query = useTableQuery(props.host, props.workspaceId)
+  const facets = useTableQueryFacets(props.workspaceId)
+  const query = useTableQuery(props.host, props.workspaceId, facets)
   if (viewIds === undefined || query === undefined) return null
   if (viewIds.length === 0) return <p className="py-1 text-sm text-muted-foreground">
     This table has no view. Show it as an outline and turn it into a table again to add one.
   </p>
-  return <TableView {...props} viewIds={viewIds} query={query}/>
+  return <TableView {...props} viewIds={viewIds} query={query} facets={facets}/>
 }
 
 const NO_COLUMNS: readonly TableColumn[] = []
@@ -371,17 +373,18 @@ const useColumnDefinitions = (repo: Block['repo'], workspaceId: string, columns:
   const names = useMemo(() => columns.map((column, index) => column.label ||
     (column.fieldId === null ? 'Title' : definitionsOf[index]?.name ?? 'Unknown property')), [columns, definitionsOf])
   const schemas = useMemo(() => definitionsOf.map(definition => definition?.schema), [definitionsOf])
-  return {schemas, names, sortKeys: columnSortKeys(repo, workspaceId, schemas)}
+  return {schemas, names}
 }
 
 type ColumnSchema = AnyPropertySchema | undefined
 
 /** Hidden columns are drawn nowhere but in the toolbar, which shows them again. */
-const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQuery | null}) => {
+const TableView = ({facets, ...props}: GridProps & {viewIds: readonly string[]; query: TableQuery | null; facets: TableQueryFacets}) => {
   const viewId = props.viewIds[0]!
   const all = useColumns(props.host, props.workspaceId, viewId)
-  const {schemas, names, sortKeys} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
+  const {schemas, names} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
   const sort = useViewSort(props.host.repo.block(viewId))
+  const sortKeys = columnSortKeys(props.host.repo, props.workspaceId, schemas, facets)
   const order = sortOrder(sort, all ?? NO_COLUMNS, sortKeys)
   const split = useMemo(() => {
     const shown = {columns: [] as TableColumn[], schemas: [] as ColumnSchema[], names: [] as string[]}

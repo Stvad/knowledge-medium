@@ -3,12 +3,11 @@
  *  one transaction and one undo step. */
 import { ChangeScope, memberCodecOf, type AnyPropertySchema, type TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
-import { refTargetComparisonFor } from '@/data/comparableRefTarget'
-import { queryableFieldsFacet } from '@/data/facets'
 import type { Repo } from '@/data/repo'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle } from '@/hooks/block'
 import type { TableColumn } from './model'
+import { readTableQueryFacets, refValueTarget, type TableQueryFacets } from './query/registrations'
 import { viewSortColumnProp, viewSortDirectionProp, type SortDirection } from './schema'
 
 export interface ViewSort {
@@ -20,13 +19,13 @@ type SortKey = Omit<Extract<TypedBlockQuery['order'], {property: string}>, 'dire
 
 export const columnSortKeys = (
   repo: Repo, workspaceId: string, schemas: readonly (AnyPropertySchema | undefined)[],
+  facets: TableQueryFacets = readTableQueryFacets(repo.facetRuntime, workspaceId),
 ): readonly (SortKey | undefined)[] => {
-  const fields = repo.facetRuntime?.read(queryableFieldsFacet, workspaceId)
-  const refTarget = refTargetComparisonFor(repo, workspaceId)
+  const properties = repo.propertySchemasFor(workspaceId)
   return schemas.map(schema => {
-    if (!schema || fields?.has(schema.name) || memberCodecOf(schema.codec)) return undefined
+    if (!schema || facets.fields?.has(schema.name) || memberCodecOf(schema.codec)) return undefined
     if (schema.codec.where) return {property: schema.name}
-    const target = refTarget(schema)
+    const target = refValueTarget(schema, properties, facets)
     return target ? {property: schema.name, target: target.name} : undefined
   })
 }

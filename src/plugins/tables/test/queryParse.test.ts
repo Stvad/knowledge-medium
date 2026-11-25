@@ -176,6 +176,18 @@ describe('parseQuery reference ranges', () => {
     expect(impliedValue(result.terms[0]!)).toBeUndefined()
   })
 
+  it('does not backfill a target value into a reference with its own comparison capability', () => {
+    const ref = resolver.propertyByName('assignee')!
+    const text = resolver.propertyByName('label')!.schema.codec.where
+    const schema = {...ref.schema, codec: {...ref.schema.codec, where: text}}
+    const parsed = parseQuery('assignee=2026-01-05', {
+      ...resolver, propertyByName: () => ({...ref, schema}),
+      refValueTarget: () => resolver.propertyByName('due')!.schema,
+    }, options)
+    expect(parsed.errors).toEqual([])
+    expect(impliedValue(parsed.terms[0]!)).toBeUndefined()
+  })
+
   it('reports a bad target value at the operand and keeps the remaining terms', () => {
     const text = '#book assignee>=2026-02-30 status=open'
     const result = through(text, 'due')

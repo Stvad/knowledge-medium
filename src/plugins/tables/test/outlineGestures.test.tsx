@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { EditorView } from '@codemirror/view'
 import * as structuralEdits from '@/data/structuralEditPolicy'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
-import { definitionSeedsFacet } from '@/data/facets'
+import { definitionSeedsFacet, queryableFieldsFacet, refTargetComparablePropertiesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -247,6 +247,20 @@ it('cycles the daily note reference header through date order and outline order'
     expect(header).toHaveAttribute('aria-sort', 'ascending')
     expect(order()).toEqual(['row-1', 'row-0', 'row-2'])
   })
+  const replaceTarget = (property: string | undefined) => act(() => {
+    repo.setRuntimeContributions(refTargetComparablePropertiesFacet, 'test-override',
+      property ? [{targetType: DAILY_NOTE_TYPE, property}] : [], {workspaceId: WS})
+  })
+  replaceTarget(tags.name)
+  await waitFor(() => {
+    expect(header).not.toHaveAttribute('aria-sort')
+    expect(order()).toEqual(['row-0', 'row-2', 'row-1'])
+  })
+  replaceTarget(undefined)
+  await waitFor(() => {
+    expect(header).toHaveAttribute('aria-sort', 'ascending')
+    expect(order()).toEqual(['row-1', 'row-0', 'row-2'])
+  })
   clickHeader()
   await waitFor(() => {
     expect(header).toHaveAttribute('aria-sort', 'descending')
@@ -257,7 +271,34 @@ it('cycles the daily note reference header through date order and outline order'
     expect(header).not.toHaveAttribute('aria-sort')
     expect(order()).toEqual(['row-0', 'row-2', 'row-1'])
   })
+  await act(async () => {
+    await repo.block(HOST).set(queryProp, `childof=self ${planned.name}>=2026-01-05`)
+  })
+  await waitFor(() => expect(order()).toEqual(['row-0']))
+  replaceTarget(tags.name)
+  await waitFor(() => {
+    expect(document.querySelector('[data-table-query-errors]')).not.toBeNull()
+    expect(new Set(order())).toEqual(new Set(['row-0', 'row-1', 'row-2']))
+  })
 }, 20_000)
+
+it('reparses a mounted table when a queryable field becomes available', async () => {
+  await repo.block(HOST).set(queryProp, 'childof=self score>=1')
+  mount()
+  await waitFor(() => expect(document.querySelector('[data-table-query-errors]')).not.toBeNull())
+  act(() => {
+    repo.setRuntimeContributions(queryableFieldsFacet, 'test-override', [{
+      name: 'score',
+      value: alias => ({sql: `CASE WHEN ${alias}.id = ? THEN 1 ELSE 0 END`, params: ['row-1']}),
+      encode: operand => Number(operand),
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }], {workspaceId: WS})
+  })
+  await waitFor(() => {
+    expect(document.querySelector('[data-table-query-errors]')).toBeNull()
+    expect([...document.querySelectorAll<HTMLElement>('[data-table-row]')].map(row => row.dataset.tableRow)).toEqual(['row-1'])
+  })
+})
 
 describe('a list cell draws its members as outline blocks', () => {
   it('shows each member with a bullet, not as a bare cell value', async () => {
