@@ -1,1 +1,1 @@
-export{IP as ShortcutHelpHeaderItem}from"../../../chunks/app-Cl1IrUGP.js";
+export{WP as ShortcutHelpHeaderItem}from"../../../chunks/app-I9wXKn0D.js";
