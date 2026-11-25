@@ -1,0 +1,1 @@
+export{$Q as htmlDocumentDataExtension}from"../../../chunks/app-Bp0aTqda.js";

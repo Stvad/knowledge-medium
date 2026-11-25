@@ -1,0 +1,1 @@
+export{WS as EmbedComponent,GS as referenceTargetOf}from"../../../../chunks/app-Bp0aTqda.js";

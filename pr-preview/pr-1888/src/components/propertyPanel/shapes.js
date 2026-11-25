@@ -1,0 +1,1 @@
+export{NY as propertyShapeLabel}from"../../../chunks/app-Bp0aTqda.js";

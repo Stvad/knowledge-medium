@@ -1,0 +1,1 @@
+export{rk as plainOutlinerPlugin}from"../../../chunks/app-Bp0aTqda.js";

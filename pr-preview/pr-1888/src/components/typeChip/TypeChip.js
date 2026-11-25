@@ -1,0 +1,1 @@
+export{kI as TypeChip}from"../../../chunks/app-Bp0aTqda.js";

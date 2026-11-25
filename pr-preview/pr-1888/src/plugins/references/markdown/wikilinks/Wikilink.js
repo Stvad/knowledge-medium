@@ -1,0 +1,1 @@
+export{VS as Wikilink}from"../../../../../chunks/app-Bp0aTqda.js";

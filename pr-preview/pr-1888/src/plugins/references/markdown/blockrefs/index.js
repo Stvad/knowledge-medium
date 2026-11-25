@@ -1,0 +1,1 @@
+export{US as blockrefMarkdownExtension}from"../../../../../chunks/app-Bp0aTqda.js";

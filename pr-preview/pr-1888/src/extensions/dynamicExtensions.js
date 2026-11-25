@@ -1,0 +1,1 @@
+export{FR as dynamicExtensionsExtension}from"../../chunks/app-Bp0aTqda.js";

@@ -1,0 +1,1 @@
+export{sG as buildPropertyPanelSections}from"../../chunks/app-Bp0aTqda.js";

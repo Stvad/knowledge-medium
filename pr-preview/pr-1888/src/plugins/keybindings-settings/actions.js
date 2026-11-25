@@ -1,0 +1,1 @@
+export{VP as openKeybindingsSettingsAction}from"../../../chunks/app-Bp0aTqda.js";

@@ -1,0 +1,1 @@
+export{Bm as quotedInFooterContribution}from"../../../chunks/app-Bp0aTqda.js";

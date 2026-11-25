@@ -1,0 +1,1 @@
+export{Qet as kernelDataExtension}from"../../chunks/app-Bp0aTqda.js";
