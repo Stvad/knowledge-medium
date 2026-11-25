@@ -12,15 +12,17 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
+import { captureOccurrenceEdge, merge as mergeMutator } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import { holdsSource } from '@/data/blockTypes'
-import { bothShowIndependentChildren, mergeUp } from './blockMergeGesture'
+import { bothShowIndependentChildren, mergeCheck, mergeUp } from './blockMergeGesture'
 import {
-  nextVisibleBlock,
-  previousVisibleBlock,
+  nextDrawnStep,
+  previousDrawnStep,
   getRootBlock,
-  blockAfterSubtreeRemoval,
+  locationAfterSubtreeRemoval,
+  nestedWriteLocation,
+  type DrawnLocation,
 } from '@/utils/selection.js'
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
@@ -30,12 +32,13 @@ import {
   topLevelBlockIdProp,
   setIsEditing,
 } from '@/data/properties.js'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { memberMergePlacement } from '@/data/structuralEditPolicy.js'
+import { insertDrawnBlock, type InsertGesture } from '@/data/structuralInsert'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent.js'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
-import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
+import { applyToAllBlocksInSelection, focusedOccurrenceInSelection, makeMultiSelect, surfaceForSelection } from './utils'
 import {
   BlockAction,
   bindBlockActionContext,
@@ -57,7 +60,7 @@ import {
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard, cutBlockIdsToClipboard } from '@/utils/copy.js'
 import {
-  deleteBlockThroughUi,
+  deleteAtOccurrenceThroughUi,
   deleteBlocksThroughUi,
   ensureDeletableThroughUi,
 } from '@/utils/deleteBlockThroughUi.js'
@@ -148,44 +151,41 @@ const writeWithEditorRearmed = async <T>(
 ): Promise<T> => {
   flushPendingEditorContent()
   const undo = applyEndEdit(editorView, edit)
+  let committed = false
   try {
-    return await write()
-  } catch (error) {
-    // Text typed into what `edit` inserted can't be told apart from it, so all
-    // of it stays: duplicated in both blocks rather than cut short.
-    const {doc} = editorView.state
-    const inserted = undo.end === 'start' ? doc.sliceString(0, undo.remove) : doc.sliceString(doc.length - undo.remove)
-    if (inserted === edit.insert) applyEndEdit(editorView, undo)
-    throw error
+    const result = await write()
+    if (result !== null) committed = true
+    return result
+  } finally {
+    if (!committed) {
+      // Text typed into the inserted range stays whole.
+      const {doc} = editorView.state
+      const inserted = undo.end === 'start' ? doc.sliceString(0, undo.remove) : doc.sliceString(doc.length - undo.remove)
+      if (inserted === edit.insert) applyEndEdit(editorView, undo)
+    }
   }
 }
 
-/**
- * Split the edited block at the cursor, passing the live text (a debounced
- * editor can be ahead of SQL); returns the id of the block that now holds the
- * text after the cursor, which takes focus.
- *
- * At the scope root (a backlink entry, embed, or zoomed panel root) the
- * default split would push the before-cursor text into a preceding sibling —
- * which lives outside the visible surface, silently burying the first half
- * (the same class as the "invisible block" bug for `o`/`O`). There the root
- * keeps the before-text and the continuation becomes its first child,
- * mirroring the reading order (root = first half, child = the rest).
- */
-const splitAtCursor = async (
-  block: Block,
-  editorView: EditorView,
-  placement: SplitPlacement,
-): Promise<string> => {
+const insertGestureAtCursor = (editorView: EditorView): InsertGesture => {
+  const {doc} = editorView.state
   const cursorPos = editorView.state.selection.main.head
-  const before = editorView.state.doc.sliceString(0, cursorPos)
-  const after = editorView.state.doc.sliceString(cursorPos)
-  const keepsBefore = placement === 'firstChild'
-  const newId = await writeWithEditorRearmed(
-    editorView,
-    keepsBefore ? {end: 'end', remove: after.length, insert: ''} : {end: 'start', remove: before.length, insert: ''},
-    () => block.repo.mutate.split({id: block.id, before, after, placement}))
-  return keepsBefore ? newId : block.id
+  if (cursorPos === doc.length) return {kind: doc.length === 0 ? 'empty-enter' : 'enter'}
+
+  const isCurrent = () => editorView.state.doc === doc && editorView.state.selection.main.head === cursorPos
+
+  return {
+    kind: 'split',
+    isCurrent,
+    write: async (placement, commit) => {
+      // A view can resolve asynchronously. Keep a newer edit or caret position intact.
+      if (!isCurrent()) return null
+      const before = doc.sliceString(0, cursorPos)
+      const after = doc.sliceString(cursorPos)
+      return writeWithEditorRearmed(editorView, placement === 'firstChild'
+        ? {end: 'end', remove: after.length, insert: ''}
+        : {end: 'start', remove: before.length, insert: ''}, () => commit(before, after))
+    },
+  }
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -797,63 +797,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => {
         // The palette dispatches by id, so this guard belongs in the handler.
         if (deps.disableBlockSplit) return
-        const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
-        if (!block || !editorView || !uiStateBlock) return
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
+        if (!block || !editorView || !uiStateBlock || !scopeRootId) return
 
         // NOTE: Enter-accepts-an-open-completion is handled INSIDE the editor
         // (acceptCompletionBeforeIOSDefer capture handler + CM's completion
         // keymap), which swallow the key before it reaches this window-level
         // shortcut. So this shortcut stays completion-unaware and just splits.
-        if (!scopeRootId) return
-
-        const policy = await structuralEditPolicyForBlock(block, deps)
-
-        const selection = editorView.state.selection.main
-        const doc = editorView.state.doc
-        const cursorPos = selection.head
-
-        const createSiblingBelow = async () => {
-          const newId = await repo.mutate.createSiblingBelow({siblingId: block.id})
-          if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
-        }
-
-        // Case 1: Cursor is in middle of text
-        if (cursorPos < doc.length) {
-          if (holdsSource(block)) return
-          const focusId = await splitAtCursor(block, editorView, policy.isScopeRoot ? 'firstChild' : 'siblingBefore')
-          await focusBlock(uiStateBlock, focusId, {
-            edit: true,
-            renderScopeId: deps.renderScopeId,
-            selection: {start: 0},
-          })
-        }
-        // Case 2: Cursor at end and the new block belongs as a first
-        // child — either the block shows children, or it's the scope
-        // root (where a sibling would land outside the surface).
-        else if (cursorPos === doc.length && policy.createBelowPlacement === 'child-first') {
-          const newId = await repo.mutate.createChild({
-            parentId: block.id,
-            position: {kind: 'first'},
-            revealParent: true,
-          })
-          if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
-        }
-        // Repeated empty blocks creation - outdents the new block.
-        // outdent returns false if the block is at the surface boundary
-        // (parent === scopeRootId) or already at workspace root — fall
-        // back to creating a sibling below. The scope root itself can't
-        // outdent (canOutdent false), so it falls back too.
-        // Unwrapped (see indent/outdent in blockActions): the
-        // root-level crossfade ghosts the shifting siblings, which
-        // reads as blur. The unwrapped shift is cleaner.
-        else if (editorView.state.doc.length === 0) {
-          const moved = policy.canOutdent && await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})
-          if (!moved) await createSiblingBelow()
-        }
-        // Cursor at end, no children or they are collapsed
-        else {
-          await createSiblingBelow()
-        }
+        const gesture = insertGestureAtCursor(editorView)
+        const target = await insertDrawnBlock(block, deps, gesture)
+        if (!target) return
+        await focusBlock(uiStateBlock, target.id, {
+          edit: target.edit ?? true,
+          renderScopeId: target.renderScopeId,
+          ...(gesture.kind === 'split' && {selection: {start: 0}}),
+        })
       },
       defaultBinding: {
         keys: 'Enter',
@@ -888,17 +846,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, surface)
+        const {block: prevVisible, surface: destination} = await previousDrawnStep(block, surface)
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
-        if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last')) {
+        if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last', destination.renderScopeId)) {
           setIsEditing(uiStateBlock, false)
           return
         }
 
         await focusBlock(uiStateBlock, prevVisible.id, {
           edit: true,
-          renderScopeId: deps.renderScopeId,
+          renderScopeId: destination.renderScopeId,
           selection: {line: 'last', x: caretX},
         })
       },
@@ -930,17 +888,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        if (focusPropertyRow(block.id, 'first')) {
+        if (focusPropertyRow(block.id, 'first', surface.renderScopeId)) {
           setIsEditing(uiStateBlock, false)
           return
         }
 
-        const nextVisible = await nextVisibleBlock(block, surface)
+        const {block: nextVisible, surface: destination} = await nextDrawnStep(block, surface)
         if (!nextVisible) return
 
         await focusBlock(uiStateBlock, nextVisible.id, {
           edit: true,
-          renderScopeId: deps.renderScopeId,
+          renderScopeId: destination.renderScopeId,
           selection: {x: caretX},
         })
       },
@@ -964,13 +922,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, surface)
+        const {block: prevVisible, surface: destination} = await previousDrawnStep(block, surface)
         if (!prevVisible) return
 
         const prevData = await prevVisible.load()
         await focusBlock(uiStateBlock, prevVisible.id, {
           edit: true,
-          renderScopeId: deps.renderScopeId,
+          renderScopeId: destination.renderScopeId,
           selection: {start: prevData?.content.length ?? 0},
         })
       },
@@ -994,12 +952,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const nextVisible = await nextVisibleBlock(block, surface)
+        const {block: nextVisible, surface: destination} = await nextDrawnStep(block, surface)
         if (!nextVisible) return
 
         await focusBlock(uiStateBlock, nextVisible.id, {
           edit: true,
-          renderScopeId: deps.renderScopeId,
+          renderScopeId: destination.renderScopeId,
           selection: {start: 0},
         })
       },
@@ -1017,18 +975,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Only act when the cursor is at position 0 with no selection;
         // otherwise codemirror's default backspace handles it.
-        const sel = editorView.state.selection.main
+        const {doc, selection: {main: sel}} = editorView.state
+        const isCurrent = () => editorView.state.doc.toString() === doc.toString() && editorView.state.selection.main.empty && editorView.state.selection.main.head === 0
         if (!(sel.empty && sel.from === 0)) return
 
         const surface = outlineSurfaceOf(deps)
         if (!surface) return
 
-        // Don't merge the scope root into a block outside the surface —
-        // there's no visible previous block to merge into here.
-        const {canMergeUp} = await structuralEditPolicyForBlock(block, deps)
+        const source = block.peek() ?? await block.load()
+        if (!source) return
+        const occurrence = nestedWriteLocation(block, surface.renderScopeId)
+        const canMergeUp = block.id !== surface.scopeRootId
 
         // Live content from the editor — SQL may lag (pushChange is debounced).
-        const liveContent = editorView.state.doc.toString()
+        const liveContent = doc.toString()
 
         // Empty block: delete it and move focus up. Both branches are gated on
         // `canMergeUp` because both are the same gesture — "consume this block
@@ -1037,7 +997,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // about deletability: explicit Delete on the scope root IS allowed
         // (page deletion), it just isn't something Backspace should trigger on
         // an accidentally-emptied page.
-        if (liveContent === '') {
+        const member = await memberMergePlacement(block, surface, occurrence)
+        if (member === null) return
+        // A member's children survive empty Backspace by following the merge into its predecessor.
+        if (liveContent === '' && !member) {
           if (!canMergeUp) return
           trigger.preventDefault()
           // This path deletes the block's whole subtree, so it needs the same
@@ -1049,21 +1012,27 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           // actually happened. A refusal must not leave the cursor somewhere
           // else on a block that survived, which is what "it looks like the
           // block vanished" means here.
-          const landing: {at: {id: string; start: number} | null} = {at: null}
-          const deleted = await deleteBlockThroughUi(block, {
-            beforeWrite: async () => {
-              const prevVisible = await previousVisibleBlock(block, surface)
-              if (!prevVisible) return
-              const prevData = await prevVisible.load()
-              landing.at = {id: prevVisible.id, start: prevData?.content.length ?? 0}
-            },
+          const landings: DrawnLocation[] = []
+          const expected = captureOccurrenceEdge(block.id, source.parentId, (await occurrence) ?? undefined)
+          const deleted = await deleteAtOccurrenceThroughUi(block, {...expected, isCurrent}, async () => {
+            const previous = await previousDrawnStep(block, surface)
+            if (!previous.block) return
+            landings.push({block: previous.block, surface: previous.surface})
+            if (previous.crossed) {
+              const fallback = await locationAfterSubtreeRemoval(block, surface, new Set([block.id]))
+              if (fallback) landings.push(fallback)
+            }
           })
-          if (deleted && landing.at) {
-            await focusBlock(uiStateBlock, landing.at.id, {
-              edit: true,
-              renderScopeId: deps.renderScopeId,
-              selection: {start: landing.at.start},
+          if (!deleted) return
+          for (const target of landings) {
+            // A nested surface can draw another occurrence of a removed block.
+            const data = await target.block.load()
+            if (!data) continue
+            await focusBlock(uiStateBlock, target.block.id, {
+              edit: true, renderScopeId: target.surface.renderScopeId,
+              selection: {start: target === landings[0] ? data.content.length : 0},
             })
+            break
           }
           return
         }
@@ -1072,14 +1041,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Refuse if there is none, or if the previous visible block is the
         // panel's top-level block (don't merge into the page/view header).
         // Refuse to merge the scope root upward — its previous visible
-        // block lives outside the surface.
-        if (!canMergeUp) return
-
-        const prevVisible = await previousVisibleBlock(block, surface)
-        if (!prevVisible || prevVisible.id === surface.scopeRootId) return
-
+        // block lives outside the surface — and across a nested surface,
+        // whose rows, not the block past them, are drawn above this one.
+        const previous = member ?? await previousDrawnStep(block, surface)
+        if (!previous.block || (!member && (!canMergeUp || ('crossed' in previous && previous.crossed) || previous.block.id === surface.scopeRootId))) return
         await mergeUp({
-          from: block, into: prevVisible, liveContent, surface, uiStateBlock,
+          from: block, into: previous.block, liveContent, surface: previous.surface, uiStateBlock,
+          anchor: member?.anchor, isCurrent,
           // Vestigial, and kept only because it costs nothing: the event has
           // finished dispatching by now (every step above awaits), and block
           // editors pass `defaultKeymap: false`, so Backspace at offset 0 has
@@ -1120,12 +1088,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // The next visible block is the one that folds away — the same block
         // Backspace would merge upward if the caret sat at its start
-        // (previousVisibleBlock and nextVisibleBlock are inverses over the
+        // (previousDrawnStep and nextDrawnStep are inverses over the
         // visible-order list, so this stays at the same boundary).
-        const nextVisible = await nextVisibleBlock(block, surface)
-        if (!nextVisible) return
+        const {block: nextVisible, crossed} = await nextDrawnStep(block, surface)
+        if (!nextVisible || crossed) return
 
-        await Promise.all([block.load(), nextVisible.load()])
+        const current = await mergeCheck(nextVisible, block, surface)
+        if (!current) return
         if (holdsSource(block) || holdsSource(nextVisible)) return
         if (await bothShowIndependentChildren({into: block, from: nextVisible}, surface)) return
 
@@ -1158,12 +1127,15 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // fold core.merge wrote to SQL.
         // Single tx: flush the editor's live content into `into` first so
         // core.merge concatenates the latest text, then fold `next` in.
-        await writeWithEditorRearmed(editorView, {end: 'end', remove: 0, insert: fromContent}, () =>
+        const merged = await writeWithEditorRearmed(editorView, {end: 'end', remove: 0, insert: fromContent}, () =>
           repo.tx(async tx => {
+            if (!await current(tx)) return null
             await tx.update(block.id, {content: liveContent})
             await tx.run(mergeMutator, {intoId: block.id, fromId})
+            return true
           }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'}))
 
+        if (!merged) return
         await focusBlock(uiStateBlock, block.id, {
           edit: true,
           renderScopeId: deps.renderScopeId,
@@ -1265,21 +1237,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     if (!selectedBlocks.length) return
 
     const surface = outlineSurfaceOf(deps)
-    const focus: {target: Block | null} = {target: null}
+    const focus: {target: DrawnLocation | null} = {target: null}
     const deleted = await deleteBlocksThroughUi(selectedBlocks, {
       animate: true,
       beforeWrite: async () => {
         const selectedIds = new Set(selectedBlocks.map(block => block.id))
         const after = surface
-          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], surface, selectedIds)
+          ? await locationAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], surface, selectedIds)
           : null
-        focus.target = after && !selectedIds.has(after.id) ? after : null
+        focus.target = after && !selectedIds.has(after.block.id) ? after : null
       },
     })
     if (!deleted) return
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
     if (focus.target) {
-      void focusBlock(uiStateBlock, focus.target.id)
+      void focusBlock(uiStateBlock, focus.target.block.id, {renderScopeId: focus.target.surface.renderScopeId})
     }
   }
 
@@ -1294,12 +1266,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * selection: with supplied deps the two can differ.
    */
   const cutBlocks = async (deps: Pick<BlockShortcutDependencies, 'uiStateBlock' | 'scopeRootId' | 'scopeRootForcesOpen' | 'renderScopeId' | 'propertyDisplay'> & {selectedBlocks: Block[]}): Promise<void> => {
-    const {uiStateBlock, selectedBlocks, renderScopeId, propertyDisplay} = deps
+    const {uiStateBlock, selectedBlocks, propertyDisplay} = deps
     const surface = outlineSurfaceOf(deps)
     if (!selectedBlocks.length) return
+    const renderScopeId = deps.renderScopeId ?? focusedOccurrenceInSelection(deps)?.renderScopeId
+    const location = await nestedWriteLocation(selectedBlocks[0], renderScopeId)
+    if (location === null) return
+    const foreignRootId = location?.foreignRootId
+    if (foreignRootId && selectedBlocks.some(block => block.id === foreignRootId)) {
+      showInfo('Cut this result from its outline.')
+      return
+    }
     let outcome: 'cut' | 'empty'
     try {
-      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo, propertyDisplay)
+      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo, propertyDisplay, foreignRootId)
     } catch (error) {
       // A refused clipboard write armed nothing; keep the selection to retry.
       console.error('[cut] clipboard write failed', error)
@@ -1315,14 +1295,30 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     // `p` is a move down) would otherwise land inside the cut and be refused.
     const selectedIds = new Set(selectedBlocks.map(block => block.id))
     const after = surface
-      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], surface, selectedIds)
+      ? await locationAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], surface, selectedIds)
       : null
-    if (after && !selectedIds.has(after.id)) void focusBlock(uiStateBlock, after.id, {renderScopeId})
+    if (after && !selectedIds.has(after.block.id)) void focusBlock(uiStateBlock, after.block.id, {renderScopeId: after.surface.renderScopeId})
 
     const cutId = getArmedCut()?.cutId
     showInfo(`Cut ${pluralize(selectedBlocks.length, 'block')}: paste to move`, {
       action: {label: 'Cancel', onClick: () => { if (cutId) disarmCut(cutId) }},
     })
+  }
+
+  const pasteAtSelectionEdge = async (deps: MultiSelectModeDependencies, position: 'before' | 'after') => {
+    const {uiStateBlock, selectedBlocks} = deps
+    const target = selectedBlocks.at(position === 'after' ? -1 : 0)
+    if (!target) return
+
+    const surface = await surfaceForSelection(deps)
+    let pasted: Block[] = []
+    await withMoveTransition(async () => {
+      pasted = await pasteFromClipboard(target, repo, {...surface, position, placement: 'sibling'})
+    })
+    if (pasted[0]) {
+      await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+      void focusBlock(uiStateBlock, pasted[0].id)
+    }
   }
 
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
@@ -1386,25 +1382,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'paste_after_selection',
       description: 'Paste from clipboard after selection',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        const target = selectedBlocks.at(-1)
-        if (!target) return
-
-        let pasted: Block[] = []
-        await withMoveTransition(async () => {
-          pasted = await pasteFromClipboard(target, repo, {
-            position: 'after',
-            placement: 'sibling',
-            scopeRootId: deps.scopeRootId,
-            propertyDisplay: deps.propertyDisplay,
-          })
-        })
-        if (pasted[0]) {
-          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-          void focusBlock(uiStateBlock, pasted[0].id)
-        }
-      },
+      handler: deps => pasteAtSelectionEdge(deps, 'after'),
       defaultBinding: {
         keys: 'p',
       },
@@ -1413,25 +1391,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'paste_before_selection',
       description: 'Paste from clipboard before selection',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        const target = selectedBlocks[0]
-        if (!target) return
-
-        let pasted: Block[] = []
-        await withMoveTransition(async () => {
-          pasted = await pasteFromClipboard(target, repo, {
-            position: 'before',
-            placement: 'sibling',
-            scopeRootId: deps.scopeRootId,
-            propertyDisplay: deps.propertyDisplay,
-          })
-        })
-        if (pasted[0]) {
-          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-          void focusBlock(uiStateBlock, pasted[0].id)
-        }
-      },
+      handler: deps => pasteAtSelectionEdge(deps, 'before'),
       defaultBinding: {
         keys: 'Shift+p',
       },

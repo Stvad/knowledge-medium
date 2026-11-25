@@ -183,6 +183,9 @@ The graph is more than pages. The common typed blocks (by frequency):
 - **Properties are typed.** Each property name has a schema (codec +
   changeScope). Reading raw \`properties_json\` gives encoded values; the
   block APIs (\`block.get(schema)\`, \`peekProperty\`) decode them.
+- For a property using the \`day\` preset, give \`create-block\` or \`update-block\`
+  a daily note ID or a date such as \`today\` or \`2026-06-18\`. Dates resolve
+  to daily notes, and the stored values are their block IDs.
 - **Imported-source convention:** \`roam:*\` and \`readwise:*\` property names are
   origin-tagged data from a Roam/Readwise import (e.g. \`roam:author\`,
   \`roam:URL\`, \`roam:create/user\`, \`readwise:author\`). Treat them as the source

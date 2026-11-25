@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo } from 'react'
+import type { FocusedBlockLocation } from '@/data/properties.js'
+import { defineFacet, isFunction } from '@/facets/facet.js'
 import { useInEditMode, useInFocus, useIsActivePanel, useUIStateBlock } from '@/data/globalState.js'
 import {
   getElementScrollportBounds,
@@ -11,12 +13,13 @@ import type {
   BlockShellState,
 } from '@/extensions/blockInteraction.js'
 
-const FOCUSED_BLOCK_CLASS = '[&>.block-body>div:first-child]:bg-accent/40'
+type FocusViewportPolicy = (panelId: string, location: FocusedBlockLocation) => boolean
 
-const mergeClassName = (...parts: Array<string | undefined>): string | undefined => {
-  const className = parts.filter(Boolean).join(' ')
-  return className.length ? className : undefined
-}
+/** An implicit focus move may follow the viewport without moving it. */
+export const preserveViewportOnFocusFacet = defineFacet<FocusViewportPolicy>({
+  id: 'core.preserve-viewport-on-focus',
+  validate: isFunction<FocusViewportPolicy>,
+})
 
 const isSurfaceActive = (state: BlockShellState): boolean =>
   typeof state.shortcutSurfaceOptions.surfaceActive === 'boolean'
@@ -65,13 +68,14 @@ export function BlockFocusShellDecorator({
   state,
   children,
 }: BlockShellDecoratorProps) {
-  const {block} = resolveContext
+  const {block, uiStateBlock} = resolveContext
+  const renderScopeId = resolveContext.blockContext?.renderScopeId
   const blockInFocus = useInFocus(block.id)
   const inEditMode = useInEditMode(block.id)
   // Gate the highlight on "this surface owns keystrokes": when the
   // user crosses panels (j/l in spatial-nav, or a click), only the
-  // focused block in the *active* panel shows the bg-accent/40
-  // class. The inactive panel still has its `focusedBlockLocation` set —
+  // focused block in the *active* panel gets a highlight.
+  // The inactive panel still has its `focusedBlockLocation` set —
   // which we need so the highlight reappears when the user comes
   // back via h/k/j/l — but suppressing the visual until then makes
   // "where am I right now" unambiguous, and reading the per-panel
@@ -102,19 +106,16 @@ export function BlockFocusShellDecorator({
       ? element.parentElement
       : element
     if (shouldScrollFocusedBlockIntoView(focusedRowElement, element)) {
-      // Once the block is genuinely off-screen, keep the existing
-      // top-content-row alignment and smooth catch-up at the viewport edge.
+      const policies = block.repo.facetRuntime?.read(preserveViewportOnFocusFacet)
+      if (renderScopeId && policies?.some(preserve => preserve(uiStateBlock.id, {blockId: block.id, renderScopeId}))) return
       element.scrollIntoView({behavior: 'smooth', block: 'nearest'})
     }
-  }, [active, contentRef])
+  }, [active, contentRef, block, uiStateBlock, renderScopeId])
 
   const nextState = useMemo<BlockShellState>(() => ({
     shellProps: {
       ...state.shellProps,
-      className: mergeClassName(
-        state.shellProps.className,
-        active ? FOCUSED_BLOCK_CLASS : undefined,
-      ),
+      'data-block-focused': active ? 'true' : undefined,
     },
     shortcutSurfaceOptions: state.shortcutSurfaceOptions,
   }), [active, state.shellProps, state.shortcutSurfaceOptions])

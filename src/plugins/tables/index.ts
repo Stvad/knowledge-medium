@@ -8,6 +8,7 @@ import { propertyRowsPlugin } from '@/plugins/property-rows'
 import { drawsPropertyRows } from '@/plugins/property-rows/fieldRow'
 import { spatialNavExclusionsFacet } from '@/plugins/spatial-navigation/exclusionsFacet'
 import { tableConversionActions } from './actions'
+import { tableChildrenViews } from './childrenViews'
 import { cellEditorExtension } from './cellEdits'
 import { tablesDataExtension } from './dataExtension'
 import { queryPropertyUi } from './QueryUi'
@@ -16,7 +17,6 @@ import { tableRowVerbs } from './rowVerbs'
 import {
   tableActionContexts, tableActions, tableOutlineVerbRedirects, tableRoleOf, tableShortcutActivation,
 } from './keys'
-import { tableVerticalSteps } from './navigation'
 import { CELL_SURFACE, TableCellLayout, TableHostLayout, TableRowLayout } from './TableLayout'
 import { TABLE_TYPE } from './schema'
 
@@ -42,6 +42,7 @@ export const tablesPlugin: AppExtension = systemToggle({
   // Cells draw value rows through its inline controls and value completions.
   propertyRowsPlugin,
   tablesDataExtension,
+  tableChildrenViews,
   blockLayoutFacet.of(tableLayoutContribution, {source: SOURCE, precedence: 100}),
   shortcutSurfaceActivationsFacet.of(tableShortcutActivation, {source: SOURCE}),
   spatialNavExclusionsFacet.of(CELL_SURFACE, {source: SOURCE}),
@@ -52,5 +53,4 @@ export const tablesPlugin: AppExtension = systemToggle({
   [...tableActions, ...tableConversionActions].map(action => actionsFacet.of(action, {source: SOURCE})),
   tableOutlineVerbRedirects,
   tableRowVerbs,
-  tableVerticalSteps,
 ])

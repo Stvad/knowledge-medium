@@ -3,6 +3,7 @@ import type {BlockResolveContext} from '@/extensions/blockInteraction.js'
 import {quotedInFooterContribution} from './quotedIn'
 import {nestedReadSelectionMenuContribution} from './readSelectionUi'
 import {THREAD_TYPE} from './schema'
+import {activateThread, deactivateThread, takeMarginReveal} from './uiStore'
 import type {ThreadSummary} from './summaries'
 import {
   COMMENT_CARD_KEY,
@@ -104,4 +105,22 @@ describe('where the comments UI attaches', () => {
     expect(pillClick([thread('R', false)], true)).toEqual({kind: 'activate', threadId: 'R', revealClosed: true})
     expect(pillClick([thread('O')], false)).toEqual({kind: 'expand-inline'})
   })
+})
+
+it('reveals only the requested card once it is placed, including a repeat visit to the selected thread', () => {
+  const panel = 'margin-reveal'
+  try {
+    activateThread(panel, 'thread')
+    expect(takeMarginReveal(panel, 'thread')).toBeUndefined()
+    activateThread(panel, 'thread', 'reveal')
+    activateThread(panel, 'thread')
+    expect(takeMarginReveal(panel, 'neighbor')).toBeUndefined()
+    expect(takeMarginReveal(panel, 'thread')).toBe('reveal')
+    expect(takeMarginReveal(panel, 'thread')).toBeUndefined()
+    activateThread(panel, 'thread', 'reveal-and-focus')
+    expect(takeMarginReveal(panel, 'thread')).toBe('reveal-and-focus')
+    expect(takeMarginReveal(panel, 'thread')).toBeUndefined()
+  } finally {
+    deactivateThread(panel)
+  }
 })

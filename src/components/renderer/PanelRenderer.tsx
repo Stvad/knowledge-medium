@@ -373,8 +373,12 @@ export function PanelRenderer({block}: BlockRendererProps) {
           onFocusCapture={trackPanelFocus ? activatePanel : undefined}
           onScroll={scheduleScrollTopWrite}
         >
-          <div className="mx-auto w-full max-w-3xl">
-            {panelBody}
+          <div className="grid min-h-full">
+            <div data-panel-text-frame="" className="col-start-1 row-start-1 mx-auto w-full min-w-0 max-w-3xl self-start">
+              {panelBody}
+            </div>
+            {/* Side content shares the outline's scroll origin and contributes its height. */}
+            <div data-panel-side-content="" className="pointer-events-none relative grid col-start-1 row-start-1 min-w-0"/>
           </div>
         </div>
         {/* Per-panel mount points — chrome contributed via

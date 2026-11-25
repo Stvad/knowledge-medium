@@ -43,6 +43,8 @@ import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
 import { InvalidBlockIdError } from '@/data/blockId'
 import type { BlockData } from '@/data/api'
 import { PROPERTY_CELL_BACKFILL_ID, propertyCellBackfill } from '@/data/internals/propertyCellBackfill'
+import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1', name: 'Alice'}
@@ -73,6 +75,106 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 
 describe('agent runtime commands', () => {
+  it.each(['cells', 'children'] as const)('creates and updates day properties with %s storage', async (mode) => {
+    await env.repo.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+          properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, ?)`,
+      [WS, 'Test workspace', USER.id, mode],
+    )
+    await getOrCreatePropertiesPage(env.repo, WS)
+    const due = await env.repo.userSchemas.addSchema({name: 'due', presetId: 'day'})
+    const ref = await env.repo.userSchemas.addSchema({
+      name: 'related', presetId: 'optional-ref', config: {targetTypes: [DAILY_NOTE_TYPE]},
+    })
+    const root = await executeCommand({
+      commandId: 'create-day-root', type: 'create-block', content: 'Parent',
+      properties: {[due.name]: '2028-03-15T00:00:00.000Z'},
+    }, env.context) as BlockData
+    const expectedRootDay = dailyNoteBlockId(WS, '2028-03-15')
+    expect(root.properties[due.name]).toBe(expectedRootDay)
+    expect((await env.repo.load(expectedRootDay))?.properties[dailyNoteDateProp.name])
+      .toBe('2028-03-15T00:00:00.000Z')
+
+    let child: BlockData
+    vi.setSystemTime(new Date(2028, 2, 16, 12))
+    try {
+      child = await executeCommand({
+        commandId: 'create-day-child', type: 'create-block', parentId: root.id, content: 'Task',
+        properties: {[due.name]: 'today', [ref.name]: '2028-03-17'},
+      }, env.context) as BlockData
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(child.properties[due.name]).toBe(dailyNoteBlockId(WS, '2028-03-16'))
+    const expectedRefDay = dailyNoteBlockId(WS, '2028-03-17')
+    expect(child.properties[ref.name]).toBe(expectedRefDay)
+    expect((await env.repo.load(expectedRefDay))?.properties[dailyNoteDateProp.name]).toBe('2028-03-17T00:00:00.000Z')
+
+    const updated = await executeCommand({
+      commandId: 'update-day', type: 'update-block', id: child.id,
+      properties: {[due.name]: '2028-03-17T23:30:00-02:00'},
+    }, env.context) as BlockData
+    const expectedDay = dailyNoteBlockId(WS, '2028-03-18')
+    expect(updated.properties[due.name]).toBe(expectedDay)
+    expect(updated.properties[ref.name]).toBe(child.properties[ref.name])
+    expect((await env.repo.load(expectedDay))?.properties[dailyNoteDateProp.name])
+      .toBe('2028-03-18T00:00:00.000Z')
+
+    const rawId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const replaced = await executeCommand({
+      commandId: 'update-day-id', type: 'update-block', id: child.id,
+      properties: {[due.name]: rawId}, replaceProperties: true,
+    }, env.context) as BlockData
+    expect(replaced.properties[due.name]).toBe(rawId)
+    expect(replaced.properties[ref.name]).toBeUndefined()
+
+    const legacyId = 'legacy-day-id'
+    await env.repo.tx(tx => tx.create({id: legacyId, workspaceId: WS, parentId: null, orderKey: 'a'}),
+      {scope: ChangeScope.BlockDefault})
+    const legacy = await executeCommand({
+      commandId: 'update-legacy-day-id', type: 'update-block', id: child.id,
+      properties: {[due.name]: legacyId, [ref.name]: legacyId},
+    }, env.context) as BlockData
+    expect(legacy.properties[due.name]).toBe(legacyId)
+    expect(legacy.properties[ref.name]).toBe(legacyId)
+  })
+
+  it('retains note repairs when an agent sets a day reference on its own target', async () => {
+    await getOrCreatePropertiesPage(env.repo, WS)
+    const due = await env.repo.userSchemas.addSchema({name: 'due', presetId: 'day'})
+    const iso = '2028-03-16'
+    const id = dailyNoteBlockId(WS, iso)
+    await env.repo.tx(tx => tx.create({
+      id, workspaceId: WS, parentId: null, orderKey: 'a0', content: iso,
+      properties: {[aliasesProp.name]: [iso]},
+    }), {scope: ChangeScope.BlockDefault})
+    const updated = await executeCommand({commandId: 'self-day', type: 'update-block',
+      id, properties: {[due.name]: iso}}, env.context) as BlockData
+    expect(updated.properties[due.name]).toBe(id)
+    expect(updated.properties[dailyNoteDateProp.name]).toBe(iso + 'T00:00:00.000Z')
+    expect(updated.properties[typesProp.name]).toContain(DAILY_NOTE_TYPE)
+  })
+
+  it('rolls back day-note creation when another day property on the same update is invalid', async () => {
+    await getOrCreatePropertiesPage(env.repo, WS)
+    await env.repo.userSchemas.addSchema({name: 'start', presetId: 'day'})
+    await env.repo.userSchemas.addSchema({name: 'finish', presetId: 'day'})
+    const task = await executeCommand({
+      commandId: 'create-day-task', type: 'create-block', content: 'Task',
+    }, env.context) as BlockData
+    const iso = '2028-04-30'
+    const dayId = dailyNoteBlockId(WS, iso)
+    expect(await env.repo.load(dayId)).toBeNull()
+    await expect(executeCommand({
+      commandId: 'update-invalid-day', type: 'update-block', id: task.id,
+      content: 'Changed', properties: {start: iso, finish: '66654d0d'},
+    }, env.context)).rejects.toThrow(/66654d0d/)
+    expect(await env.repo.load(dayId)).toBeNull()
+    expect(await env.repo.load(task.id)).toMatchObject({content: 'Task', properties: task.properties})
+  })
+
   it('update-block treats soft-deleted blocks as not found', async () => {
     await env.repo.tx(
       async tx => {

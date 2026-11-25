@@ -281,6 +281,7 @@ export interface BlockShellProps {
   'data-block-id': string
   'data-render-scope-id'?: string
   'data-editing': 'true' | 'false'
+  'data-block-focused'?: 'true'
   className?: string
   tabIndex: number
   ref?: Ref<HTMLDivElement>

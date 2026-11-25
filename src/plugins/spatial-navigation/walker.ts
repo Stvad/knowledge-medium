@@ -1,4 +1,4 @@
-import { clamp } from 'lodash-es'
+import { clamp, partition } from 'lodash-es'
 import { getElementScrollportBounds, isElementProperlyVisible } from '@/utils/dom.js'
 import { BLOCK_CONTENT_VIEW_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import {
@@ -331,7 +331,7 @@ const panelsInColumn = (column: HTMLElement): HTMLElement[] =>
  * backlink entry containers) because we only check for the nearest
  * shell, ignoring any wrapper chrome in between.
  */
-const closestBlockAncestor = (
+export const closestBlockAncestor = (
   instanceEl: HTMLElement,
   panel: HTMLElement,
 ): HTMLElement | null => {
@@ -529,8 +529,12 @@ export const instanceIn = (
   panel: HTMLElement,
   location: FocusedBlockLocation,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-): HTMLElement | null =>
-  panelInstances(panel, excludedSurfaces).find(el => isInstanceAt(el, location)) ?? null
+): HTMLElement | null => {
+  for (const element of panel.querySelectorAll<HTMLElement>(NAV_ITEM_SELECTOR)) {
+    if (isInstanceAt(element, location) && isNavigable(element, excludedSurfaces) && panelOf(element) === panel) return element
+  }
+  return null
+}
 
 /** `instanceIn` for callers holding a panel id rather than its element. */
 export const instanceAt = (
@@ -566,69 +570,41 @@ export const rowSlotIn = (
   location: FocusedBlockLocation,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
-  const mounted = instanceAt(panelId, location, excludedSurfaces)
-  if (mounted) return mounted
   const panel = panelById(panelId)
   if (!panel) return null
-  return panel.querySelector<HTMLElement>(
+  return instanceIn(panel, location, excludedSurfaces) ?? panel.querySelector<HTMLElement>(
     `[data-lazy-block-id="${CSS.escape(location.blockId)}"]` +
     `[data-lazy-render-scope-id="${CSS.escape(location.renderScopeId)}"]`,
   )
 }
 
 /**
- * The nearest row that is RESERVED but not yet mounted between `from` and the
- * mounted neighbour `to` (or anywhere beyond `from`, when nothing is mounted
- * that way). Document order, so "nearest" is the first one in the direction of
- * travel.
- *
- * This is what a caller needs at a boundary its model can't see past: within a
- * scope the model names the next row, but at the EDGE of one — stepping out of
- * an embed, out of a backlink entry — the rendered order decides, and a row
- * that has a place reserved is part of that order even though no walk names it
- * and no query for mounted rows finds it.
- *
- * Two kinds of reserved row are NOT part of that order, and both would be a
- * focus write onto a row the user can't reach or see:
- *
- *   - anything in `from`'s OWN scope. A caller only asks at an edge, which
- *     means the model found no next row in this scope — so a slot claiming to
- *     be one is stale: a just-collapsed subtree's child, a deleted sibling's
- *     reservation. The model is what validates a row of this scope, everywhere,
- *     and at an edge it has already said there is none. (A NESTED surface's
- *     slot carries a different scope, and stepping into that is the point.)
- *   - anything inside an excluded surface. Its rows are not navigable, so
- *     landing there leaves the next keystroke with no anchor at all.
- *
- * `ownScope: 'include'` is for a caller that steps by drawn order with no model
- * to validate the rows of `from`'s scope: there a slot in that scope is the
- * next row, not a stale one.
+ * The nearest reserved row before the mounted or model destination. Only
+ * consider scopes the model could not enumerate: a reservation in a scope the
+ * model just walked may be stale after a collapse, deletion or move.
  */
 export const reservedRowBetween = (
   from: HTMLElement,
   to: HTMLElement | null,
   direction: 'up' | 'down',
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-  ownScope: 'skip' | 'include' = 'skip',
+  {modelScope, descend = true}: {modelScope?: string; descend?: boolean} = {},
 ): FocusedBlockLocation | null => {
   const panel = panelOf(from)
   if (!panel) return null
   const fromScope = from.dataset.renderScopeId
   const fromLane = laneOf(from)
-  const slots = Array.from(panel.querySelectorAll<HTMLElement>(LABELLED_SLOT_SELECTOR)).filter(slot =>
-    aheadOf(from, slot, direction) &&
-    // Past the mounted neighbour it isn't "between" — the neighbour is then the
-    // nearer answer and nothing is missing before it.
-    (!to || aheadOf(slot, to, direction)) &&
-    (ownScope === 'include' || slot.dataset.lazyRenderScopeId !== fromScope) &&
-    laneOf(slot) === fromLane &&
-    !isInExcludedSurface(slot, excludedSurfaces) &&
-    // Never picks a half-labelled slot and then gives up on it, which would
-    // silently drop a valid one further along.
-    slotLocationOf(slot) !== null,
-  )
-  const nearest = direction === 'down' ? slots[0] : slots[slots.length - 1]
-  return nearest ? slotLocationOf(nearest) : null
+  const slots = panel.querySelectorAll<HTMLElement>(LABELLED_SLOT_SELECTOR)
+  const step = direction === 'down' ? 1 : -1
+  for (let index = direction === 'down' ? 0 : slots.length - 1; index >= 0 && index < slots.length; index += step) {
+    const slot = slots[index]!
+    if (!aheadOf(from, slot, direction) || (to && !aheadOf(slot, to, direction))) continue
+    const location = slotLocationOf(slot)
+    if (!location || location.renderScopeId === fromScope || location.renderScopeId === modelScope) continue
+    if ((!descend && from.contains(slot)) || laneOf(slot) !== fromLane || isInExcludedSurface(slot, excludedSurfaces)) continue
+    return location
+  }
+  return null
 }
 
 /**
@@ -733,6 +709,7 @@ export const verticalNeighbor = (
   current: HTMLElement,
   direction: 'up' | 'down',
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+  descend = true,
 ): HTMLElement | null => {
   const panel = panelOf(current)
   if (!panel) return null
@@ -741,7 +718,10 @@ export const verticalNeighbor = (
   if (idx === -1) return null
 
   if (direction === 'down') {
-    if (idx + 1 < instances.length) return instances[idx + 1]
+    for (let index = idx + 1; index < instances.length; index++) {
+      const next = instances[index]!
+      if (descend || !current.contains(next)) return next
+    }
   } else {
     if (idx - 1 >= 0) return instances[idx - 1]
   }
@@ -756,21 +736,20 @@ export const verticalNeighbor = (
     : lastInstanceIn(sibling, excludedSurfaces)
 }
 
-/** The nearest mounted row of `current`'s own scope in this panel, past any
- *  nested surface rendered in between. */
-export const nextRowInScope = (
+/** Selection extends within the cursor's declared outline first, then into the
+ *  other mounted scopes of its lane when that outline runs out. */
+export const selectionTargetsFrom = (
   current: HTMLElement,
+  panel: HTMLElement,
   direction: 'up' | 'down',
-  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-): HTMLElement | null => {
-  const panel = panelOf(current)
-  const scope = locationOf(current)?.renderScopeId
-  if (!panel || scope === undefined) return null
-  const instances = panelInstances(panel, excludedSurfaces)
+  excludedSurfaces: ReadonlySet<string>,
+  inOutline: (row: PanelRow) => boolean,
+): PanelRow[] => {
+  const instances = laneInstances(panel, laneOf(current), excludedSurfaces)
   const from = instances.indexOf(current)
-  if (from === -1) return null
   const ahead = direction === 'down' ? instances.slice(from + 1) : instances.slice(0, from).reverse()
-  return ahead.find(el => locationOf(el)?.renderScopeId === scope) ?? null
+  const rows = ahead.map(element => ({element, ...locationOf(element)!}))
+  return partition(rows, inOutline).flat()
 }
 
 /** Can the user see this lane row: shown, and on screen within both its

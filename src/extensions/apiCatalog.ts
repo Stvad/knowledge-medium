@@ -317,9 +317,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/childrenView.js',
-    description: 'childrenViewFacet — a layout that draws a block\'s children its own way declares that list, and the walkers, edit policy and Backspace-merge walk it. Read-side only: indent, outdent, move and paste still use the property-display list.',
-    exports: ['childrenViewFacet', 'propertyDisplayChildrenView'],
-    types: ['ChildrenView', 'ChildrenViewContext', 'ListingSurface'],
+    description: 'childrenViewFacet — a layout that draws a block\'s children its own way declares that list, and the walkers, edit policy and Backspace-merge walk it. Outline-order edits filter stored siblings by published membership. Sorted indents use the drawn neighbour at keypress. Move requires outline order, and insert hooks use request.stillCurrent(tx) before writing.',
+    exports: ['childrenViewFacet', 'propertyDisplayChildrenView', 'surfaceOwnerFacet'],
+    types: ['ChildrenView', 'ChildrenViewContext', 'ChildrenInsertRequest', 'ChildrenInsertDecision', 'ChildrenOrder', 'DrawnChild', 'ListingSurface', 'NestedSurface', 'SurfaceOwner'],
   },
   {
     category: 'data',

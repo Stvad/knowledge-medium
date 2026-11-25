@@ -93,6 +93,9 @@ export type FrozenPropertySeed = readonly [
 
 export type FrozenTypeSeed = readonly [seedKey: string, id: string]
 
+/** User-created day definitions persist this preset id and an optional ref value. */
+export const FROZEN_DAY_PRESET = {id: 'day', codecType: 'ref'} as const
+
 export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/activity', 'agent:activity', 'string', 'string'],
   ['system:agent-dispatch-companion/property/activity-at', 'agent:activity-at', 'number', 'number'],

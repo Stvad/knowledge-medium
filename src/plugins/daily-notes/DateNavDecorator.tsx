@@ -15,25 +15,23 @@
  *  Gate shape follows the `blockContentDecoratorsFacet` contract: the
  *  contribution decides only structural things (`isFocalRender`), and
  *  "is this block a daily note" is decided INSIDE the component from a
- *  reactive `aliases` read — so a block that gains or loses its ISO alias
- *  picks the arrows up (or drops them) without a decorator re-resolve.
+ *  reactive read of the day anchor and legacy aliases.
  */
 import { useCallback } from 'react'
 import { ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
 import { useBlockContext } from '@/context/block.js'
 import type { Block } from '@/data/block'
-import { aliasesProp } from '@/data/properties.js'
 import {
   cachedContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
-import { useProperty, useWorkspaceId } from '@/hooks/block.js'
+import { useHandle, useWorkspaceId } from '@/hooks/block.js'
 import { isFocalRender } from '@/hooks/useIsFocalRender.js'
 import type { BlockRenderer } from '@/types.js'
 import { navigate } from '@/utils/navigation.js'
 import {
   addDaysIso,
-  dailyNoteIsoFromAliases,
+  dailyNoteIsoFromRow,
   getOrCreateDailyNote,
 } from './dailyNotes.ts'
 
@@ -70,13 +68,12 @@ interface DateNavDecoratorProps {
 
 const DateNavDecorator = ({block, Inner}: DateNavDecoratorProps) => {
   const repo = block.repo
-  const [aliases] = useProperty(block, aliasesProp)
+  const iso = useHandle(block, {selector: dailyNoteIsoFromRow})
   const {panelId} = useBlockContext()
   // The note's OWN workspace, not `repo.activeWorkspaceId`: the neighbouring
   // day has to be created and opened in the same workspace as the note the
   // arrows are attached to.
   const workspaceId = useWorkspaceId(block)
-  const iso = dailyNoteIsoFromAliases(aliases)
 
   const openOffset = useCallback((offset: number) => {
     if (!iso || !panelId || !workspaceId) return

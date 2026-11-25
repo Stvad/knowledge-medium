@@ -15,11 +15,7 @@ import { isCursorRowSettled, isRowInViewport, resolveSettledAnchor } from './vie
 import { createSettleScheduler } from './settleScheduler.ts'
 import { forgetFollow, keepFollowOnlyAt, rememberFollow } from './followOrigin.ts'
 
-/** Re-anchor once scrolling has stopped, not while it's happening. Two reasons:
- *  a fling would otherwise write a focus location per frame, and the row we
- *  pick mid-flight is off screen again a moment later — which is the one thing
- *  that makes the focus decorator scroll and fight the user. 150ms clears the
- *  gaps between momentum events without being perceptible. */
+/** Wait for a pause in momentum before choosing a row and writing focus. */
 const SCROLL_SETTLE_MS = 150
 
 /** A fast scroll can outrun lazy mounting: the rows now filling the viewport
@@ -44,12 +40,8 @@ const pansOnlySideways = (scroller: Element): boolean =>
  *
  * Two things keep this from turning into a scroll fight:
  *
- *   - Every row it picks is one `BlockFocusShellDecorator` agrees needs no
- *     scrolling, so the decorator does nothing on the focus change this writes.
- *     `isRowInViewport` implies the decorator's own predicate rather than
- *     equalling it (that one is strictly more permissive) — the implication is
- *     the direction the guarantee needs; see its docblock for where they differ
- *     and why that gap is left open.
+ *   - A followed row is visible when chosen. If scrolling resumes before
+ *     focus commits, the plugin’s reveal policy still preserves the viewport.
  *   - It only fires for a cursor it has SEEN on screen since focus landed
  *     there. A focus write whose row starts off screen is a move the app is
  *     still catching up to — keyboard navigation to a row below the fold, or a

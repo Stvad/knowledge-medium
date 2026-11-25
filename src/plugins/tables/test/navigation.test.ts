@@ -6,7 +6,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
-import { focusBlock, focusedBlockLocationProp, topLevelBlockIdProp } from '@/data/properties'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
+import { focusBlock, focusedBlockLocationProp, isCollapsedProp, topLevelBlockIdProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -22,7 +23,7 @@ import { turnIntoTable } from '../convert'
 import { tablesDataExtension } from '../dataExtension'
 import { tableOutlineVerbRedirects } from '../keys'
 import { CELL_SURFACE } from '../TableLayout'
-import { TABLE_CHILDREN_ATTRIBUTE, TABLE_HOST_ATTRIBUTE, tableVerticalSteps } from '../navigation'
+import { tableChildrenViews } from '../childrenViews'
 import { openQueryValue } from '../query/queryValue'
 import { registerGrid, tableRenderScopeId } from '../registry'
 import { queryProp } from '../schema'
@@ -32,6 +33,8 @@ const options = {scope: ChangeScope.BlockDefault}
 const PAGE = 'panel:page'
 const TABLE = tableRenderScopeId(PAGE, 'host')
 const ROWS = ['row-0', 'row-1', 'row-2']
+const DISPLAY = {childBacked: true, workspace: 'none', panel: 'inherit'} as const
+const OUTLINE = outlineSurfaceOf({scopeRootId: 'page', renderScopeId: PAGE, propertyDisplay: DISPLAY})!
 
 let db: TestDb
 let repo: Repo
@@ -52,7 +55,7 @@ beforeEach(async () => {
   await db.db.execute(
     `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, properties_migration)
       VALUES (?, 'test', 'test-user', 1, 1, 'none', 'children')`, [workspaceId])
-  ;({repo} = createTestRepo({db: db.db, user: {id: 'user-1'}, extensions: [tablesDataExtension, spatialNavExclusionsFacet.of(CELL_SURFACE, {source: 'tables'})]}))
+  ;({repo} = createTestRepo({db: db.db, user: {id: 'user-1'}, extensions: [tablesDataExtension, tableChildrenViews, spatialNavExclusionsFacet.of(CELL_SURFACE, {source: 'tables'})]}))
   repo.setActiveWorkspaceId(workspaceId)
   await repo.tx(async tx => {
     await tx.create({id: 'panel', workspaceId, parentId: null, orderKey: 'a0',
@@ -67,9 +70,10 @@ beforeEach(async () => {
   }, options)
   await turnIntoTable(repo, 'host')
   panel = repo.block('panel')
-  runtime = resolveFacetRuntimeSync([tableOutlineVerbRedirects, tableVerticalSteps, spatialNavigationActionDecoratorsExtension])
+  runtime = resolveFacetRuntimeSync([tableOutlineVerbRedirects, spatialNavigationActionDecoratorsExtension])
   controller = new GridController(repo.block('host'), panel, TABLE, PAGE)
   controller.setRows(ROWS, ROWS.length)
+  controller.setSurfaces({...DISPLAY, panel: 'none'}, OUTLINE)
   releaseGrid = registerGrid(TABLE, controller)
 })
 
@@ -78,6 +82,7 @@ const addQuery = async () => {
   await materializePropertySeeds(repo, workspaceId, [queryProp])
   const valueId = await openQueryValue(repo, 'host', propertyDefinitionBlockId(workspaceId, queryProp.seedKey))
   const value = await repo.block(valueId).load()
+  controller.setQuery([])
   return {fieldRowId: value!.parentId!, valueId}
 }
 
@@ -108,12 +113,10 @@ const drawPanel = ({query, rows = ROWS, aboveTable = [], outside = [], below = f
   grid.dataset.testGrid = 'true'
   grid.append(...rows.map(id => navItem(id, TABLE, [cell(id)])))
   const tableRegion = document.createElement('div')
-  tableRegion.setAttribute(TABLE_CHILDREN_ATTRIBUTE, 'true')
   if (query) tableRegion.append(navItem(query.fieldRowId, PAGE, [navItem(query.valueId, PAGE)]))
   tableRegion.append(grid, ...outside)
   const region = collapsed ? [] : [tableRegion]
   const host = navItem('host', PAGE, [...aboveTable, ...region])
-  host.setAttribute(TABLE_HOST_ATTRIBUTE, 'true')
   const root = document.createElement('div')
   root.dataset.panelId = 'panel'
   root.append(navItem('before', PAGE), host, ...(below ? [] : after))
@@ -138,6 +141,8 @@ const press = async (direction: 'up' | 'down', blockId: string, renderScopeId: s
   const deps: BlockShortcutDependencies = {
     block: repo.block(blockId), uiStateBlock: panel, renderScopeId,
     scopeRootId: renderScopeId === TABLE ? blockId : 'page',
+    scopeRootForcesOpen: renderScopeId !== TABLE,
+    propertyDisplay: renderScopeId === TABLE ? controller.rowsDisplayScope : DISPLAY,
   }
   await invokeAction(runtime, {action, deps, trigger: {} as ActionTrigger})
 }
@@ -211,6 +216,7 @@ describe('Up and Down around a table', () => {
   it('Down from what the host draws above its table lands on the first row', async () => {
     // A property the host shows in its own scope, above the table.
     const query = await addQuery()
+    await repo.block(query.fieldRowId).set(isCollapsedProp, true)
     drawPanel({aboveTable: [navItem(query.fieldRowId, PAGE)]})
     await press('down', query.fieldRowId, PAGE)
     await expectFocus('row-0', TABLE)
@@ -219,8 +225,9 @@ describe('Up and Down around a table', () => {
   it('Down from the last row of a table that ends its panel moves to the panel below', async () => {
     await repo.tx(tx => tx.create({id: 'panel-below', workspaceId, parentId: null, orderKey: 'a1',
       properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('after')}}), {scope: ChangeScope.UiState})
-    // The outline's walk from the row would land on its child, which the grid does not draw.
+    // The grid draws the row's note, but row mode skips the subtree on exit.
     await repo.tx(tx => tx.create({id: 'row-2-child', workspaceId, parentId: 'row-2', orderKey: 'a0', content: 'child'}), options)
+    await repo.tx(tx => tx.move('after', {parentId: null, orderKey: 'c0'}), options)
     drawPanel({below: true})
     await press('down', 'row-2', TABLE)
     await waitFor(() => {
@@ -251,10 +258,13 @@ describe('Up and Down around a table', () => {
 
   describe('children outside the query', () => {
     // Interleaved with the rows the query selects, as the outline model orders them.
-    const addOutside = () => repo.tx(async tx => {
-      await tx.create({id: 'outside-0', workspaceId, parentId: 'host', orderKey: 'a0x', content: 'outside 0'})
-      await tx.create({id: 'outside-1', workspaceId, parentId: 'host', orderKey: 'a3', content: 'outside 1'})
-    }, options)
+    const addOutside = async () => {
+      await repo.tx(async tx => {
+        await tx.create({id: 'outside-0', workspaceId, parentId: 'host', orderKey: 'a0x', content: 'outside 0'})
+        await tx.create({id: 'outside-1', workspaceId, parentId: 'host', orderKey: 'a3', content: 'outside 1'})
+      }, options)
+      controller.setQuery([])
+    }
 
     it('steps between them as drawn, not into the rows the model puts between them', async () => {
       await addOutside()
@@ -283,12 +293,14 @@ describe('Up and Down around a table', () => {
     const slot = document.createElement('div')
     slot.dataset.lazyBlockId = 'after'
     slot.dataset.lazyRenderScopeId = PAGE
+    await repo.block('host').set(isCollapsedProp, true)
     drawPanel({collapsed: true, after: [slot, navItem('after-2', PAGE)]})
     await press('down', 'host', PAGE)
     await expectFocus('after', PAGE)
   })
 
   it('with no drawn step to take (spatial navigation off), the grid’s Up at its first row still reaches the host', async () => {
+    await repo.tx(tx => tx.move('after', {parentId: null, orderKey: 'c0'}), options)
     await focusBlock(panel, 'row-0', {renderScopeId: TABLE})
     expect(controller.command('up')).toBe(true)
     await expectFocus('host', PAGE)

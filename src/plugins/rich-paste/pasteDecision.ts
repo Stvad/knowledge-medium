@@ -15,7 +15,8 @@ export const richPasteDecisionContribution = pasteDecisionVerb.decorator(
     const downstream = next(request) as PasteDecision
     if (downstream.kind === 'media') return downstream
 
-    const converted = convertClipboardHtml(request.html, request.text)
+    const inline = request.surface === 'editor' && request.caret.from > request.caret.lineStart
+    const converted = convertClipboardHtml(request.html, request.text, inline ? 'inline' : 'block')
     if (converted.kind === 'plain') return downstream
     if (converted.kind === 'outline') return {kind: 'split', blocks: converted.blocks}
 

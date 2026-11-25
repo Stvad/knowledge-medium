@@ -1,8 +1,15 @@
+import type { EditorState } from '@codemirror/state'
 import type { Block } from '@/data/block'
 import { hasSourceContent, holdsSource } from '@/data/blockTypes'
 import type { PasteCaret, PasteRequest } from './decision.ts'
 
 export type ClipboardContent = Pick<PasteRequest, 'text' | 'html' | 'files'>
+
+export const readPasteCaret = ({doc, selection}: EditorState): PasteCaret => {
+  const {from, to} = selection.main
+  const line = doc.lineAt(from)
+  return {line: line.number, lineStart: line.from, lineCount: doc.lines, from, to}
+}
 
 /** What a paste/drop payload carries for the paste decision, or null when it
  *  carries nothing to paste. Neither text nor html alone decides emptiness:

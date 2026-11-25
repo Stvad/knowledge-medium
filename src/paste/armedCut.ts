@@ -28,6 +28,8 @@ export interface ArmedCut {
   readonly cutId: string
   readonly workspaceId: string
   readonly rootIds: readonly string[]
+  /** A cut from a projected result can complete only inside its subtree. */
+  readonly foreignRootId?: string
   /** SHA-256 of the clipboard text the cut wrote — never the text itself,
    *  so cut content doesn't sit in localStorage. */
   readonly textDigest: string
@@ -94,8 +96,7 @@ const writeRaw = (raw: string | null): void => {
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every(item => typeof item === 'string' && item.length > 0)
 
-/** Another build (or a hand edit) may have written the key, so anything not
- *  exactly this shape reads as "nothing armed". */
+/** An invalid clipboard record is treated as disarmed. */
 const parse = (raw: string | null): ArmedCut | null => {
   if (raw === null) return null
   try {
@@ -104,10 +105,12 @@ const parse = (raw: string | null): ArmedCut | null => {
     if (typeof value.workspaceId !== 'string' || !value.workspaceId) return null
     if (typeof value.textDigest !== 'string' || !value.textDigest) return null
     if (!isStringArray(value.rootIds) || value.rootIds.length === 0) return null
+    if (value.foreignRootId !== undefined && (typeof value.foreignRootId !== 'string' || !value.foreignRootId)) return null
     return {
       cutId: value.cutId,
       workspaceId: value.workspaceId,
       rootIds: value.rootIds,
+      ...(value.foreignRootId === undefined ? {} : {foreignRootId: value.foreignRootId}),
       textDigest: value.textDigest,
       pasted: value.pasted === true,
     }
@@ -152,9 +155,10 @@ const digest = async (text: string): Promise<string> => {
  *  clipboard content, which this record must not claim. */
 export const armCut = async (
   text: string,
-  {workspaceId, rootIds, undoTop}: {
+  {workspaceId, rootIds, foreignRootId, undoTop}: {
     workspaceId: string
     rootIds: readonly string[]
+    foreignRootId?: string
     /** The cut workspace's top undo entry as the cut is armed; see
      *  {@link undoOrTakeBackCut}. */
     undoTop?: object | null
@@ -164,6 +168,7 @@ export const armCut = async (
     cutId: crypto.randomUUID(),
     workspaceId,
     rootIds: [...rootIds],
+    foreignRootId,
     textDigest: await digest(text),
     pasted: false,
   }

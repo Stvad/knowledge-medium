@@ -1120,7 +1120,7 @@ const typedBlocksArgsSchema = z.object({
   propertyChildren: z.literal('none').optional(),
   order: z.union([
     z.enum(['created-asc', 'created-desc', 'outline']),
-    z.object({property: z.string(), direction: z.enum(['asc', 'desc'])}),
+    z.object({property: z.string(), direction: z.enum(['asc', 'desc']), target: z.string().optional()}),
   ]).optional(),
 })
 
@@ -1301,7 +1301,12 @@ const collectTypedBlockAxisDeps = (
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, 'created')})
   }
   if (typeof normalized.order === 'object') {
-    dependOnField(normalized.order.property, workspaceId, ctx, context)
+    const {property, target} = normalized.order
+    dependOnField(property, workspaceId, ctx, context)
+    if (target !== undefined && dependOnField(target, workspaceId, ctx, context)) {
+      // A virtual value can appear on a newly live row without a stored property write.
+      ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_LIVE_CHANNEL, key: typedBlocksLiveKey(workspaceId)})
+    }
   }
   const ancestorTargetProps = new Set<string>()
   // Top-level `where` is self scope — not enumerable (see collectWhereDeps).
