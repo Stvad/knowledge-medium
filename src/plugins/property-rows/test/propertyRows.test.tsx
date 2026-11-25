@@ -21,7 +21,6 @@ import { propertyDisplayProp, resolvePropertyDisplayMode, type PropertyDisplayMo
 import { useHandle } from '@/hooks/block'
 import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
-import { DialogHost } from '@/extensions/dialogAppMount'
 import { actionContextsFacet, blockRenderersFacet } from '@/extensions/core'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -37,11 +36,10 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import * as propertyRows from '../index'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
-import { dailyNotesPlugin } from '@/plugins/daily-notes'
+import { dailyNotesPlugin, dateScrubOverlayMount } from '@/plugins/daily-notes'
 import { dailyNoteBlockId, dailyNoteDateProp, getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { annotationsDataExtension } from '@/plugins/annotations/dataExtension'
 import { createThread } from '@/plugins/annotations/threads'
-import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { referencesPlugin } from '@/plugins/references'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModeInteractionExtension } from '@/plugins/vim-normal-mode'
@@ -61,7 +59,6 @@ import {
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { setBlockPropertyDisplay } from '../actions'
-import { __resetDialogsForTests } from '@/utils/dialogs'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
@@ -136,7 +133,6 @@ beforeAll(async () => {
 afterAll(async () => { await sharedDb.cleanup() })
 afterEach(() => {
   cleanup()
-  __resetDialogsForTests()
   committedListings.clear()
   vi.unstubAllGlobals()
   __resetLazyMountRegistryForTesting()
@@ -191,7 +187,7 @@ const addExtensions = (...extensions: AppExtension[]) => {
   repo.setFacetRuntime(runtime)
 }
 
-type Scope = {childBacked?: boolean; workspace?: PropertyDisplaySetting; renderScopeId?: string}
+type Scope = {childBacked?: boolean; workspace?: PropertyDisplaySetting; renderScopeId?: string; dateScrub?: boolean}
 
 const mount = (scope: Scope = {}) => render(outline(scope))
 
@@ -205,13 +201,13 @@ const ListingProbe = ({parentId, mode}: {parentId: string; mode: PropertyDisplay
   return null
 }
 
-const outline = (scope: Scope, showDialogs = false) => (
+const outline = (scope: Scope) => (
     <RepoContext value={repo}>
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
           <HotkeyReconciler/>
           <Suspense fallback={null}>
-            {showDialogs && <DialogHost/>}
+            {scope.dateScrub && <dateScrubOverlayMount.component/>}
             <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: scope.renderScopeId}}>
               <PropertyDisplayScopeContext.Provider value={{
                 childBacked: scope.childBacked ?? true,
@@ -581,7 +577,7 @@ describe('editing through a property row', () => {
     expect(owner.peekProperty(dimensions)).toEqual({width: 7})
   })
 
-  it('picks days from both surfaces for an existing daily-note reference', async () => {
+  it('renders a typed day value as an ordinary wikilink and edits it in CodeMirror', async () => {
     const appointment = seedProperty({
       seedKey: 'test/property/appointment', revision: 1, name: 'rows:appointment',
       preset: 'optional-ref', config: {targetTypes: ['daily-note']}, changeScope: ChangeScope.BlockDefault,
@@ -591,108 +587,37 @@ describe('editing through a property row', () => {
     await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
     const owner = repo.block(OWNER)
     const initial = await getOrCreateDailyNote(repo, WS, '2026-05-04')
+    const replacement = await getOrCreateDailyNote(repo, WS, '2026-06-08')
     await owner.set(appointment, initial.id)
-    await act(async () => { render(outline({workspace: 'non-hidden'}, true)) })
+    await repo.awaitProcessors()
+    const field = await fieldRow(appointment.name)
+    const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    expect(value).toMatchObject({content: '[[May 4th, 2026]]', referenceTargetId: initial.id})
+    mount({workspace: 'non-hidden'})
 
-    await screen.findByRole('link', {name: 'May 4th, 2026'})
-    await act(async () => {
-      await initial.setContent('Trip planning')
-      await initial.set(aliasesProp, ['2026-02-12', '2026-05-04'])
-    })
-    expect(initial.peekProperty(aliasesProp)?.[0]).toBe('2026-02-12')
-    const saved = await screen.findByRole('link', {name: 'May 4th, 2026'})
-    expect(saved).toHaveAttribute('title', 'Trip planning')
-    expect(saved.getAttribute('href')).toContain(initial.id)
-    const inline = blockRow(saved)
-    const valueId = inline.dataset.blockId!
-    const changeDay = within(inline).getByRole('button', {name: 'Change day'})
-    fireEvent.click(changeDay)
-    const cancelDialog = screen.getByRole('dialog', {name: 'Change day'})
-    expect(within(cancelDialog).getByRole('textbox', {name: 'Day'})).toHaveFocus()
-    fireEvent.keyDown(cancelDialog, {key: 'Escape'})
-    await waitFor(() => expect(changeDay).toHaveFocus())
-    expect(owner.peekProperty(appointment)).toBe(initial.id)
-    fireEvent.click(changeDay)
-    const dialog = screen.getByRole('dialog', {name: 'Change day'})
-    expect(within(dialog).getByRole('button', {name: 'May 4, 2026', pressed: true})).toBeTruthy()
-    fireEvent.click(within(dialog).getByRole('button', {name: 'Next month'}))
-    fireEvent.click(within(dialog).getByRole('button', {name: 'June 8, 2026'}))
-    await within(inline).findByRole('link', {name: 'June 8th, 2026'})
-    const juneId = dailyNoteBlockId(WS, '2026-06-08')
-    expect(owner.peekProperty(appointment)).toBe(juneId)
-    expect((await repo.load(valueId))?.referenceTargetId).toBe(juneId)
+    const link = await screen.findByRole('link', {name: 'Mon, May 4th, 2026'})
+    const row = blockRow(link)
+    expect(row).toHaveAttribute('data-block-id', value.id)
+    expect(link).toHaveClass('wikilink')
+    expect(link).toHaveAttribute('href', `#${WS}/${initial.id}`)
+    expect(row.querySelector('[data-property-value-row]')).toBeNull()
+    expect(within(row).queryByRole('button', {name: 'Change day'})).toBeNull()
+    await act(() => focusBlock(repo.block(PANEL), value.id, {edit: true}))
+    const editor = await editorFor(value.id)
+    expect(editor.state.doc.toString()).toBe('[[May 4th, 2026]]')
+    writeInEditor(editor, '[[June 8th, 2026]]')
+    await waitFor(() => expect(owner.peekProperty(appointment)).toBe(replacement.id))
+    expect(await repo.load(value.id)).toMatchObject({content: '[[June 8th, 2026]]', referenceTargetId: replacement.id})
+  })
 
-    await act(() => owner.set(showPropertiesProp, true))
-    const panel = document.querySelector<HTMLElement>('.tm-property-fields')!
-    fireEvent.click(await within(panel).findByRole('button', {name: 'Change day'}))
-    const panelDialog = screen.getByRole('dialog', {name: 'Change day'})
-    const input = within(panelDialog).getByRole('textbox', {name: 'Day'})
-    fireEvent.change(input, {target: {value: '2026-02-30'}})
-    fireEvent.click(within(panelDialog).getByRole('button', {name: 'Set day'}))
-    expect(within(panelDialog).getByRole('alert')).toBeTruthy()
-    expect(owner.peekProperty(appointment)).toBe(juneId)
-    fireEvent.change(input, {target: {value: 'July 21st, 2026'}})
-    fireEvent.click(within(panelDialog).getByRole('button', {name: 'Set day'}))
-    await within(panel).findByRole('link', {name: 'July 21st, 2026'})
-    const julyId = dailyNoteBlockId(WS, '2026-07-21')
-    expect(owner.peekProperty(appointment)).toBe(julyId)
-    expect((await repo.load(valueId))?.referenceTargetId).toBe(julyId)
-
-    fireEvent.click(within(inline).getByRole('button', {name: 'Change day'}))
-    const clearDialog = screen.getByRole('dialog', {name: 'Change day'})
-    const clearButton = within(clearDialog).getByRole('button', {name: 'Clear day'})
-    const refused = vi.spyOn(repo, 'tx').mockResolvedValueOnce(false)
-    try {
-      fireEvent.click(clearButton)
-      expect(clearDialog).toHaveAttribute('aria-busy', 'true')
-      expect(clearButton).toBeDisabled()
-      fireEvent.keyDown(clearDialog, {key: 'Escape'})
-      expect(await within(clearDialog).findByRole('alert')).toHaveTextContent('no longer editable')
-      expect(refused).toHaveBeenCalledOnce()
-      expect(owner.peekProperty(appointment)).toBe(julyId)
-    } finally {
-      refused.mockRestore()
-    }
-
-    fireEvent.click(clearButton)
-    await within(inline).findByRole('button', {name: 'Choose day'})
-    expect(owner.peekProperty(appointment)).toBeUndefined()
-    expect((await repo.load(valueId))?.content).toBe('null')
-    expect(await repo.load(julyId)).toBeTruthy()
-
-    await act(() => owner.set(appointment, julyId))
-    const restored = await within(inline).findByRole('link', {name: 'July 21st, 2026'})
-    expect(blockRow(restored).dataset.blockId).toBe(valueId)
-    fireEvent.click(within(inline).getByRole('button', {name: 'Change day'}))
-    const staleClear = screen.getByRole('button', {name: 'Clear day'})
-    const tx = repo.tx.bind(repo)
-    const repurpose = vi.spyOn(repo, 'tx').mockImplementationOnce((write, options) =>
-      tx(async session => {
-        await session.move(valueId, {parentId: OWNER, orderKey: 'z9'})
-        return write(session)
-      }, options))
-    try {
-      fireEvent.click(staleClear)
-      expect(await repurpose.mock.results[0]?.value).toBe(false)
-      expect((await repo.load(valueId))?.parentId).toBe(OWNER)
-      expect((await repo.load(valueId))?.referenceTargetId).toBe(julyId)
-    } finally {
-      repurpose.mockRestore()
-    }
-  }, 20_000)
-
-  it.each(['bare instant', 'missing wrapped reference', 'live wrapped reference', 'queued relink after raw content changes',
-    'queued relink after a literal target appears'] as const)(
-    'shows the saved day and preserves the row when handling a %s', async stored => {
-      const scope = {scope: ChangeScope.BlockDefault}
-      const day = '2026-05-04'
-      const instant = `${day}T00:00:00.000Z`
+  it.each(['2026-05-04', '2026-05-04T00:00:00.000Z'])(
+    'shows and edits the exact stale ISO text %s without replacing its block', async content => {
       const appointment = seedProperty({
         seedKey: 'test/property/restored-appointment', revision: 1, name: 'rows:restored-appointment',
         preset: 'optional-ref', config: {targetTypes: ['daily-note']}, changeScope: ChangeScope.BlockDefault,
       })
       const install = () =>
-        addExtensions(dailyNotesPlugin({repo}), definitionSeedsFacet.of(appointment), annotationsDataExtension, backlinksDataExtension)
+        addExtensions(dailyNotesPlugin({repo}), definitionSeedsFacet.of(appointment), annotationsDataExtension)
       install()
       await materializePropertySeeds(repo, WS, [appointment, dailyNoteDateProp, aliasesProp])
       await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
@@ -703,126 +628,52 @@ describe('editing through a property row', () => {
       const {threadId, commentId} = await createThread(repo, {
         targetId: value.id, anchor: null, comment: 'Keep this appointment annotation',
       })
-      if (stored === 'live wrapped reference') {
-        await repo.tx(tx => tx.create({
-          id: day, workspaceId: WS, parentId: null, content: 'Existing literal reference', orderKey: 'z9',
-        }), scope)
-      }
       await repo.awaitProcessors()
-      const isBare = stored === 'bare instant' || stored === 'queued relink after raw content changes'
-      const raw = isBare ? instant : day
-      const target = isBare ? null : day
-      const content = target ? `((${target}))` : instant
       await sharedDb.db.writeTransaction(async tx => {
         await tx.execute('UPDATE blocks SET properties_json = json_set(properties_json, ?, ?) WHERE id = ?',
-          [`$."${appointment.name}"`, raw, OWNER])
-        await tx.execute('UPDATE blocks SET content = ?, reference_target_id = ?, references_json = ? WHERE id = ?',
-          [content, target, JSON.stringify(target ? [{id: target, alias: target}] : []), value.id])
+          [`$."${appointment.name}"`, content, OWNER])
+        await tx.execute('UPDATE blocks SET content = ?, reference_target_id = NULL, references_json = ? WHERE id = ?',
+          [content, '[]', value.id])
       })
-      repo = createTestRepo({db: sharedDb.db, user: USER}).repo
+      repo = createTestRepo({db: sharedDb.db, user: USER, appGenerators: true}).repo
       install()
       repo.setActiveWorkspaceId(WS)
       await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
-      const state = () => sharedDb.db.getAll('SELECT * FROM blocks WHERE id IN (?, ?, ?, ?, ?, ?) ORDER BY id',
-        [OWNER, PANEL, field.id, value.id, threadId, commentId!])
-      const before = await state()
-      const note = dailyNoteBlockId(WS, day)
-      expect(await repo.load(note)).toBeNull()
-      let view: ReturnType<typeof render>
-
-      if (stored === 'live wrapped reference') {
-        await act(async () => { render(outline({workspace: 'non-hidden'}, true)) })
-        const link = await screen.findByRole('link', {name: 'Existing literal reference'})
-        expect(link.getAttribute('href')).toContain(day)
-        expect(blockRow(link).dataset.blockId).toBe(value.id)
-        expect(screen.queryByRole('button', {name: 'Relink day'})).toBeNull()
-        expect(await state()).toEqual(before)
-        return
-      }
-
-      repo.setReadOnly(true)
-      await act(async () => { view = render(outline({workspace: 'non-hidden'}, true)) })
-      const label = await screen.findByText(`${day}, not linked`)
-      expect(blockRow(label).dataset.blockId).toBe(value.id)
-      expect(within(blockRow(label)).queryByRole('button', {name: 'Relink day'})).toBeNull()
-      expect(within(blockRow(label)).queryByRole('link', {name: 'May 4th, 2026'})).toBeNull()
-      await act(async () => {
-        repo.setReadOnly(false)
-        view.rerender(outline({workspace: 'non-hidden'}, true))
-      })
-      const relink = await screen.findByRole('button', {name: 'Relink day'})
-      const row = blockRow(relink)
-      expect(row.dataset.blockId).toBe(value.id)
-      fireEvent.click(within(row).getByRole('button', {name: 'Change day'}))
-      const dialog = screen.getByRole('dialog', {name: 'Change day'})
-      expect(within(dialog).getByRole('textbox', {name: 'Day'})).toHaveValue(day)
-      fireEvent.keyDown(dialog, {key: 'Escape'})
-      await waitFor(() => expect(dialog).not.toBeInTheDocument())
-      expect(await state()).toEqual(before)
+      expect((await repo.load(value.id))?.content).toBe(content)
+      const state = (ids: string[]) => sharedDb.db.getAll(
+        `SELECT * FROM blocks WHERE id IN (${ids.map(() => '?').join(', ')}) ORDER BY id`, ids,
+      )
+      const ids = [OWNER, field.id, value.id, threadId, commentId!]
+      const before = await state(ids)
+      const annotations = await state([threadId, commentId!])
+      const note = dailyNoteBlockId(WS, '2026-05-04')
       expect(await repo.load(note)).toBeNull()
 
-      if (stored === 'queued relink after raw content changes' || stored === 'queued relink after a literal target appears') {
-        const newer = '2026-05-06T00:00:00.000Z'
-        const transact = repo.tx.bind(repo)
-        const queued = vi.spyOn(repo, 'tx').mockImplementationOnce(async (write, options) => {
-          await transact(async tx => {
-            if (stored === 'queued relink after raw content changes') {
-              await tx.update(value.id, {content: newer})
-            } else {
-              await tx.create({
-                id: day, workspaceId: WS, parentId: null, content: 'New literal target', orderKey: 'z9',
-              })
-            }
-          }, scope)
-          return transact(write, options)
-        })
-        try {
-          await act(async () => {
-            fireEvent.click(relink)
-            expect(queued).toHaveBeenCalledOnce()
-            const attempt = queued.mock.results[0]!.value
-            if (stored === 'queued relink after raw content changes') {
-              await expect(attempt).resolves.toBe(false)
-            } else {
-              await expect(attempt).rejects.toThrow('reference changed')
-            }
-          })
-        } finally {
-          queued.mockRestore()
-        }
-        expect(await repo.load(note)).toBeNull()
-        expect(await repo.load(value.id)).toMatchObject({
-          id: value.id, parentId: field.id, content: stored === 'queued relink after raw content changes' ? newer : content,
-        })
-        if (stored === 'queued relink after a literal target appears') {
-          expect(await repo.load(day)).toMatchObject({content: 'New literal target'})
-          expect((await repo.load(OWNER))?.properties[appointment.name]).toBe(day)
-        }
-        return
-      }
+      mount({workspace: 'non-hidden'})
+      const text = await screen.findByText(content)
+      const row = blockRow(text)
+      expect(row).toHaveAttribute('data-block-id', value.id)
+      expect(text.closest('a')).toBeNull()
+      expect(await state(ids)).toEqual(before)
+      expect(await repo.load(note)).toBeNull()
+      await act(() => focusBlock(repo.block(PANEL), value.id, {edit: true}))
+      const editor = await editorFor(value.id)
+      expect(editor.state.doc.toString()).toBe(content)
 
-      const thread = await repo.load(threadId)
-      const comment = await repo.load(commentId!)
-      fireEvent.click(relink)
-      const linked = await within(row).findByRole('link', {name: 'May 4th, 2026'})
-      expect(linked.getAttribute('href')).toContain(note)
-      expect(blockRow(linked).dataset.blockId).toBe(value.id)
-      expect((await repo.load(OWNER))?.properties[appointment.name]).toBe(note)
-      expect((await repo.load(PANEL))?.properties[appointment.name]).toBeUndefined()
-      expect(await repo.load(value.id)).toMatchObject({
-        id: value.id, parentId: field.id, content: `((${note}))`, referenceTargetId: note,
-      })
-      expect(await repo.load(threadId)).toEqual(thread)
-      expect(await repo.load(commentId!)).toEqual(comment)
-      await waitFor(async () => {
-        expect(await repo.query['backlinks.forBlock']({workspaceId: WS, id: note}).load()).toEqual([OWNER])
-      })
+      const newer = '2026-05-06T00:00:00.000Z'
+      writeInEditor(editor, newer)
+      await waitFor(async () => expect(await repo.load(value.id)).toMatchObject({
+        id: value.id, parentId: field.id, content: newer, referenceTargetId: null, deleted: false,
+      }))
+      await repo.awaitProcessors()
+      expect(await repo.load(value.id)).toMatchObject({content: newer, deleted: false})
+      expect(await state([threadId, commentId!])).toEqual(annotations)
+      expect(await repo.load(note)).toBeNull()
     }, 20_000,
   )
 
-  it.each(['relinks', 'keeps a newer value when queued to relink'] as const)(
-    '%s a raw historical date in the legacy property panel', async behavior => {
-    const day = '2026-05-04'
+  it('uses the normal reference editor and preserves unmatched ISO text in the property panel', async () => {
+    const content = '2026-05-04T00:00:00.000Z'
     const appointment = seedProperty({
       seedKey: 'test/property/legacy-appointment', revision: 1, name: 'rows:legacy-appointment',
       preset: 'optional-ref', config: {targetTypes: ['daily-note']}, changeScope: ChangeScope.BlockDefault,
@@ -830,49 +681,34 @@ describe('editing through a property row', () => {
     await sharedDb.db.writeTransaction(async tx => {
       await tx.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = ?", [WS])
       await tx.execute('UPDATE blocks SET properties_json = json_set(properties_json, ?, ?) WHERE id = ?',
-        [`$."${appointment.name}"`, `${day}T00:00:00.000Z`, OWNER])
+        [`$."${appointment.name}"`, content, OWNER])
     })
     repo = createTestRepo({db: sharedDb.db, user: USER}).repo
-    addExtensions(dailyNotesPlugin({repo}), definitionSeedsFacet.of(appointment), backlinksDataExtension)
+    addExtensions(dailyNotesPlugin({repo}), definitionSeedsFacet.of(appointment))
     repo.setActiveWorkspaceId(WS)
     await materializePropertySeeds(repo, WS, [appointment, dailyNoteDateProp, aliasesProp])
     await waitFor(() => expect(repo.propertySchemas.has(appointment.name)).toBe(true))
-    await act(async () => { render(outline({childBacked: false}, true)) })
-    await act(() => repo.block(OWNER).set(showPropertiesProp, true))
+    const owner = repo.block(OWNER)
+    await act(async () => { mount({childBacked: false}) })
+    await act(() => owner.set(showPropertiesProp, true))
 
-    const label = await screen.findByText(`${day}, not linked`)
+    const label = await screen.findByText(content)
     const panel = label.closest<HTMLElement>('.tm-property-fields')!
     expect(panel).not.toBeNull()
-    const note = dailyNoteBlockId(WS, day)
-    expect(await repo.load(note)).toBeNull()
-    const relink = within(panel).getByRole('button', {name: 'Relink day'})
-    if (behavior === 'keeps a newer value when queued to relink') {
-      const newer = '2026-05-06T00:00:00.000Z'
-      const transact = repo.tx.bind(repo)
-      const queued = vi.spyOn(repo, 'tx').mockImplementationOnce((write, options) =>
-        transact(async tx => {
-          await tx.setProperty(OWNER, appointment, newer)
-          return write(tx)
-        }, options))
-      try {
-        await act(async () => {
-          fireEvent.click(relink)
-          expect(queued).toHaveBeenCalledOnce()
-          await expect(queued.mock.results[0]!.value).resolves.toBe(false)
-        })
-      } finally {
-        queued.mockRestore()
-      }
-      expect((await repo.load(OWNER))?.properties[appointment.name]).toBe(newer)
-      expect(await repo.load(note)).toBeNull()
-      return
-    }
-    fireEvent.click(relink)
-    await within(panel).findByRole('link', {name: 'May 4th, 2026'})
-    expect((await repo.load(OWNER))?.properties[appointment.name]).toBe(note)
-    await waitFor(async () => {
-      expect(await repo.query['backlinks.forBlock']({workspaceId: WS, id: note}).load()).toEqual([OWNER])
+    const noteId = dailyNoteBlockId(WS, '2026-05-04')
+    expect(await repo.load(noteId)).toBeNull()
+    expect((await repo.load(OWNER))?.properties[appointment.name]).toBe(content)
+
+    await act(async () => {
+      const target = await getOrCreateDailyNote(repo, WS, '2026-05-04')
+      await owner.set(appointment, target.id)
     })
+    const value = within(panel.querySelector<HTMLElement>('[data-property-name="rows:legacy-appointment"]')!)
+    expect(await value.findByText('May 4th, 2026')).toBeInTheDocument()
+    fireEvent.click(value.getByRole('button', {name: 'Remove block reference'}))
+    expect(await value.findByRole('combobox', {name: 'Search block reference'})).toBeInTheDocument()
+    expect(owner.peekProperty(appointment)).toBeUndefined()
+    expect(await repo.load(noteId)).not.toBeNull()
   }, 20_000)
 
   it('keeps an unresolved field-form child out of the scalar inline editor', async () => {
@@ -1109,6 +945,42 @@ describe('a list property', () => {
 })
 
 describe('a reference value', () => {
+  // Materializing daily-note seeds and scrubbing the rendered outline took about 1.2 s.
+  it('scrubs the date on a day value row and projects its new daily note to the owner', async () => {
+    const appointment = seedProperty({
+      seedKey: 'test/property/rows-appointment-scrub', revision: 1, name: 'rows:appointment-scrub',
+      preset: 'optional-ref', config: {targetTypes: ['daily-note']}, changeScope: ChangeScope.BlockDefault,
+    })
+    addExtensions(dailyNotesPlugin({repo}), definitionSeedsFacet.of(appointment),
+      vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo}))
+    await materializePropertySeeds(repo, WS, [appointment, dailyNoteDateProp, aliasesProp])
+    const owner = repo.block(OWNER)
+    const initial = await getOrCreateDailyNote(repo, WS, '2026-05-04')
+    await owner.set(appointment, initial.id)
+    const field = await fieldRow(appointment.name)
+    const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    await repo.block(value.id).setContent('[[May 4th, 2026]]')
+    expect((await repo.load(value.id))?.referenceTargetId).toBe(initial.id)
+    expect(owner.peekProperty(appointment)).toBe(initial.id)
+
+    const nextId = dailyNoteBlockId(WS, '2026-05-05')
+    expect(await repo.load(nextId)).toBeNull()
+    mount({workspace: 'non-hidden', dateScrub: true})
+    const row = blockRow(await screen.findByRole('link', {name: /May 4th, 2026/}))
+    expect(row.dataset.blockId).toBe(value.id)
+    await act(() => focusBlock(repo.block(PANEL), value.id))
+    fireEvent.keyDown(row, {key: 's', code: 'KeyS'})
+    await screen.findByText('Mon, May 4')
+    fireEvent.keyDown(row, {key: 'k', code: 'KeyK'})
+    await screen.findByText('Tue, May 5')
+    fireEvent.keyUp(row, {key: 's', code: 'KeyS'})
+
+    await waitFor(async () => {
+      expect(await repo.load(value.id)).toMatchObject({content: '[[May 5th, 2026]]', referenceTargetId: nextId})
+      expect(owner.peekProperty(appointment)).toBe(nextId)
+    })
+  }, 20_000)
+
   it.each([
     {prop: sourceProp, readOnly: false}, {prop: sourceProp, readOnly: true},
     {prop: requiredSourceProp, readOnly: false}, {prop: requiredSourceProp, readOnly: true},

@@ -156,7 +156,7 @@ const noteIsReady = (row: BlockData, shape: DailyNoteShape, parentId: string | n
  *  the root until navigation files it. Minting the shared Journal inside the
  *  property edit would let undo remove a container used by other devices.
  *  Undo can tombstone a newly created note with later synced children; reopening the day reveals them.
- *  When a user page owns both date aliases, wiki links open it and day references open the separate canonical note. */
+ *  The canonical note can exist even when another page owns its date alias. */
 export const getOrCreateDailyNoteInTx = async (
   tx: Tx, snapshot: TypeRegistrySnapshot, workspaceId: string, iso: string,
 ): Promise<string> => {
@@ -331,42 +331,29 @@ export const ensureDailyNoteTarget = async (
     // (found by referencesRecompute.fuzz.test.ts). The in-tx `aliasLookup`
     // above proved the ISO is unclaimed here, so re-assert it if missing —
     // append (not replace), since the seat may hold long-form literals
-    // claimed via claimLiteralDateAliases.
-    await ensureSeatClaimsIso(tx, result.id, date)
+    // claimed via claimDailyNoteAliases.
+    await claimDailyNoteAliases(tx, result.id, [date])
   }
   return result
 }
 
-/** Append `iso` to the seat's alias list if absent. Precondition: the
- *  caller proved `iso` is unclaimed in this tx, so the ISO insert itself
- *  can't collide. A malformed alias property is left untouched —
- *  replacing it would drop entries the block_aliases trigger still
- *  indexes, worse than leaving the ISO unclaimed. */
-const ensureSeatClaimsIso = async (tx: Tx, id: string, iso: string): Promise<void> => {
+/** Append only unclaimed spellings checked by the caller in this tx. Keep malformed alias bags intact. */
+export const claimDailyNoteAliases = async (tx: Tx, id: string, aliases: readonly string[]): Promise<void> => {
+  if (!aliases.length) return
   const seat = await tx.get(id)
-  if (seat === null || seat.deleted) return
+  if (!seat || seat.deleted) return
   let existing: readonly string[]
   try {
     existing = decodeRowProperty(seat, aliasesProp)
   } catch {
     return
   }
-  if (existing.includes(iso)) return
+  const next = appendMissing(existing, [...new Set(aliases)])
+  if (next.length === existing.length) return
   try {
-    await tx.setProperty(id, aliasesProp, [...existing, iso], {skipMetadata: true})
+    await tx.setProperty(id, aliasesProp, next, {skipMetadata: true})
   } catch (err) {
-    // Swallow ONLY alias-collision aborts (mirrors claimLiteralDateAliases,
-    // referencesProcessor.ts). setProperty rewrites the whole `alias`
-    // property, so the block_aliases trigger re-inserts every PRE-EXISTING
-    // alias before adding the ISO — and a pre-existing alias that's latently
-    // duplicated on another live block (a cross-client dupe synced in
-    // trigger-free, clientSchema.ts) collides on RE-insert. Letting that
-    // propagate would roll back the whole reference-parse tx (references for
-    // every other changed row) and recur on every re-edit — a silent recompute
-    // outage keyed to someone else's dupe. RAISE backs out only this
-    // statement, so degrade to leaving the ISO unclaimed for this seat. The
-    // ISO append can't be the colliding row: the caller's in-tx aliasLookup
-    // proved it unclaimed and `existing` doesn't contain it.
+    // Rewriting the array rechecks its existing aliases too. A synced duplicate can refuse the claim.
     if (parseAliasCollisionError(err) === null) throw err
   }
 }

@@ -128,9 +128,8 @@ export interface PropertyEditorProps<T> {
   value: T
   onChange: (next: T) => void
   /** Resolve the value and write it in the same transaction. The editor
-   *  host returns false when it refuses the write before calling resolve.
-   *  ifUnchanged applies repairs only while the rendered stored value still matches. */
-  resolveAndChange?: (resolve: (tx: Tx) => Promise<T>, options?: {ifUnchanged?: boolean}) => Promise<boolean>
+   *  host returns false when it refuses the write before calling resolve. */
+  resolveAndChange?: (resolve: (tx: Tx) => Promise<T>) => Promise<boolean>
   /** Schema being edited. Present for schema-backed property panel
    *  renderers; optional so older UI contributions that only need
    *  value/onChange/block keep their existing shape. */

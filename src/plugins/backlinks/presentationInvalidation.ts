@@ -1,5 +1,7 @@
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { propertyNameProp, typesProp } from '@/data/properties'
+import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
+import { presetConfigProp, presetIdProp, propertyNameProp, typesProp } from '@/data/properties'
+import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import {
   typedBlocksReferenceKey,
   type ChangeSnapshotSide,
@@ -16,7 +18,7 @@ const isDefinition = (side: Side): boolean => {
 }
 
 /** Membership can change without reference edges changing: an equal list
- *  member moves out, a field is unmarked, or its definition is renamed. */
+ *  member moves out, a field is unmarked, or its definition changes. */
 export const backlinkPresentationInvalidation: InvalidationRule = {
   id: 'backlinks.presentation-invalidation',
   collectFromSnapshots: (snapshots, emit) => {
@@ -29,17 +31,22 @@ export const backlinkPresentationInvalidation: InvalidationRule = {
         && (placementChanged || before?.referenceTargetId !== after?.referenceTargetId)
       const definitionChanged = (isDefinition(before) || isDefinition(after))
         && (isDefinition(before) !== isDefinition(after) || placementChanged
-          || before?.properties?.[propertyNameProp.name] !== after?.properties?.[propertyNameProp.name])
+          || before?.properties?.[propertyNameProp.name] !== after?.properties?.[propertyNameProp.name]
+          || before?.properties?.[presetIdProp.name] !== after?.properties?.[presetIdProp.name]
+          || !jsonValuesEqual(before?.properties?.[presetConfigProp.name], after?.properties?.[presetConfigProp.name]))
       if (fieldChanged || definitionChanged) {
         for (const side of [before, after]) {
           if (side) emit(BACKLINK_PRESENTATION_CHANNEL, side.workspaceId)
         }
       }
-      if (!placementChanged && before?.content === after?.content) continue
+      if (!placementChanged && before?.content === after?.content
+        && before?.referenceTargetId === after?.referenceTargetId) continue
       for (const side of [before, after]) {
         if (!side) continue
+        const exact = parseExactReferenceBlockContent(side.content ?? '')
+        const namedTarget = exact?.kind === 'alias' && !exact.fieldForm ? side.referenceTargetId : null
         for (const ref of side.references ?? []) {
-          if (!ref.sourceField && side.content === `((${ref.id}))`) {
+          if (!ref.sourceField && (side.content === `((${ref.id}))` || namedTarget === ref.id)) {
             emit(BACKLINK_PRESENTATION_CHANNEL, backlinkPresentationTargetKey(side.workspaceId, ref.id))
           }
         }

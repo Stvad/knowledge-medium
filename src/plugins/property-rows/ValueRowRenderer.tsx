@@ -6,7 +6,7 @@ import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/pr
 import type { BlockRenderer } from '@/types'
 import type { Block } from '@/data/block'
 import { FIELD_FORM_MARKER } from '@/data/referenceBlock'
-import { encodedPropertyValueToChildContents, isPropertyFieldInstance, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
+import { isPropertyFieldInstance, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import { readValuePresets, resolveValuePresetPresentation } from '@/data/valuePresetRegistry'
@@ -17,8 +17,6 @@ import { useHandle } from '@/hooks/block'
 import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation'
 import { isPropertyPanelReadOnlyProperty } from '@/components/propertyPanel/visibility'
 import { isResolvedPropertySchema } from '@/data/internals/propertySchemaResolution'
-import { DayPropertyEditor } from '@/plugins/daily-notes/DayPropertyEditor'
-import { storedIsoDay } from '@/plugins/daily-notes/dayProperty'
 import { drawsPropertyRows, useFieldRowDefinition, isSingleValueProperty, useIsChildOf, usePropertyDefinitions } from './fieldRow'
 
 const ReferenceWarning = ({block, schema, targetId}: {block: Block; schema: AnyPropertySchema; targetId: string}) => {
@@ -45,28 +43,22 @@ const InlineValue = ({block, Inner, fieldRowId, schema}: {
   try {
     value = valueChildCodec(schema).decode(valueChildContentToEncoded(schema, data))
   } catch (error) {
-    // A stale date row keeps the old literal until the day editor has relinked it.
-    if (Editor === DayPropertyEditor && Inner === MarkdownContentRenderer && storedIsoDay(data.content)) {
-      value = data.content
-    } else {
-      const reason = error instanceof Error ? error.message : 'Value cannot be decoded'
-      return <div className="flex min-w-0 items-center gap-1">
-        <span data-invalid-property-value="true" aria-label="Invalid property value" title={reason}>⚠</span>
-        <Inner block={block}/>
-      </div>
-    }
+    const reason = error instanceof Error ? error.message : 'Value cannot be decoded'
+    return <div className="flex min-w-0 items-center gap-1">
+      <span data-invalid-property-value="true" aria-label="Invalid property value" title={reason}>⚠</span>
+      <Inner block={block}/>
+    </div>
   }
   const warning = typeof value === 'string' && value && propertyValueTargetTypes(schema).length > 0
     ? <ReferenceWarning block={block} schema={schema} targetId={value}/> : null
   if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return warning
     ? <div className="flex min-w-0 items-center gap-1">{warning}<Inner block={block}/></div> : <Inner block={block}/>
-  const resolveAndChange: PropertyEditorProps<unknown>['resolveAndChange'] = async (resolve, options) => {
+  const resolveAndChange: PropertyEditorProps<unknown>['resolveAndChange'] = async resolve => {
     // Defence in depth for custom renderer contexts: only a resolved definition identifies the field.
     if (block.repo.isReadOnly || !isResolvedPropertySchema(schema) || isPropertyPanelReadOnlyProperty(schema.name)) return false
     return block.repo.tx(async tx => {
       const row = await tx.get(block.id)
       if (row?.deleted !== false || row.isFieldForm || row.parentId !== fieldRowId) return false
-      if (options?.ifUnchanged && (row.content !== data.content || row.referenceTargetId !== data.referenceTargetId)) return false
       // Defence in depth for synced moves across graphs before workspace write admission.
       if (row.workspaceId !== schema.workspaceId) return false
       const field = await tx.get(fieldRowId)
@@ -80,8 +72,8 @@ const InlineValue = ({block, Inner, fieldRowId, schema}: {
       if (isPropertyPanelReadOnlyProperty(currentSchema.name) || block.repo.isReadOnly) return false
       tx.assertWritableWorkspace(row.workspaceId)
       const next = await resolve(tx)
-      const [content] = encodedPropertyValueToChildContents(currentSchema, currentSchema.codec.encode(next))
-      await tx.update(block.id, {content})
+      const [valueRow] = await tx.propertyValueChildContents(currentSchema, currentSchema.codec.encode(next), row.workspaceId)
+      await tx.update(block.id, valueRow!)
       return true
     }, {scope: ChangeScope.BlockDefault, description: `set content on ${block.id}`})
   }

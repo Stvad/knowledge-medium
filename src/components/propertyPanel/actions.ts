@@ -6,8 +6,6 @@ import {
   scopePoliciesEquivalent,
   type Tx,
 } from '@/data/api'
-import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
-import { storedPropertyValue } from '@/data/rowProperty'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
 import {
@@ -26,7 +24,6 @@ export const resolveAndWriteProperty = async (
   block: Block,
   schema: AnyPropertySchema,
   resolve: (tx: Tx) => Promise<unknown>,
-  condition?: {expectedEncoded: unknown},
 ): Promise<boolean> => {
   if (!canWriteProperty(block, schema)) return false
   return block.repo.tx(async tx => {
@@ -35,7 +32,6 @@ export const resolveAndWriteProperty = async (
     const currentSchema = await tx.resolvePropertySchema(block.id, schema)
     if (currentSchema.codec !== schema.codec || !scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
       || !canWriteProperty(block, currentSchema)) return false
-    if (condition && !jsonValuesEqual(storedPropertyValue(owner.properties, currentSchema.name), condition.expectedEncoded)) return false
     tx.assertWritableWorkspace(owner.workspaceId)
     await tx.setProperty(block.id, currentSchema, await resolve(tx))
     return true

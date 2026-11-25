@@ -121,7 +121,6 @@ import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
-  encodedToValueChildContent,
   valueChildContentToEncoded,
   fieldRowValues,
   propertyCellValueRejection,
@@ -918,14 +917,13 @@ const applyToParent = async (
           }
           const converted = await convertedScalar(change, ctx, parent.workspaceId, encoded, refusals, parentId, value.content)
           if (converted === undefined) continue
-          canonical = encodedToValueChildContent(change.schema, converted)
+          canonical = (await ctx.tx.propertyValueChildContents(change.schema, converted, parent.workspaceId))[0]!.content
         } else {
           const conversion = convertValueChildContent(change.beforeSchema, change.schema, value)
           if (conversion.outcome === 'unreadable') continue
           canonical = conversion.content
         }
-        group.push({...value, content: canonical})
-        if (value.content === canonical) continue
+        if (value.content === canonical) { group.push(value); continue }
         // Re-stamp the reference columns from the REWRITTEN content, the same
         // duty every same-tx processor that rewrites `content` after
         // `core.deriveReferenceTarget` already ran carries (merge retarget,
@@ -941,6 +939,7 @@ const applyToParent = async (
         )
         const patch: Parameters<typeof ctx.tx.update>[1] = {content: canonical}
         const nextTargetId = derived.targetId ?? null
+        group.push({...value, content: canonical, referenceTargetId: nextTargetId})
         if ((value.referenceTargetId ?? null) !== nextTargetId) {
           patch.referenceTargetId = nextTargetId
         }
@@ -963,7 +962,8 @@ const applyToParent = async (
     // first-parseable-wins read here would publish one member and let
     // MATERIALIZE reap the rest.
     const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
-    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
+    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents,
+      change.encodingChanged ? undefined : storedPropertyValue(parent.properties, change.oldName))
     const lost = valuesLostBy(change, perFieldRow, projected)
     if (lost > 0) {
       lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)

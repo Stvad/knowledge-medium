@@ -56,11 +56,11 @@ import {
   type SameTxCtx,
   type Tx,
 } from '@/data/api'
+import type { ProposedValueChild } from '@/data/api/tx'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
-  encodedPropertyValueToChildContents,
   scalarValueRow,
   scalarDuplicates,
   valueChildContentToEncoded,
@@ -235,7 +235,7 @@ const collectAffectedProjection = async (
 /** The value a schema's field rows project onto their owner's cell, in
  *  deterministic `(order_key, id)` order — `undefined` when nothing parses,
  *  which §9 reads as "key unset" while the rows stay visible and fixable in
- *  the tree. Single-valued takes the first parseable value; multi-valued
+ *  the tree. Single-valued reads its first decodable or pending row; multi-valued
  *  AGGREGATES the members (`childContentsToEncodedPropertyValue` owns both
  *  rules, and the dedupe that makes divergence and multiplicity one shape).
  *
@@ -251,6 +251,7 @@ const collectAffectedProjection = async (
 export const projectFieldRowValues = (
   schema: AnyPropertySchema,
   perFieldRow: readonly (readonly (Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null})[])[],
+  storedWhileAwaiting?: unknown,
 ): unknown | undefined => {
   // NO field row at all: the key is unset. That is the only thing that unsets a
   // multi-valued property, and it is the precondition
@@ -259,7 +260,7 @@ export const projectFieldRowValues = (
   if (perFieldRow.length === 0) return undefined
   // `unionValuesAcrossFieldRows` owns what happens across the rows.
   return childContentsToEncodedPropertyValue(
-    schema, unionValuesAcrossFieldRows(schema, perFieldRow))
+    schema, unionValuesAcrossFieldRows(schema, perFieldRow), storedWhileAwaiting)
 }
 
 /** Does writing `projected` over `stored` keep everything `stored` holds? A
@@ -332,10 +333,11 @@ const reprojectOwner = async (
     // deep under a value child never re-projects the owner.
     const perFieldRow: BlockData[][] = []
     for (const fieldRow of fieldRows) perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
-    const projected = projectFieldRowValues(schema, perFieldRow)
-    if (mode === 'resolved'
+    const stored = storedPropertyValue(nextProperties, schema.name)
+    const projected = projectFieldRowValues(schema, perFieldRow, stored)
+    if (mode === 'resolved' && memberCodecOf(schema.codec)
       && perFieldRow.flat().some(row => awaitsReferenceTarget(schema, row))
-      && !keepsStoredValue(schema, storedPropertyValue(nextProperties, schema.name), projected)) continue
+      && !keepsStoredValue(schema, stored, projected)) continue
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via
@@ -712,7 +714,7 @@ export const materializePropertyChildrenForExistingRow = async (
     const fieldRow = await upsertFieldRow(
       tx, row, schema.fieldId, fieldRows, opts.additive,
     )
-    await reconcileFieldValueChildren(tx, fieldRow, schema, encoded, opts.additive)
+    await reconcileFieldValueChildren(tx, row, fieldRow, schema, encoded, opts.additive)
   }
 }
 
@@ -837,22 +839,19 @@ export const plannedFieldRow = (
  *  to `tx.createMany`. Its owners all predate it, so its rows take random ids,
  *  as `mintPropertyChildRow` would give them.
  *
- *  Takes CONTENTS, not the encoded value: the pass encodes (with
- *  `encodedPropertyValueToChildContents`, as the live reconcile does) inside
- *  its per-key guard, where the encoder's throw on a value no codec takes
- *  costs that key, not the batch. */
+ *  Proposed named links carry the target resolved in this transaction. */
 export const valueChildRowsFor = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  contents: readonly string[],
+  contents: readonly ProposedValueChild[],
 ): NewBlockData[] => {
   const keys = keysBetween(null, null, contents.length)
-  return contents.map((content, index) => ({
+  return contents.map((row, index) => ({
     workspaceId: fieldRow.workspaceId,
     parentId: fieldRow.id,
     orderKey: keys[index]!,
-    content,
-    references: tx.derivedReferencesFor(content),
+    ...row,
+    references: tx.derivedReferencesFor(row.content),
   }))
 }
 
@@ -900,7 +899,7 @@ export const upsertFieldRow = async (
 
 /**
  * Reconcile ONE field row's value children to `contents` — the content of each
- * value child, in sibling order, as {@link encodedPropertyValueToChildContents}
+ * value child, in sibling order, as {@link Tx.propertyValueChildContents}
  * computed it from the owner's cell.
  *
  * THE cell → children writer. `tx.setProperty`'s eager dual-write and the
@@ -925,8 +924,9 @@ export const upsertFieldRow = async (
  */
 export const reconcileFieldValueChildren = async (
   tx: Tx,
+  owner: BlockData,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  schema: AnyPropertySchema,
+  schema: AnyPropertySchema & {fieldId: string},
   encoded: unknown,
   /** See {@link MaterializeOptions.additive}. */
   additive = false,
@@ -935,15 +935,20 @@ export const reconcileFieldValueChildren = async (
   // by a caller: a scalar has exactly one content here by construction, which
   // is what lets the single-value branch below take a `string` rather than a
   // list it has to defend against being empty.
-  const contents = encodedPropertyValueToChildContents(schema, encoded)
+  const contents = await tx.propertyValueChildContents(schema, encoded, fieldRow.workspaceId)
   // §9 value set: bit-filtered, in `(order_key, id)` order — a nested marked
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
   if (memberCodecOf(schema.codec) === undefined) {
-    await reconcileSingleValueChild(tx, fieldRow, schema, values, contents[0]!, additive)
+    const proposed = contents[0]!
+    await reconcileSingleValueChild(tx, fieldRow, schema, values, proposed, additive)
+    if (proposed.referenceTargetId && proposed.referenceTargetId !== encoded) {
+      // A repeated write can change the bag without changing the already-correct wikilink.
+      requestCellProjection(tx, owner, schema.fieldId, schema)
+    }
     return
   }
-  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
+  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents.map(row => row.content), additive)
 }
 
 /** Mint one value child. `valueKey` is `content`'s `MemberKeys.content`, and
@@ -967,7 +972,7 @@ const reconcileSingleValueChild = async (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
   values: readonly BlockData[],
-  content: string,
+  proposed: ProposedValueChild,
   /** See {@link MaterializeOptions.additive}. */
   additive: boolean,
 ): Promise<void> => {
@@ -976,6 +981,7 @@ const reconcileSingleValueChild = async (
   // against `content`, the cell value the primary was just permitted to
   // disagree with, which would fold a row that is no duplicate of it (#1021).
   if (additive && values.length > 0) return
+  const {content} = proposed
   const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
   const primary = scalarValueRow(schema, values, content)
   if (!primary) {
@@ -983,14 +989,14 @@ const reconcileSingleValueChild = async (
     return
   }
   let sameValue = primary.content === content
-  if (!sameValue) {
+  if (!sameValue && !proposed.referenceTargetId) {
     try {
-      sameValue = jsonValuesEqual(valueChildContentToEncoded(schema, primary), valueChildContentToEncoded(schema, content))
+      sameValue = jsonValuesEqual(valueChildContentToEncoded(schema, primary), valueChildContentToEncoded(schema, proposed))
     } catch {
       // An unreadable primary is repaired by the requested spelling.
     }
   }
-  if (!sameValue) await tx.update(primary.id, {content})
+  if (!sameValue) await tx.update(primary.id, proposed)
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as

@@ -27,6 +27,7 @@ import type {
   AnyMutator,
   AnyPostCommitProcessor,
   AnyPropertyAssignment,
+  AnyValuePresetCore,
   AnyPropertySchema,
   BlockData,
   BlockDataPatch,
@@ -104,6 +105,7 @@ import {
   readPropertyDefinitionBags,
 } from '@/data/internals/propertyKeyScan'
 import {
+  encodedPropertyValueToChildContents,
   isLeftOutOfChildrenView,
   propertyCellValueRejection,
   type IsPropertyFieldDefinition,
@@ -280,6 +282,7 @@ export interface TxImplContext {
   propertyWritesAreSettled: () => boolean
   /** The write history the revival processor reads; see `revivedInThisTx`. */
   revivalHistory: RevivalHistory
+  valuePresets?: ReadonlyMap<string, AnyValuePresetCore>
   /** Content → the `references` it already implies, snapshotted at tx start
    *  from `contentReferencePrefillsFacet` — see `Tx.derivedReferencesFor`.
    *  Absent means no contributor, so nothing is prefilled and every row is
@@ -1063,6 +1066,20 @@ export class TxImpl implements Tx {
 
   derivedReferencesFor(content: string): BlockReference[] | undefined {
     return this.ctx.contentReferencePrefill?.(content)
+  }
+
+  async propertyValueChildContents(schema: AnyPropertySchema, encoded: unknown, workspaceId: string) {
+    const contents = encodedPropertyValueToChildContents(schema, encoded)
+    if (schema.codec.type === 'ref' && typeof encoded === 'string' && encoded !== '') {
+      for (const preset of this.ctx.valuePresets?.values() ?? []) {
+        const reference = preset.valueChildReference
+        if (reference?.matchesSchema(schema)) {
+          const named = await reference.resolve(this, workspaceId, encoded)
+          if (named) return [named]
+        }
+      }
+    }
+    return contents.map(content => ({content}))
   }
 
   // ──── Tree moves ────
@@ -1883,7 +1900,7 @@ export class TxImpl implements Tx {
     const fieldRow = await upsertFieldRow(
       this.propertyChildTx, parent, schema.fieldId, fieldRows.map(parseBlockRow),
     )
-    await reconcileFieldValueChildren(this.propertyChildTx, fieldRow, schema, encoded)
+    await reconcileFieldValueChildren(this.propertyChildTx, parent, fieldRow, schema, encoded)
   }
 
   private async requireParentInWorkspace(

@@ -252,9 +252,8 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         onChange={(next) => {
           void writeProperty(block, row.schema, next).then(written => { if (written) clearSyntheticProperty() })
         }}
-        resolveAndChange={async (resolve, options) => {
-          const written = await resolveAndWriteProperty(block, row.schema, resolve,
-            options?.ifUnchanged ? {expectedEncoded: row.encodedValue} : undefined)
+        resolveAndChange={async resolve => {
+          const written = await resolveAndWriteProperty(block, row.schema, resolve)
           if (written) clearSyntheticProperty()
           return written
         }}

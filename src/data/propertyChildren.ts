@@ -46,6 +46,7 @@ import {
   type AnyCodec,
   type AnyPropertySchema,
   type BlockData,
+  type ProposedValueChild,
   type PropertyChildrenView,
   type Tx,
 } from '@/data/api'
@@ -200,6 +201,11 @@ const codecAcceptsNull = (codec: AnyCodec): boolean => {
   nullAcceptance.set(codec, accepts)
   return accepts
 }
+
+// Blank is the unset spelling for optional refs and numbers. String codecs
+// already use blank for a stored empty string, and JSON spells null explicitly.
+const canSpellUnsetAsEmpty = (codec: AnyCodec): boolean =>
+  codec.type === 'ref' || codec.type === 'number'
 
 /** The codec ONE value child's content is encoded by: the MEMBER codec for a
  *  multi-valued property, the property's own codec otherwise.
@@ -456,7 +462,7 @@ const isEscapedEnvelope = (trimmed: string): boolean =>
 
 const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
   if (encoded === undefined) return ''
-  if (encoded === null) return codecAcceptsNull(codec) ? 'null' : ''
+  if (encoded === null) return !canSpellUnsetAsEmpty(codec) && codecAcceptsNull(codec) ? 'null' : ''
   if (codec.type === 'ref') {
     // A ref value child holds the reference in editable `((id))` form — the
     // same block-reference affordance as everywhere else, and the same shape
@@ -495,10 +501,7 @@ const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
 
 /** Named references require the target derived for this exact stored content.
  * Proposed content must supply a freshly resolved target, never an old row's. */
-export type ValueChildContent = string | {
-  readonly content: string
-  readonly referenceTargetId?: string | null
-}
+export type ValueChildContent = string | ProposedValueChild
 
 const textOfValueChild = (value: ValueChildContent): string =>
   typeof value === 'string' ? value : value.content
@@ -539,7 +542,8 @@ const contentToEncodedValue = (
       // not valid JSON — falls through to the sentinel/default handling below
     }
   }
-  if (content.trim() === 'null' && codecAcceptsNull(codec)) {
+  // Continue to read the original null spelling in stored rows.
+  if (((content === '' && canSpellUnsetAsEmpty(codec)) || content.trim() === 'null') && codecAcceptsNull(codec)) {
     return codec.encode(codec.decode(null))
   }
   switch (codec.type) {
@@ -598,9 +602,9 @@ const contentToEncodedValue = (
  *  device may have projected it into the cell. */
 export const awaitsReferenceTarget = (
   schema: AnyPropertySchema,
-  row: Exclude<ValueChildContent, string>,
+  row: ValueChildContent,
 ): boolean => valueChildCodec(schema).type === 'ref'
-  && readRefValue(row.content, row.referenceTargetId).kind === 'awaits-target'
+  && readRefValue(textOfValueChild(row), typeof row === 'string' ? undefined : row.referenceTargetId).kind === 'awaits-target'
 
 /** Encode ONE value child's content, at {@link valueChildCodec} grain — a
  *  whole scalar value, or one member of a multi-valued property. */
@@ -968,8 +972,7 @@ export const encodedPropertyValueToChildContents = (
  * value — `undefined` when nothing parses, which the projection reads as
  * §9's "key unset, rows stay visible and fixable".
  *
- * Single-valued: first parseable wins, unparseable siblings skipped (a
- * divergent peer is a surfaced conflict, and the cell shows the winner).
+ * A scalar reads its first decodable or pending reference row in sibling order.
  * Multi-valued: every parseable member, in sibling order, multiplicity and all
  * ({@link encodedPropertyValueToChildContents} says why the members are not a
  * set). An unparseable MEMBER
@@ -994,11 +997,10 @@ export const encodedPropertyValueToChildContents = (
 export const childContentsToEncodedPropertyValue = (
   schema: AnyPropertySchema,
   contents: Iterable<ValueChildContent>,
+  storedWhileAwaiting?: unknown,
 ): unknown | undefined => {
   if (memberCodecOf(schema.codec) === undefined) {
-    // Invalid child text should not preserve a stale parent cell projection:
-    // skip it; if none parse the key is left unset.
-    return firstDecodingValue(schema, contents)?.value
+    return firstScalarValue(schema, contents, {storedWhileAwaiting})?.value
   }
   const members: unknown[] = []
   for (const content of contents) {
@@ -1011,46 +1013,32 @@ export const childContentsToEncodedPropertyValue = (
   return members
 }
 
-/** A single-valued property's value: the first of its value children's
- *  contents that decodes. The cell reads this one. */
-const firstDecodingValue = (
-  schema: AnyPropertySchema,
-  contents: Iterable<ValueChildContent>,
-): {readonly value: unknown} | undefined => {
-  for (const content of contents) {
+/** An unresolved name reserves its position: reading or writing a later peer would change the
+ *  winner when the name resolves. Other unreadable text stays available for editing in the outline. */
+const firstScalarValue = <T extends ValueChildContent>(
+  schema: AnyPropertySchema, contents: Iterable<T>, {writing, storedWhileAwaiting}: {
+    writing?: string; storedWhileAwaiting?: unknown
+  },
+): {row: T; value: unknown} | undefined => {
+  for (const row of contents) {
     try {
-      return {value: valueChildContentToEncoded(schema, content)}
+      return {row, value: valueChildContentToEncoded(schema, row)}
     } catch {
-      // Not this one.
+      if (awaitsReferenceTarget(schema, row) || textOfValueChild(row) === writing) {
+        return {row, value: storedWhileAwaiting}
+      }
     }
   }
   return undefined
 }
 
-/** The value child a single-valued property's value lives in, of `values` in
- *  sibling order: the one the cell reads ({@link firstDecodingValue}), else
- *  the ONLY child — a value its user made unreadable, which a write repairs in
- *  place. `undefined` when neither holds: no child can be told apart as the
- *  value, so a write must add one rather than overwrite any. The writer and
- *  the outline's value editor both bind here, so the editor sits on the row a
- *  write lands on — except for a write whose content does not decode (a
- *  cleared ref) when an earlier row already holds that content: it lands
- *  there, the value row keeps its text and the cell reads stale until the
- *  rows change. Accepted: every other order lets the second pass overwrite a
- *  divergent peer. */
-export const scalarValueRow = <T extends {readonly content: string}>(
-  schema: AnyPropertySchema,
-  values: readonly T[],
-  /** A write's own content: a row already holding it counts as readable, so
-   *  a write that reconciles twice in one tx (the eager dual-write, then the
-   *  deferred materializer) lands on the same row both times even when that
-   *  content does not decode, as a cleared ref's does. */
-  writing?: string,
-): T | undefined => {
-  return values.find(value => value.content === writing
-    || firstDecodingValue(schema, [value]) !== undefined)
-    ?? (values.length === 1 ? values[0] : undefined)
-}
+/** Writers and editors can repair a sole unreadable row in place. Multiple unreadable peers
+ *  have no identifiable winner. Matching the write's own text keeps a repeated reconcile on
+ *  the same row even when that text cannot decode (a cleared required ref). */
+export const scalarValueRow = <T extends ProposedValueChild>(
+  schema: AnyPropertySchema, values: readonly T[], writing?: string,
+): T | undefined =>
+  firstScalarValue(schema, values, {writing})?.row ?? (values.length === 1 ? values[0] : undefined)
 
 export const scalarDuplicates = (
   values: readonly BlockData[], primary: BlockData | undefined, content: string,

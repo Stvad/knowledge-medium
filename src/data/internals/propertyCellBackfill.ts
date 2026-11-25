@@ -3,7 +3,7 @@
  *
  * Every block whose `properties_json` holds a registered key gets the field and
  * value CHILD rows that key implies, built from what the live dual-write uses —
- * {@link plannedFieldRow} and `encodedPropertyValueToChildContents` — so the
+ * {@link plannedFieldRow} and {@link Tx.propertyValueChildContents} — so the
  * two writers cannot decide differently what a value's children are. Cells
  * are left exactly as they are: this pass ADDS the child representation.
  *
@@ -40,6 +40,7 @@
  * already-has-a-field-row test above is what makes revisiting a block a no-op.
  */
 
+import type { ProposedValueChild } from '@/data/api/tx'
 import type {
   AnyPropertySchema, BlockData, NewBlockData, ResolvedPropertySchema,
 } from '@/data/api'
@@ -48,7 +49,6 @@ import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
 import { chunk as chunksOf } from 'lodash-es'
 import {
-  encodedPropertyValueToChildContents,
   getPropertyFieldTargetId,
   propertyCellValueRejection,
   propertyFieldContent,
@@ -145,12 +145,7 @@ type CellDecision =
   /** Cannot be planned: the codec refuses the value, or the definition's
    *  fieldId does not render as a field row. */
   | {readonly kind: 'refused'; readonly schema: ResolvedPropertySchema<unknown>; readonly cause: unknown}
-  /** What the pass materializes, with the value children it implies. */
-  | {
-    readonly kind: 'pending'
-    readonly schema: ResolvedPropertySchema<unknown>
-    readonly contents: readonly string[]
-  }
+  | {readonly kind: 'pending'; readonly schema: ResolvedPropertySchema<unknown>}
 
 /** The pass's per-cell decision, shared with {@link surveyPropertyCellCoverage}
  *  so the report an operator sizes and closes a repair by cannot disagree with
@@ -176,7 +171,7 @@ const decideCell = (
     // A fieldId with whitespace or parentheses does not render back out — a
     // property of the definition, which the value check cannot see.
     propertyFieldContent(schema.fieldId)
-    return {kind: 'pending', schema, contents: encodedPropertyValueToChildContents(schema, encoded)}
+    return {kind: 'pending', schema}
   } catch (cause) {
     return {kind: 'refused', schema, cause}
   }
@@ -704,9 +699,7 @@ const sweep = async (
       const planned: {
         owner: BlockData
         fieldRow: NewBlockData
-        /** Encoded by {@link decideCell}, so a value no codec will take costs
-         *  its own key instead of aborting the batch. */
-        contents: readonly string[]
+        contents: readonly ProposedValueChild[]
       }[] = []
       // Counted into locals and committed to `progress` only once the batch has
       // WRITTEN. A throw from either `createMany` rolls the transaction back,
@@ -755,7 +748,7 @@ const sweep = async (
           planned.push({
             owner,
             fieldRow: plannedFieldRow(tx, owner, decision.schema.fieldId),
-            contents: decision.contents,
+            contents: await tx.propertyValueChildContents(decision.schema, owner.properties[name], owner.workspaceId),
           })
           materializedHere += 1
         }

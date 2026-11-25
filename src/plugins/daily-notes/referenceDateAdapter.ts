@@ -8,6 +8,8 @@
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import { hasSourceContent, takesTextEdit } from '@/data/blockTypes'
+import { resolvePropertyValueFieldSchema } from '@/data/propertyChildren'
+import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import {
   parseOutermostReferences,
   type ParsedReference,
@@ -16,6 +18,8 @@ import {
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
+import { getOrCreateDailyNoteInTx } from './dailyNotes.ts'
+import { isDayReferenceSchema } from './schema.ts'
 
 export interface DateReferenceMatch {
   ref: ParsedReference
@@ -88,6 +92,18 @@ export const referenceDateAdapter: BlockDateAdapter = {
       if (!takesTextEdit(row)) return
       const nextContent = replaceSingleDateReferenceContent(row.content, iso)
       if (nextContent === null || nextContent === row.content) return
+      const dateLink = parseExactReferenceBlockContent(nextContent)
+      if (dateLink?.kind === 'alias') {
+        const schema = await resolvePropertyValueFieldSchema(tx, row)
+        if (schema && isDayReferenceSchema(schema) && !await tx.aliasLookup(dateLink.alias, row.workspaceId)) {
+          // The owner cell projects the value row in this transaction, so the alias must already resolve.
+          tx.assertWritableWorkspace(row.workspaceId)
+          await getOrCreateDailyNoteInTx(tx, block.repo.snapshotTypeRegistries(), row.workspaceId, iso)
+          if (!await tx.aliasLookup(dateLink.alias, row.workspaceId)) {
+            throw new Error(`Could not resolve the new day ${iso}`)
+          }
+        }
+      }
       await tx.update(block.id, {content: nextContent})
       written = true
     }, {scope: ChangeScope.BlockDefault, description: 'set date reference'})

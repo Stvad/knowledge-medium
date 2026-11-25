@@ -6,7 +6,6 @@ import { BlockChildren, BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
 import { ReferenceLink } from '@/components/references/ReferenceLink'
-import { resolveAndWriteProperty } from '@/components/propertyPanel/actions'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { PropertyDisplayScopeContext, PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
@@ -20,7 +19,7 @@ import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
 import { useChildIdsForMode, useContent, useHandle, useWorkspaceId } from '@/hooks/block'
-import { StoredDayReference } from '@/plugins/daily-notes/DayPropertyEditor'
+import { storedIsoDay } from '@/plugins/daily-notes/dayProperty'
 import { isDayReferenceSchema } from '@/plugins/daily-notes/schema'
 import { isSingleValueProperty, resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
@@ -48,7 +47,6 @@ interface TableState {
   hasQuery: boolean
   columns: readonly TableColumn[]
   schemas: readonly (AnyPropertySchema | undefined)[]
-  editable: readonly boolean[]
   /** The first column that shows the row's own text, -1 for none. */
   contentColumn: number
   /** Rows made here that the query does not select. */
@@ -90,14 +88,14 @@ const formatStored = (value: unknown): string =>
     : typeof value === 'object' ? JSON.stringify(value)
     : String(value)
 
-const StoredReference = ({row, targetId}: {row: Block; targetId: string}) => {
+const StoredReference = ({row, targetId, missingText}: {row: Block; targetId: string; missingText?: string}) => {
   const workspaceId = useWorkspaceId(row)
   const target = row.repo.block(targetId)
   const label = useHandle(target, {selector: data => data?.workspaceId === workspaceId
     ? data.content.trim() || labelForBlockData(data, 'Untitled block')
     : null})
   return label ? <div className="truncate"><ReferenceLink block={target}>{label}</ReferenceLink></div>
-    : <span className="text-muted-foreground">Unavailable reference</span>
+    : <span className="block truncate text-muted-foreground" title={missingText}>{missingText ?? 'Unavailable reference'}</span>
 }
 
 /** The value from the property bag, for cells that draw no value rows. */
@@ -106,18 +104,15 @@ const StoredValue = ({row, properties, schema}: {
 }) => {
   const stored = properties && storedPropertyValue(properties, schema.name)
   const targetId = isRefCodec(schema.codec) ? decodeRefId(schema.codec, stored) : undefined
-  if (targetId && isDayReferenceSchema(schema)) {
-    return <StoredDayReference block={row} targetId={targetId}
-      resolveAndChange={!row.repo.isReadOnly && isPropertyValueEditable(schema)
-        ? resolve => resolveAndWriteProperty(row, schema, resolve, {expectedEncoded: stored})
-        : undefined}/>
+  if (targetId) {
+    const missingText = isDayReferenceSchema(schema) && storedIsoDay(targetId) ? targetId : undefined
+    return <StoredReference row={row} targetId={targetId} missingText={missingText}/>
   }
-  if (targetId) return <StoredReference row={row} targetId={targetId}/>
   const text = formatStored(stored)
   return text ? <span className="block truncate text-muted-foreground" title={text}>{text}</span> : null
 }
 
-const ReadOnlyCell = ({row, schema}: {row: Block; schema: AnyPropertySchema}) => {
+const StoredCell = ({row, schema}: {row: Block; schema: AnyPropertySchema}) => {
   const properties = useHandle(row, {selector: data => data?.properties})
   return <StoredValue row={row} properties={properties} schema={schema}/>
 }
@@ -141,7 +136,7 @@ const CellScope = ({scopeRootId, fieldRowId, schema, outline, children}: {
   )
 }
 
-const EditableCell = ({row, fieldId, schema}: {row: Block; fieldId: string; schema: AnyPropertySchema}) => {
+const PropertyBlockCell = ({row, fieldId, schema}: {row: Block; fieldId: string; schema: AnyPropertySchema}) => {
   const cell = useHandle(row.repo.query.propertyRows({ownerId: row.id, fieldId}), {selector: rows => rows && {
     properties: rows.owner?.properties,
     fieldRowIds: rows.fields.filter(({values}) => values.length > 0).map(({field}) => field.id),
@@ -250,12 +245,13 @@ const RowText = ({row}: {row: Block}) => {
   return <span className="block truncate">{content}</span>
 }
 
-const ValueCellBody = ({row, column, schema, editable}: {
-  row: Block; column: TableColumn; schema: AnyPropertySchema | undefined; editable: boolean
+const ValueCellBody = ({row, column, schema}: {
+  row: Block; column: TableColumn; schema: AnyPropertySchema | undefined
 }) => {
+  const {childBacked} = useContext(PropertyDisplayScopeContext)
   if (!schema) return <span data-table-error="true" title="This column’s property cannot be found.">⚠</span>
-  if (!editable) return <ReadOnlyCell row={row} schema={schema}/>
-  return <EditableCell row={row} fieldId={column.fieldId!} schema={schema}/>
+  if (!childBacked || !isPropertyValueEditable(schema)) return <StoredCell row={row} schema={schema}/>
+  return <PropertyBlockCell row={row} fieldId={column.fieldId!} schema={schema}/>
 }
 
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
@@ -277,7 +273,7 @@ const RowNotes = ({row}: {row: Block}) => {
 }
 
 const TableRowLayout: BlockLayout = ({block, Header, Shell, Controls, Content}) => {
-  const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!
+  const {columns, schemas, contentColumn, unmatched} = useContext(TableContext)!
   const outside = unmatched.has(block.id)
   const FrozenControls = useMemo(() => function FrozenControls() {
     // The frame's 4px gap to the frozen first column is painted too, or scrolled cells show through it.
@@ -295,7 +291,7 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Controls, Content}) 
             <Cell key={column.id} row={block} index={index} sticky={index === 0} isContent={index === contentColumn}>
               {column.fieldId === null
                 ? index === contentColumn ? <Content/> : <RowText row={block}/>
-                : <ValueCellBody row={block} column={column} schema={schemas[index]} editable={editable[index]!}/>}
+                : <ValueCellBody row={block} column={column} schema={schemas[index]}/>}
             </Cell>
           ))}
         </div>
@@ -487,15 +483,12 @@ const TableBody = ({
     return new Set(created.filter(id => !live.has(id)))
   }, [created, selected])
   const shown = useMemo(() => rowIds?.slice(0, ROW_CAP) ?? [], [rowIds])
-  const editable = useMemo(() => columns.map((column, index) => !repo.isReadOnly &&
-    (column.fieldId === null || (childBacked && isPropertyValueEditable(schemas[index])))),
-  [childBacked, columns, repo.isReadOnly, schemas])
   const gridColumns = useMemo<GridColumn[]>(() => columns.map((column, index) => ({
     id: column.id,
     fieldId: column.fieldId,
-    editable: editable[index]!,
+    editable: !repo.isReadOnly && (column.fieldId === null || (childBacked && isPropertyValueEditable(schemas[index]))),
     list: schemas[index] !== undefined && !isSingleValueProperty(schemas[index]),
-  })), [columns, editable, schemas])
+  })), [childBacked, columns, repo.isReadOnly, schemas])
 
   useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setQuery(query?.parsed.terms ?? null) }, [controller, query])
@@ -548,8 +541,8 @@ const TableBody = ({
     return () => observer.disconnect()
   }, [])
   const contentColumn = columns.findIndex(column => column.fieldId === null)
-  const table = useMemo<TableState>(() => ({controller, hasQuery: query !== null, columns, schemas, editable, contentColumn, unmatched, rows: rowSet}),
-    [controller, query, columns, schemas, editable, contentColumn, unmatched, rowSet])
+  const table = useMemo<TableState>(() => ({controller, hasQuery: query !== null, columns, schemas, contentColumn, unmatched, rows: rowSet}),
+    [controller, query, columns, schemas, contentColumn, unmatched, rowSet])
   const onSort = useCallback((next: ViewSort | undefined) => {
     void writeSort(repo, viewId, next).catch(error => console.error('[tables] sort failed', error))
   }, [repo, viewId])

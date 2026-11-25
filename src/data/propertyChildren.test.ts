@@ -3699,6 +3699,19 @@ describe('content <-> value codecs: blank numeric content is unparseable, not ze
     expect(content).toBe('0')
     expect(valueChildContentToEncoded(numberSchema, content)).toBe(0)
   })
+
+  it('stores an unset optional number as empty content and still reads legacy null text', () => {
+    const optionalNumberSchema = defineProperty('maybe-count', {
+      codec: codecs.optionalNumber,
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(propertyValueToChildContent(optionalNumberSchema, undefined)).toBe('')
+    expect(valueChildContentToEncoded(optionalNumberSchema, '')).toBeNull()
+    expect(valueChildContentToEncoded(optionalNumberSchema, 'null')).toBeNull()
+    expect(valueChildContentToEncoded(optionalNumberSchema, '0')).toBe(0)
+    expect(() => valueChildContentToEncoded(optionalNumberSchema, ' ')).toThrow(CodecError)
+  })
 })
 
 describe('content <-> value codecs: "null"-collision escaping (PR #386 review fix)', () => {
@@ -3732,6 +3745,23 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = encodedToValueChildContent(nullableStringSchema, null)
     expect(content).toBe('null')
     expect(valueChildContentToEncoded(nullableStringSchema, content)).toBeNull()
+  })
+
+  it.each(['', '""'])('preserves an existing optional string with content %j', content => {
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBe(content)
+    expect(propertyValueToChildContent(nullableStringSchema, content)).toBe(content)
+  })
+
+  it('stores and reads a literal raw JSON null', () => {
+    const rawJson = kernelValuePresetCoresById['raw-json']
+    const schema = defineProperty('raw-value', {
+      codec: rawJson.build(rawJson.defaultConfig),
+      defaultValue: rawJson.defaultValue,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(propertyValueToChildContent(schema, null)).toBe('null')
+    expect(valueChildContentToEncoded(schema, 'null')).toBeNull()
+    expect(() => valueChildContentToEncoded(schema, '')).toThrow(CodecError)
   })
 
   it('ordinary strings are stored verbatim, unchanged', () => {
@@ -3990,14 +4020,12 @@ describe('content <-> value codecs: reference value decoding', () => {
       .toThrow()
   })
 
-  it('an optional ref preserves an explicit null (sentinel wins over the form check)', () => {
-    const content = encodedToValueChildContent(optionalRefSchema, null)
-    expect(content).toBe('null')
-    // Must NOT throw despite `null` being no reference form at all — the
-    // generic null sentinel runs first, so an intentionally-unset optional ref
-    // decodes to its unset form (encoded as null, like every other
-    // null-accepting codec).
-    expect(valueChildContentToEncoded(optionalRefSchema, content)).toBeNull()
+  it('stores an unset optional ref as empty content and still reads legacy null text', () => {
+    expect(propertyValueToChildContent(optionalRefSchema, undefined)).toBe('')
+    expect(valueChildContentToEncoded(optionalRefSchema, '')).toBeNull()
+    expect(valueChildContentToEncoded(optionalRefSchema, 'null')).toBeNull()
+    expect(() => valueChildContentToEncoded(optionalRefSchema, ' ')).toThrow(CodecError)
+    expect(() => valueChildContentToEncoded(refSchema, '')).toThrow(CodecError)
   })
 })
 

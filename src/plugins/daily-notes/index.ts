@@ -69,7 +69,7 @@ import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
-import { DayPropertyEditor } from './DayPropertyEditor'
+import { DayReferencePanelEditor } from './DayReferencePanelEditor'
 import { dayValuePresetCore, isDayReferenceSchema } from './schema'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
 import { dateNavDecoratorContribution } from './DateNavDecorator.tsx'
@@ -155,8 +155,7 @@ const {presentation: dayPresentation} = defineSplitPreset(dayValuePresetCore, {
   id: dayValuePresetCore.id,
   label: 'Date',
   Glyph: CalendarDays,
-  Editor: DayPropertyEditor,
-  InlineEditor: DayPropertyEditor,
+  Editor: DayReferencePanelEditor,
   matchesSchema: isDayReferenceSchema,
 })
 

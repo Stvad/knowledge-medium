@@ -357,12 +357,14 @@ export function ReferenceSearch({
   )
 }
 
+type ScalarRefEditorProps = PropertyEditorProps<string> | PropertyEditorProps<string | undefined>
+
 function RefPropertyEditorInner({
   value,
   onChange,
   block,
   schema,
-}: PropertyEditorProps<string> & {block: Block}) {
+}: ScalarRefEditorProps & {block: Block}) {
   const blockId = normalizeId(value)
   const readOnly = block.repo.isReadOnly
   const targetTypes = useMemo(
@@ -446,7 +448,7 @@ function RefListPropertyEditorInner({
   )
 }
 
-export function RefPropertyEditor(props: PropertyEditorProps<string>) {
+export function RefPropertyEditor(props: ScalarRefEditorProps) {
   if (!(props.block instanceof Block)) return <EmptyReference />
   return <RefPropertyEditorInner {...props} block={props.block} />
 }

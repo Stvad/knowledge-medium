@@ -85,6 +85,9 @@ import type { Mutator } from './mutator'
 import type { ScheduledArgsFor } from './processor'
 import type { SameTxEventPayload } from './sameTxProcessor'
 
+/** Named value links carry the alias target resolved for their proposed content. */
+export type ProposedValueChild = Pick<BlockData, 'content' | 'referenceTargetId'>
+
 /** Transactional session. Async reads, no arbitrary queries. Spec §5.3. */
 export interface Tx {
   // ──── Reads ────
@@ -201,6 +204,10 @@ export interface Tx {
    *  create the row without references and leave the content to whatever reads
    *  it afterwards. */
   derivedReferencesFor(content: string): BlockReference[] | undefined
+
+  /** Encode a cell into value rows using the target and alias ownership visible to this write. */
+  propertyValueChildContents(schema: AnyPropertySchema, encoded: unknown, workspaceId: string):
+    Promise<ProposedValueChild[]>
 
   // ──── Tree moves (structural) ────
 

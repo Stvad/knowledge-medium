@@ -23,6 +23,11 @@ export interface ValuePresetCore<TValue = unknown, TConfig = void> {
   readonly defaultValue: TValue
   readonly defaultConfig?: TConfig
   readonly configCodec?: Codec<TConfig>
+  /** Preferred named link for scalar reference values. A missing or unspellable target keeps its ID link. */
+  readonly valueChildReference?: {
+    matchesSchema(schema: AnyPropertySchema): boolean
+    resolve(tx: Tx, workspaceId: string, id: string): Promise<{content: string; referenceTargetId: string} | undefined>
+  }
   readonly scalarConversion?: ScalarPresetConversion
 }
 
