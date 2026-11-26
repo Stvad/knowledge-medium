@@ -1,0 +1,1 @@
+export{eM as useAncestorCrumbs}from"../../chunks/app-1xI9wpjz.js";

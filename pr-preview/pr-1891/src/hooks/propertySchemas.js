@@ -1,0 +1,1 @@
+export{NY as usePropertySchemas}from"../../chunks/app-1xI9wpjz.js";

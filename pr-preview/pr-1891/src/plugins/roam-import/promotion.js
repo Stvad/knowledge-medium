@@ -1,0 +1,1 @@
+export{Fp as computePromotedFromChildren,Ip as detectInlineAttribute}from"../../../chunks/app-1xI9wpjz.js";

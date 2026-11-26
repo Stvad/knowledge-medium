@@ -1,0 +1,1 @@
+export{UQ as preferredSpanReplacement}from"../../../chunks/app-1xI9wpjz.js";

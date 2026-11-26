@@ -1,0 +1,1 @@
+export{HW as BlockProperties}from"../../chunks/app-1xI9wpjz.js";

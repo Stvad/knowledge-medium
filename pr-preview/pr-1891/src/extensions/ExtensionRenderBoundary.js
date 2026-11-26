@@ -1,0 +1,1 @@
+export{SU as ExtensionRenderBoundary}from"../../chunks/app-1xI9wpjz.js";

@@ -1,0 +1,1 @@
+export{jM as Label}from"../../../chunks/app-1xI9wpjz.js";
