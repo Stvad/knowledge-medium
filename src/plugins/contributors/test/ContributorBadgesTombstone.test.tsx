@@ -4,12 +4,13 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {ChangeScope} from '@/data/api'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import {userPageBlockId} from '@/data/stateBlocks'
 import type {Repo} from '@/data/repo'
 import type {BlockGutterItem} from '@/extensions/blockInteraction.js'
 import {CONTRIBUTOR_TYPE, contributorKindProp, contributorRoleProp} from '../schema.js'
 import {attributionCreatorsProp, attributionEditorsProp} from '../schema.js'
 import {contributorsDataExtension} from '../dataExtension.js'
-import {contributorBadgeItemContribution} from '../ContributorBadges.js'
+import {CONTRIBUTOR_CARD_MODE_KEY, contributorBadgeItemContribution, contributorCardDecoratorContribution} from '../ContributorBadges.js'
 
 vi.mock('@/utils/navigation.js', () => ({useOpenBlock: () => () => {}}))
 vi.mock('@/context/layoutWsContext.js', () => ({useAppHashInContext: (_ws: string, id: string) => `#${id}`}))
@@ -97,4 +98,28 @@ describe('contributor badge profile liveness', () => {
     })
     await waitFor(() => expect(screen.queryByRole('button', {name: /Authorship details/})).toBeNull())
   })
+})
+
+it('keeps a tombstoned explicit creator linked and unlinks a missing implicit user page', async () => {
+  await seedNoteAndAgent('agent')
+  const options = {scope: ChangeScope.BlockDefault, context: {contributorId: null}}
+  const userPageId = userPageBlockId(WS, repo.user.id)
+  await repo.tx(async tx => {
+    await tx.delete(AGENT)
+    await tx.create({id: userPageId, workspaceId: WS, parentId: null, orderKey: 'c', content: 'Fixture Reader'})
+  }, options)
+  const block = repo.block(NOTE)
+  const decorate = contributorCardDecoratorContribution({
+    block, blockContext: {scopeRootId: NOTE, [CONTRIBUTOR_CARD_MODE_KEY]: NOTE},
+  } as never)
+  if (!decorate) throw new Error('Expected a card byline')
+  const Card = decorate(() => null)
+  render(<Card block={block}/>)
+  expect(await screen.findByRole('link', {name: 'Atlas'})).toHaveAttribute('href', '#' + AGENT)
+
+  await act(() => repo.tx(tx => tx.setProperty(NOTE, attributionCreatorsProp, []), options))
+  expect(await screen.findByRole('link', {name: 'You'})).toHaveAttribute('href', '#' + userPageId)
+  await act(() => repo.tx(tx => tx.delete(userPageId), options))
+  await waitFor(() => expect(screen.queryByRole('link')).toBeNull())
+  expect(screen.getByText('You')).toBeVisible()
 })

@@ -1,10 +1,10 @@
 import {useMemo, useState} from 'react'
 import type {Block} from '@/data/block'
+import type {BlockData} from '@/data/api'
 import {decodeRowProperty, safeDecodeRowProperty} from '@/data/rowProperty'
 import {useHandle} from '@/hooks/block.js'
 import {useMinuteClock} from '@/hooks/useMinuteClock.js'
 import {useAppHashInContext} from '@/context/layoutWsContext.js'
-import {useUserPage} from '@/data/globalState.js'
 import {formatAbsoluteDateTime, formatRelativeTime} from '@/utils/relativeTime.js'
 import {useOpenBlock} from '@/utils/navigation.js'
 import {
@@ -23,9 +23,12 @@ import {
   attributionCreatorsProp,
   attributionEditorsProp,
   contributorKindOf,
+  contributorPictureProp,
   contributorRoleProp,
   type ContributorKind,
 } from './schema.js'
+import {ProfilePicture} from './ProfilePicture'
+import {useCommentAuthor} from './useCommentAuthor'
 import {CONTRIBUTOR_PROFILES_BY_IDS_QUERY} from './queries.js'
 
 type Attribution = {creators: readonly string[]; editors: readonly string[]; workspaceId: string}
@@ -52,6 +55,10 @@ const ProfileLink = ({profile, workspaceId}: {profile: Profile; workspaceId: str
   )
 }
 
+const contributorKindForDisplay = (row: BlockData): ContributorKind => {
+  try { return contributorKindOf(row) } catch { return 'agent' }
+}
+
 const useContributorProfiles = (block: Block): {attribution: Attribution | undefined; profiles: Map<string, Profile>} => {
   const attribution = useAttribution(block)
   const allIds = useMemo(() => [...new Set([...(attribution?.creators ?? []), ...(attribution?.editors ?? [])])], [attribution?.creators, attribution?.editors])
@@ -66,8 +73,7 @@ const useContributorProfiles = (block: Block): {attribution: Attribution | undef
     const byId = new Map<string, Profile>()
     profileRows.forEach(row => {
       const id = row.id
-      let kind: ContributorKind = 'agent'
-      try { kind = contributorKindOf(row) } catch { /* An unreadable profile still gets a useful linked fallback. */ }
+      const kind = contributorKindForDisplay(row)
       const role = safeDecodeRowProperty(row, contributorRoleProp)
       byId.set(id, {
         id,
@@ -144,36 +150,57 @@ export const CONTRIBUTOR_CARD_MODE_KEY = 'contributors.cardMode'
  *  and gets no author line. */
 export const CONTRIBUTOR_CARD_HEADER_KEY = 'contributors.cardHeader'
 
-/** The author line of a card, by the rule `authorIdOf` (./author.ts)
- *  states. A user page that is not loaded, or not created, shows the user id,
- *  unlinked. */
+const initialsOf = (name: string): string => {
+  const words = name.trim().split(/\s+/u)
+  const first = Array.from(words[0])[0] ?? ''
+  const last = words.length > 1 ? Array.from(words[words.length - 1])[0] : ''
+  return (first + last).toLocaleUpperCase()
+}
+
 const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
-  const {attribution, profiles} = useContributorProfiles(block)
-  const meta = useHandle(block, {
-    selector: data => data ? {createdBy: data.createdBy, createdAt: data.createdAt, workspaceId: data.workspaceId} : undefined,
-  })
-  const userPage = useUserPage(meta?.createdBy ?? '', meta?.workspaceId)
+  const author = useCommentAuthor(block)
+  const workspaceId = author?.workspaceId ?? ''
+  const profile = useHandle(block.repo.query[CONTRIBUTOR_PROFILES_BY_IDS_QUERY]({
+    workspaceId, ids: author?.id ? [author.id] : [],
+  }), {selector: rows => {
+    const row = rows?.[0]
+    // Explicit creators retain their provenance after deletion. An implicit
+    // user page only becomes a link once there is a live page in this workspace.
+    if (!row || (row.deleted && !author?.explicit)) return null
+    return {
+      name: row.content.trim().split('\n')[0],
+      kind: author?.explicit ? contributorKindForDisplay(row) : 'human',
+      pictureId: safeDecodeRowProperty(row, contributorPictureProp),
+    }
+  }})
+  const linkedId = author?.explicit || profile ? author?.id : undefined
+  const open = useOpenBlock({blockId: linkedId ?? '', workspaceId})
+  const href = useAppHashInContext(workspaceId, linkedId ?? '')
   const now = useMinuteClock()
-  // A recorded creator wins even before its profile row loads (or syncs), so
-  // an agent's comment never shows the tab's human as its author.
-  const creatorId = attribution?.creators[0]
-  const creator = creatorId ? profiles.get(creatorId) : undefined
-  const authorId = creatorId ?? userPage.blockId
-  const authorName = creatorId ? creator?.name ?? 'Contributor' : userPage.name
-  const open = useOpenBlock({blockId: authorId ?? '', workspaceId: meta?.workspaceId ?? ''})
-  const href = useAppHashInContext(meta?.workspaceId ?? '', authorId ?? '')
-  // The author line sits on the gutter's first line, beside a status chip,
-  // so the comment under it keeps its full width.
   const gutterHeader = useGutterHeader(block)
-  if (!meta) return <Inner block={block}/>
+  if (!author) return <Inner block={block}/>
+  const name = profile?.name ||
+    (author.explicit ? 'Contributor' : author.id ? author.createdBy : 'System')
+  const label = author.isSelf ? 'You' : name
+  const kind = profile?.kind
+  const nonHuman = kind && kind !== 'human'
+  const pictureId = profile?.pictureId
+  const stamp = (
+    <span data-author-stamp="" aria-hidden="true" className={`relative inline-grid size-5 shrink-0 place-items-center overflow-hidden text-[10px] font-semibold leading-none ${nonHuman ? 'rounded' : 'rounded-full'} ${author.isSelf ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
+      {initialsOf(name)}
+      {pictureId && <ProfilePicture block={block} pictureId={pictureId} workspaceId={workspaceId}/>}
+    </span>
+  )
+  const identity = <>{stamp}<span className="truncate">{label}</span></>
+  const byline = 'inline-flex min-w-0 items-center gap-1 font-medium text-foreground'
   return (
-    <div className="w-full">
-      <div {...gutterHeader} className="flex items-baseline gap-1 text-xs leading-5 text-muted-foreground">
-        {authorId
-          ? <a href={href} onClick={open} className="font-medium text-foreground hover:underline">{authorName}</a>
-          : <span className="font-medium text-foreground">{authorName}</span>}
-        {creator && creator.kind !== 'human' && <span>· {creator.kind}</span>}
-        <span title={formatAbsoluteDateTime(meta.createdAt)}>· {formatRelativeTime(meta.createdAt, now)}</span>
+    <div data-comment-author={author.isSelf ? 'self' : 'other'} className="w-full">
+      <div {...gutterHeader} className="flex flex-wrap items-center gap-x-1 text-xs leading-5 text-muted-foreground">
+        {linkedId
+          ? <a href={href} onClick={open} title={name} className={`${byline} hover:underline`}>{identity}</a>
+          : <span className={byline}>{identity}</span>}
+        {nonHuman && <span>· {kind}</span>}
+        <span title={formatAbsoluteDateTime(author.createdAt)}>· {formatRelativeTime(author.createdAt, now)}</span>
       </div>
       <GutterTextBelowHeader>
         <Inner block={block}/>
