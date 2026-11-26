@@ -80,6 +80,7 @@ const logPreview = (content: string | null | undefined): string => {
  *  fast; retrying is safe because the reconcile is keyed (reconcileReply). */
 const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
 const THINKING_DEBOUNCE_MS = 3_000
+const STREAM_REPLY_INTERVAL_MS = 1_500
 
 /** agent:session values are executor-scoped: codex thread ids are stored
  *  as `codex:<id>`, claude session ids bare (anything stored before
@@ -345,9 +346,8 @@ export const createEngine = (deps: EngineDeps) => {
     // first, so a queued streamed reconcile never lands AFTER (and clobbers)
     // the note.
     let writes: Promise<unknown> = Promise.resolve()
-    // Last cumulative text streamed into the reply — kept so a FAILED run
-    // that had already streamed most of its (billed) answer keeps that
-    // partial (collapsed to a single note block) instead of discarding it.
+    // A failed run includes the latest text received from the runner, even
+    // if that text was still buffered when the run ended.
     let lastStreamedText = ''
     // Set once a TERMINAL reply (the ok answer, or the failure/partial note)
     // has been written. The infra-catch checks it so a transient blip on the
@@ -507,7 +507,7 @@ export const createEngine = (deps: EngineDeps) => {
       const writeActivity = (step: Step) => queueWrite(() => graph.setActivity(sourceId, step.label, step.startedAt))
       let thinkingTimer: ReturnType<typeof setTimeout> | undefined
       const cancelThinking = () => clearTimeout(thinkingTimer)
-      let lastTextWriteMs = 0
+      let streamReplyTimer: ReturnType<typeof setTimeout> | undefined
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
         sessionId
@@ -535,12 +535,13 @@ export const createEngine = (deps: EngineDeps) => {
         } else if (event.kind === 'text') {
           if (!watcher.streamReply) return
           lastStreamedText = event.text
-          const nowMs = now()
-          if (nowMs - lastTextWriteMs < 1_500) return
-          lastTextWriteMs = nowMs
-          // Best-effort, single attempt — the next tick, or the terminal
-          // write, supersedes a dropped one.
-          queueWrite(() => reconcileReply(event.text))
+          if (streamReplyTimer !== undefined) return
+          // Flush even if the runner goes quiet while a tool is running.
+          streamReplyTimer = setTimeout(() => {
+            streamReplyTimer = undefined
+            const text = lastStreamedText
+            queueWrite(() => reconcileReply(text))
+          }, STREAM_REPLY_INTERVAL_MS)
         } else if (event.kind === 'session') {
           // Persist the session id the moment it arrives (the runner emits
           // it on the first init line), NOT only at the terminal write —
@@ -574,6 +575,7 @@ export const createEngine = (deps: EngineDeps) => {
         result = await runTask(runOptions)
       } finally {
         cancelThinking()
+        clearTimeout(streamReplyTimer)
       }
       await writes // ordering guarantee: no progress write races the final one below
       // On every terminal reply, a failed or cancelled run's too: it may have
