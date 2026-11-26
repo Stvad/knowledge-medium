@@ -244,7 +244,7 @@ const projectionOf = (
     .filter(value => value.is_field_form !== 1)
     .map(value => ({id: value.id, content: value.content})))
   const contents = unionValuesAcrossFieldRows(schema, groups).map(value => value.content)
-  return {absent: false, value: childContentsToEncodedPropertyValue(schema, contents)}
+  return {absent: false, value: childContentsToEncodedPropertyValue(schema, contents, undefined)}
 }
 
 // ── Definitions as rows ──────────────────────────────────────────────────────

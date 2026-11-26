@@ -1,13 +1,12 @@
 import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 import {
   ChangeScope,
+  PropertySchemaIdentityError,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  scopePoliciesEquivalent,
   type Tx,
+  scopePoliciesEquivalent,
 } from '@/data/api'
-import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
-import { storedPropertyValue } from '@/data/rowProperty'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
 import {
@@ -22,28 +21,29 @@ const canWriteProperty = (block: Block, schema: AnyPropertySchema): boolean =>
   && !isPropertyPanelReadOnlyProperty(schema.name)
   && !declarationOnlyDefinitionForName(schema.name, block.repo.propertyDefinitions)
 
-export const resolveAndWriteProperty = async (
+export const writeProperty = async (
   block: Block,
   schema: AnyPropertySchema,
-  resolve: (tx: Tx) => Promise<unknown>,
-  condition?: {expectedEncoded: unknown},
+  value: unknown,
+  prepare?: {workspaceId: string; run: (tx: Tx) => Promise<void>},
 ): Promise<boolean> => {
   if (!canWriteProperty(block, schema)) return false
   return block.repo.tx(async tx => {
     const owner = await tx.get(block.id)
     if (owner?.deleted !== false) return false
-    const currentSchema = await tx.resolvePropertySchema(block.id, schema)
-    if (currentSchema.codec !== schema.codec || !scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
+    if (prepare && owner.workspaceId !== prepare.workspaceId) return false
+    const currentSchema = await tx.resolvePropertySchema(block.id, schema).catch((error: unknown) => {
+      if (error instanceof PropertySchemaIdentityError) return undefined
+      throw error
+    })
+    if (!currentSchema || currentSchema.codec !== schema.codec || !scopePoliciesEquivalent(currentSchema.changeScope, schema.changeScope)
       || !canWriteProperty(block, currentSchema)) return false
-    if (condition && !jsonValuesEqual(storedPropertyValue(owner.properties, currentSchema.name), condition.expectedEncoded)) return false
     tx.assertWritableWorkspace(owner.workspaceId)
-    await tx.setProperty(block.id, currentSchema, await resolve(tx))
+    if (prepare) await prepare.run(tx)
+    await tx.setProperty(block.id, currentSchema, value)
     return true
   }, {scope: schema.changeScope, description: `set property ${schema.name} on ${block.id}`})
 }
-
-export const writeProperty = (block: Block, schema: AnyPropertySchema, value: unknown): Promise<boolean> =>
-  resolveAndWriteProperty(block, schema, async () => value)
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a

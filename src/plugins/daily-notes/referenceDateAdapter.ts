@@ -5,28 +5,25 @@
  * of the old date-shift actions but exposes get/set in absolute-ISO
  * form for the calendar sheet and scrub gestures.
  */
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type AnyPropertySchema, type BlockData, type Tx } from '@/data/api'
 import type { Block } from '@/data/block'
 import { hasSourceContent, takesTextEdit } from '@/data/blockTypes'
+import { resolvePropertyValueFieldSchema } from '@/data/propertyChildren'
+import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import {
   parseOutermostReferences,
   type ParsedReference,
   renderWikilink,
 } from '@/plugins/references/referenceParser.js'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
-import { formatRoamDate } from '@/utils/dailyPage.js'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
+import { dailyNoteTitle, getOrCreateDailyNoteInTx } from './dailyNotes.ts'
+import { isDayReferenceSchema } from './schema.ts'
 
 export interface DateReferenceMatch {
   ref: ParsedReference
   iso: string
   style: 'iso' | 'long'
-}
-
-const isoToLocalDate = (iso: string): Date => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!match) throw new Error(`Invalid ISO date: ${iso}`)
-  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
 }
 
 const dateReferenceMatches = (content: string): DateReferenceMatch[] =>
@@ -51,9 +48,7 @@ export const replaceSingleDateReferenceContent = (
 ): string | null => {
   const match = singleDateReferenceMatch(content)
   if (!match) return null
-  const nextAlias = match.style === 'iso'
-    ? iso
-    : formatRoamDate(isoToLocalDate(iso))
+  const nextAlias = match.style === 'iso' ? iso : dailyNoteTitle(iso)
   // Unreachable for a date alias (short, delimiter-free), but `null` is
   // already this function's "no rewrite" answer — and beats splicing the
   // string "null" into the user's content.
@@ -65,6 +60,15 @@ export const replaceSingleDateReferenceContent = (
 }
 
 const REFERENCE_DATE_ADAPTER_ID = 'daily-notes.reference'
+
+export const writeDayReferenceValue = async (
+  block: Block, tx: Tx, row: Pick<BlockData, 'id' | 'workspaceId'>, schema: AnyPropertySchema, iso: string,
+) => {
+  tx.assertWritableWorkspace(row.workspaceId)
+  const id = await getOrCreateDailyNoteInTx(tx, block.repo.snapshotTypeRegistries(), row.workspaceId, iso)
+  const [value] = await tx.propertyValueChildContents(schema, id, row.workspaceId)
+  await tx.update(row.id, value!)
+}
 
 export const referenceDateAdapter: BlockDateAdapter = {
   id: REFERENCE_DATE_ADAPTER_ID,
@@ -88,6 +92,14 @@ export const referenceDateAdapter: BlockDateAdapter = {
       if (!takesTextEdit(row)) return
       const nextContent = replaceSingleDateReferenceContent(row.content, iso)
       if (nextContent === null || nextContent === row.content) return
+      if (parseExactReferenceBlockContent(nextContent)?.kind === 'alias') {
+        const schema = await resolvePropertyValueFieldSchema(tx, row)
+        if (schema && isDayReferenceSchema(schema)) {
+          await writeDayReferenceValue(block, tx, row, schema, iso)
+          written = true
+          return
+        }
+      }
       await tx.update(block.id, {content: nextContent})
       written = true
     }, {scope: ChangeScope.BlockDefault, description: 'set date reference'})

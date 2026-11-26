@@ -17,7 +17,6 @@ import {createTestRepo} from '@/data/test/createTestRepo'
 import {
   addProperty,
   deleteProperty,
-  resolveAndWriteProperty,
   writeProperty,
 } from './actions'
 
@@ -45,7 +44,7 @@ describe('property panel writes through a retained editor', () => {
   })
 
   it.each(['owner deleted', 'same definition retyped', 'scope drift', 'read-only repo'])(
-    'refuses plain and resolving writes after %s', async stale => {
+    'refuses a property write after %s', async stale => {
       const {repo} = block
       const definition = repo.block(schema.fieldId)
       switch (stale) {
@@ -68,16 +67,12 @@ describe('property panel writes through a retained editor', () => {
       }
 
       const before = await database.db.getAll('SELECT * FROM blocks ORDER BY id')
-      const resolve = vi.fn(async () => 'replacement')
       await expect(writeProperty(block, schema, 'replacement')).resolves.toBe(false)
-      expect(await database.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
-      await expect(resolveAndWriteProperty(block, schema, resolve)).resolves.toBe(false)
-      expect(resolve).not.toHaveBeenCalled()
       expect(await database.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
     },
   )
 
-  it('checks read-only policy again in the transaction before resolving a value', async () => {
+  it('checks read-only policy again inside the write transaction', async () => {
     const {repo} = block
     const transact = repo.tx.bind(repo)
     const transaction = vi.spyOn(repo, 'tx').mockImplementationOnce((write, options) =>
@@ -85,11 +80,9 @@ describe('property panel writes through a retained editor', () => {
         repo.setReadOnly(true)
         return write(tx)
       }, options))
-    const resolve = vi.fn(async () => 'replacement')
     try {
-      await expect(resolveAndWriteProperty(block, schema, resolve)).resolves.toBe(false)
+      await expect(writeProperty(block, schema, 'replacement')).resolves.toBe(false)
       expect(transaction).toHaveBeenCalledOnce()
-      expect(resolve).not.toHaveBeenCalled()
     } finally {
       transaction.mockRestore()
     }
@@ -118,9 +111,7 @@ describe('property panel action visibility guards', () => {
       [seedRevisionProp.name]: 3,
     }
 
-    await writeProperty(block, seedKeyProp, 'tampered/property/key')
-    const resolve = vi.fn(async () => 'tampered/property/key')
-    await expect(resolveAndWriteProperty(block, seedKeyProp, resolve)).resolves.toBe(false)
+    await expect(writeProperty(block, seedKeyProp, 'tampered/property/key')).resolves.toBe(false)
     await deleteProperty({
       block,
       properties,
@@ -131,7 +122,6 @@ describe('property panel action visibility guards', () => {
 
     expect(set).not.toHaveBeenCalled()
     expect(tx).not.toHaveBeenCalled()
-    expect(resolve).not.toHaveBeenCalled()
   })
 
   it('refuses add and delete when only projected metadata marks an ordinary schema hidden', async () => {
@@ -214,8 +204,7 @@ describe('property panel action visibility guards', () => {
       presetId: staleSchema.codec.type,
     })).resolves.toBeUndefined()
 
-    const resolve = vi.fn(async () => ({}))
-    await expect(resolveAndWriteProperty(block, staleSchema, resolve)).resolves.toBe(false)
+    await expect(writeProperty(block, staleSchema, {})).resolves.toBe(false)
 
     await deleteProperty({
       block,
@@ -227,7 +216,6 @@ describe('property panel action visibility guards', () => {
 
     expect(tx).not.toHaveBeenCalled()
     expect(addSchema).not.toHaveBeenCalled()
-    expect(resolve).not.toHaveBeenCalled()
   })
 
   // deleteProperty now routes a SCHEMA'd key through tx.unsetProperty, which

@@ -16,6 +16,7 @@
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 import { CalendarDays } from 'lucide-react'
 import { createElement, type MouseEvent } from 'react'
+import type { Block } from '@/data/block'
 import type {
   WikilinkDisplayContext,
   WikilinkDisplayDecorator,
@@ -43,11 +44,7 @@ const rectFor = (element: HTMLElement): ReschedulePickerAnchorRect => {
   }
 }
 
-const rescheduleButton = ({
-  sourceBlock,
-}: Pick<WikilinkDisplayContext, 'sourceBlock'>) => {
-  if (!sourceBlock) return null
-
+export const rescheduleDateButton = (sourceBlock: Block) => {
   const open = (element: HTMLElement): void => {
     void openDialog(ReschedulePicker, {
       blockId: sourceBlock.id,
@@ -64,7 +61,7 @@ const rescheduleButton = ({
       // size — including the 1.5rem top-level/title rendering. A fixed
       // translate-y nudge only lined up at body size and floated high on
       // larger titles.
-      className: 'mr-1 inline-flex h-4 w-4 align-middle items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+      className: 'mr-1 inline-flex h-4 w-4 shrink-0 align-middle items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
       'data-block-interaction': 'ignore',
       onClick: (event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault()
@@ -100,7 +97,7 @@ export const dailyDateWikilinkDecorator: WikilinkDisplayDecorator = {
       return content
     }
     return {
-      before: rescheduleButton({sourceBlock}),
+      before: rescheduleDateButton(sourceBlock),
       content,
     }
   },

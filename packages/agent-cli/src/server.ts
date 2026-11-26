@@ -30,7 +30,7 @@ if ((host === '0.0.0.0' || host === '::') && process.env.AGENT_RUNTIME_ALLOW_NET
   throw new Error('Refusing to expose agent runtime bridge on the network without AGENT_RUNTIME_ALLOW_NETWORK=true')
 }
 // Test-only escape hatch: shrinking a TTL lets a test observe expiry
-// without a multi-minute sleep. Both env vars are unset in every real
+// without a multi-minute sleep. These overrides are unset in every real
 // deployment, so production timing is exactly the hardcoded fallback.
 const envDurationMsOverride = (name: string, fallback: number): number => {
   const raw = Number(process.env[name])
@@ -44,7 +44,7 @@ const commandTtlMs = envDurationMsOverride('AGENT_RUNTIME_COMMAND_TTL_MS', 10 * 
  *  CLI's next poll gets `Unknown command` while the app keeps going. Still
  *  bounded, so a tab that dies mid-command cannot leak forever. */
 const inFlightCommandTtlMs = envDurationMsOverride('AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS', 60 * 60 * 1000)
-const clientTtlMs = 60_000
+const clientTtlMs = envDurationMsOverride('AGENT_RUNTIME_CLIENT_TTL_MS', 60_000)
 const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?? BRIDGE_DEFAULT_MAX_BODY_BYTES)
 const maxBodyBytes = Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 0
   ? configuredMaxBodyBytes
@@ -123,9 +123,7 @@ interface CommandRecord {
 
 // ----- long-poll waiter plumbing ---------------------------------------
 //
-// Shared by the command queue (clientId-keyed) and the events channel
-// (token-keyed): a parked waiter holds an open response, expires
-// after timeoutMs, and is dropped when the request closes.
+// A parked reader holds an open response until delivery, timeout or disconnect.
 
 interface ParkedWaiter {
   response: http.ServerResponse
@@ -192,6 +190,7 @@ const commands = new Map<CommandId, CommandRecord>()
 const pendingByClient = new Map<ClientId, CommandId[]>()
 // clientId -> Set<ParkedWaiter>
 const waitersByClient = new Map<ClientId, Set<ParkedWaiter>>()
+const resultWaiters = new Map<CommandId, Set<ParkedWaiter>>()
 // token hash -> the user whose tab last listed it, for the unknown-token
 // message. Never pruned: it holds one entry per token any tab ever listed.
 const tokenUsers = new Map<string, string>()
@@ -312,10 +311,32 @@ const tokenScope = (value: unknown): TokenScope =>
 // prefix check let a read-only token run `SELECT powersync_clear(1)`
 // (local-data wipe) or smuggle a second statement after a `;`.
 
-const failCommand = (command: CommandRecord, name: string, message: string): void => {
-  command.status = 'failed'
+const sendCommandStatus = (response: http.ServerResponse, command: CommandRecord): void => {
+  sendJson(response, 200, {
+    id: command.id,
+    status: command.status,
+    result: command.result,
+    clientId: command.clientId,
+    targetClientId: command.targetClientId,
+    createdAt: command.createdAt,
+    deliveredAt: command.deliveredAt,
+    completedAt: command.completedAt,
+  })
+}
+
+const finishCommand = (command: CommandRecord, status: 'completed' | 'failed', result: unknown): void => {
+  command.status = status
   command.completedAt = now()
-  command.result = {ok: false, error: {name, message}}
+  command.result = result
+  for (const waiter of resultWaiters.get(command.id) ?? []) {
+    clearTimeout(waiter.timeout)
+    sendCommandStatus(waiter.response, command)
+  }
+  resultWaiters.delete(command.id)
+}
+
+const failCommand = (command: CommandRecord, name: string, message: string): void => {
+  finishCommand(command, 'failed', {ok: false, error: {name, message}})
 }
 
 const dropClient = (clientId: ClientId): void => {
@@ -345,27 +366,25 @@ const dropClient = (clientId: ClientId): void => {
   }
 }
 
-const cleanup = () => {
-  const commandExpiry = now() - commandTtlMs
-  const inFlightExpiry = now() - inFlightCommandTtlMs
-  for (const [id, command] of commands) {
-    if (command.status === 'pending') continue
-    if (command.status === 'delivered') {
-      if (command.createdAt < inFlightExpiry) commands.delete(id)
-      continue
-    }
-    // Terminal (completed/failed): age from completedAt, not createdAt.
-    // A migration that runs past commandTtlMs before finishing would
-    // otherwise already be older than commandExpiry the instant it
-    // completes, and get reaped on the CLI's very next status poll.
-    if ((command.completedAt ?? command.createdAt) < commandExpiry) commands.delete(id)
-  }
+const clientExpiresAt = (client: ClientRecord) => client.lastSeen + clientTtlMs
 
-  const clientExpiry = now() - clientTtlMs
+// Pending commands expire with their target. Delivered commands have a longer
+// lifetime because the app can spend minutes executing one. Terminal retention
+// starts at completion so even a long-running command's result can be read.
+const commandExpiresAt = (command: CommandRecord): number => {
+  if (command.status === 'pending') return clientExpiresAt(clients.get(command.targetClientId)!)
+  return command.completedAt === null
+    ? command.createdAt + inFlightCommandTtlMs
+    : command.completedAt + commandTtlMs
+}
+
+const cleanup = () => {
+  const time = now()
+  for (const [id, command] of commands) {
+    if (command.status !== 'pending' && commandExpiresAt(command) <= time) commands.delete(id)
+  }
   for (const [id, client] of clients) {
-    if (client.lastSeen < clientExpiry) {
-      dropClient(id)
-    }
+    if (clientExpiresAt(client) <= time) dropClient(id)
   }
 }
 
@@ -586,9 +605,9 @@ const appendEvent = (key: string, clientId: ClientId, event: Record<string, unkn
 /** Long-poll park duration. Clamped, and NaN (`?timeoutMs=abc`) falls
  *  back to the default instead of `setTimeout(…, NaN)` firing instantly
  *  and degenerating the long-poll into a hot poll. */
-const parseTimeoutMs = (requestUrl: URL): number => {
-  const raw = Number(requestUrl.searchParams.get('timeoutMs') ?? 25_000)
-  return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 60_000) : 25_000
+const parseTimeoutMs = (requestUrl: URL, defaultMs = 25_000): number => {
+  const raw = Number(requestUrl.searchParams.get('timeoutMs') ?? defaultMs)
+  return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 60_000) : defaultMs
 }
 
 const waitForNextEvents = (
@@ -697,10 +716,41 @@ const setCommandResult = async (
     failCommand(command, 'ResultUnreadable', `The app's result did not arrive whole: ${error instanceof Error ? error.message : String(error)}`)
     throw error
   }
-  command.status = 'completed'
-  command.completedAt = now()
-  command.result = result
+  finishCommand(command, 'completed', result)
   sendJson(response, 200, {ok: true})
+}
+
+const readCommandStatus = (
+  id: CommandId,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  waitMs: number,
+): void => {
+  const command = commands.get(id)
+  if (!command) {
+    sendJson(response, 404, {error: `Unknown command: ${id}`})
+    return
+  }
+  if (!hasBridgeSecret(request)) {
+    const token = extractBearer(request)
+    if (!token || hashToken(token) !== command.submitterTokenHash) {
+      sendJson(response, 401, {error: 'Missing or invalid command status credentials'})
+      return
+    }
+  }
+
+  if (waitMs === 0 || command.completedAt !== null) {
+    sendCommandStatus(response, command)
+    return
+  }
+
+  // A parked GET may be the last request on an idle relay. Wake at the next
+  // relevant expiry and return the same snapshot a fresh GET would see.
+  const timeoutMs = Math.min(waitMs, commandExpiresAt(command) - now())
+  parkWaiter(resultWaiters, id, request, {response}, timeoutMs, () => {
+    cleanup()
+    readCommandStatus(id, request, response, 0)
+  })
 }
 
 const getStatus = () => ({
@@ -729,6 +779,7 @@ const getStatus = () => ({
 // an open response, so cancel + close those before dropping the maps.
 const resetState = (): void => {
   drainWaiters(waitersByClient)
+  drainWaiters(resultWaiters)
   drainWaiters(eventWaitersByToken)
   clients.clear()
   commands.clear()
@@ -905,29 +956,7 @@ const handleRequest = async (
 
     const commandMatch = requestUrl.pathname.match(/^\/runtime\/commands\/([^/]+)$/)
     if (request.method === 'GET' && commandMatch) {
-      const command = commands.get(commandMatch[1])
-      if (!command) {
-        sendJson(response, 404, {error: `Unknown command: ${commandMatch[1]}`})
-        return
-      }
-      if (!hasBridgeSecret(request)) {
-        const token = extractBearer(request)
-        if (!token || hashToken(token) !== command.submitterTokenHash) {
-          sendJson(response, 401, {error: 'Missing or invalid command status credentials'})
-          return
-        }
-      }
-
-      sendJson(response, 200, {
-        id: command.id,
-        status: command.status,
-        result: command.result,
-        clientId: command.clientId,
-        targetClientId: command.targetClientId,
-        createdAt: command.createdAt,
-        deliveredAt: command.deliveredAt,
-        completedAt: command.completedAt,
-      })
+      readCommandStatus(commandMatch[1], request, response, parseTimeoutMs(requestUrl, 0))
       return
     }
 

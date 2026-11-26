@@ -391,6 +391,31 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     return schema
   }
 
+  it.each([
+    ['first', ['Waiting', 'Ready'], undefined],
+    ['second', ['Ready', 'Waiting'], 'ready-target'],
+  ] as const)('projects only the leading scalar reference when the %s row is awaiting its name', async (_position, names, expected) => {
+    await flipWorkspace()
+    const repo = setup()
+    const schema = defineProperty('named-ref', {codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-scalar', [{
+      metadata: {fieldId: 'named-ref-field', workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const}, schema,
+    }], {workspaceId: WS})
+    await seedRow({id: 'named-owner', properties: expected ? {[schema.name]: 'old-target'} : {}})
+    await seedRow({id: 'named-field', parentId: 'named-owner', content: '::((named-ref-field))',
+      referenceTargetId: 'named-ref-field', isFieldForm: true})
+    for (const [index, name] of names.entries()) {
+      await seedRow({id: name, parentId: 'named-field', orderKey: `a${index}`, content: `[[${name}]]`})
+    }
+    await seedRow({id: 'ready-target', properties: {[aliasesProp.name]: ['Ready']}})
+    await runPass(repo)
+    await repo.awaitProcessors()
+    expect(await readColumn('Ready')).toBe('ready-target')
+    expect(await readColumn('Waiting')).toBeNull()
+    expect(await cellOf('named-owner', schema.name)).toBe(expected)
+  })
+
   it('leaves an old named-value projection alone on open, then refreshes on content edit', async () => {
     await flipWorkspace()
     const repo = setup()

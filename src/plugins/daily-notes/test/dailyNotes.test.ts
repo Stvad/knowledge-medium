@@ -32,7 +32,8 @@ import {
   journalBlockId,
   todayIso,
 } from '@/plugins/daily-notes/dailyNotes'
-import { buildCalendarCells, firstOfMonth, fromIso } from '../calendar'
+import { parseIsoDay } from '@/utils/dailyPage'
+import { buildCalendarCells, firstOfMonth } from '../calendar'
 import { resolveDayInput } from '../dayProperty'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
@@ -171,7 +172,7 @@ describe('writing calendar days', () => {
 
   it('opens and picks four-digit calendar years below 0100 without a century shift', () => {
     const iso = '0099-03-16'
-    const initial = fromIso(iso)
+    const initial = parseIsoDay(iso)
     expect(initial?.getFullYear()).toBe(99)
     expect(buildCalendarCells(firstOfMonth(initial!)).some(cell => cell.iso === iso)).toBe(true)
   })

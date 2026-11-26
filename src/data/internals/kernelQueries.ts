@@ -1108,7 +1108,7 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, Bloc
   },
 })
 
-const typedBlocksArgsSchema = z.object({
+export const typedBlocksArgsSchema = z.object({
   workspaceId: z.string(),
   types: z.array(z.string()).optional(),
   where: z.record(z.string(), z.unknown()).optional(),
@@ -1395,8 +1395,9 @@ const declareAncestorDeps = async (
   targetProps: ReadonlySet<string>,
   context: WhereContext,
   recognition: RecognitionParams | undefined,
+  candidateIds: readonly string[] | undefined,
 ): Promise<void> => {
-  const candidatesCte = buildCandidatesCte(normalized, context, recognition)
+  const candidatesCte = buildCandidatesCte(normalized, context, recognition, candidateIds)
   const rows = await ctx.db.getAll<{dep_kind: string; dep_id: string | null}>(
     ANCESTOR_DEP_NODES_SQL(
       candidatesCte.sql,
@@ -1423,6 +1424,7 @@ const prepareTypedBlockQuery = async (
   query: ResolvedTypedBlockQuery & {limit?: number},
   ctx: QueryCtx,
   projection: TypedBlockQueryProjection,
+  candidateIds?: readonly string[],
 ) => {
   const normalized = normalizeTypedBlockQuery(query, projection)
   const {workspaceId} = normalized
@@ -1446,10 +1448,10 @@ const prepareTypedBlockQuery = async (
     recognition = dependOnRecognitionParams(ctx, ctx.repo.propertyDefinitionsFor(workspaceId))
   }
   const context: WhereContext = {properties: schemas, fields: ctx.repo.facetRuntime?.read(queryableFieldsFacet, workspaceId)}
-  const compiled = compileTypedBlockQuery(normalized, context, {projection, limit: query.limit, recognition})
+  const compiled = compileTypedBlockQuery(normalized, context, {projection, limit: query.limit, recognition, candidateIds})
   const targetProps = collectTypedBlockAxisDeps(normalized, ctx, context)
   if (needsAncestorChain(normalized)) {
-    await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', targetProps, context, recognition)
+    await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', targetProps, context, recognition, candidateIds)
   }
   return compiled
 }
@@ -1471,13 +1473,15 @@ export const resolveTypedBlocks = async (
 /** Id projection for typed queries. Same typed-query semantics and
  *  membership invalidation as `resolveTypedBlocks`, but it intentionally
  *  avoids hydrating result rows, so content-only edits to current
- *  members do not invalidate collection consumers. */
+ *  members do not invalidate collection consumers. Callers supplying
+ *  candidate ids own the dependencies that determine that set. */
 export const resolveTypedBlockIds = async (
   query: ResolvedTypedBlockQuery & {limit?: number},
   ctx: QueryCtx,
+  candidateIds?: readonly string[],
 ): Promise<string[]> => {
-  if (!query.workspaceId) return []
-  const compiled = await prepareTypedBlockQuery(query, ctx, 'ids')
+  if (!query.workspaceId || candidateIds?.length === 0) return []
+  const compiled = await prepareTypedBlockQuery(query, ctx, 'ids', candidateIds)
   const rows = await ctx.db.getAll<{id: string}>(compiled.sql, [...compiled.params])
   return rows.map(row => row.id)
 }

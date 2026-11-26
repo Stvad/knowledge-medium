@@ -7,13 +7,14 @@ import * as structuralEdits from '@/data/structuralEditPolicy'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
 import { definitionSeedsFacet, queryableFieldsFacet, refTargetComparablePropertiesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
+import { aliasesProp, editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core'
+import { DialogHost } from '@/extensions/dialogAppMount'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { ActiveContextsProvider, useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts'
@@ -35,11 +36,14 @@ import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountR
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { referencesPlugin } from '@/plugins/references'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
+import { dailyNotesPlugin } from '@/plugins/daily-notes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes'
 import { DAILY_NOTE_TYPE, dayValuePresetCore } from '@/plugins/daily-notes/schema'
 import * as toast from '@/utils/toast'
+import { __resetDialogsForTests } from '@/utils/dialogs'
 import { disarmCut, getArmedCut } from '@/paste/armedCut'
 import { pasteArmedCut } from '@/paste/operations'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
@@ -92,6 +96,7 @@ afterEach(async () => {
   window.removeEventListener('selectionchange', swallowSelectionChange, true)
   vi.restoreAllMocks()
   cleanup()
+  __resetDialogsForTests()
   // An unmounted cell editor finishes its edit on a timer; let it write before the reset.
   await act(() => new Promise(resolve => setTimeout(resolve)))
   vi.unstubAllGlobals()
@@ -135,11 +140,12 @@ const ContextProbe = () => {
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
 
-const mount = (childBacked = true) => render(
+const mount = (childBacked = true, showDialogs = false) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
         <HotkeyReconciler/>
+        {showDialogs && <DialogHost/>}
         <ContextProbe/>
         <Suspense fallback={null}>
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: PARENT_SCOPE, scopeRootId: HOST}}>
@@ -209,9 +215,12 @@ const press = (view: EditorView, key: string, options: {shiftKey?: boolean} = {}
 const focused = () => peekFocusedBlockLocation(ui())
 
 it.each([
-  {storage: 'old property bags', childBacked: false, readOnly: false},
-  {storage: 'read-only workspace', childBacked: true, readOnly: true},
-])('links stored days and legacy daily-note refs in $storage', async ({childBacked, readOnly}) => {
+  {storage: 'old property bags', childBacked: false, readOnly: false, alias: null},
+  {storage: 'editable ID value blocks', childBacked: true, readOnly: false, alias: null},
+  {storage: 'editable named values after a rename', childBacked: true, readOnly: false, alias: 'Trip planning'},
+  {storage: 'editable named values with a date-shaped alias different from the actual day', childBacked: true, readOnly: false, alias: 'January 8th, 2026'},
+  {storage: 'read-only value blocks', childBacked: true, readOnly: true, alias: null},
+])('renders note links and exact stale day text in $storage', async ({childBacked, readOnly, alias}) => {
   const day = seedProperty({
     seedKey: 'test/property/tables-gesture-day', revision: 1, name: 'gesture:day',
     preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
@@ -225,46 +234,122 @@ it.each([
     preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
   })
   const seeds = [day, legacy, stale]
-  configureRuntime(dailyNotesDataExtension, seeds.map(seed => definitionSeedsFacet.of(seed, {source: 'test'})))
+  configureRuntime(dailyNotesPlugin({repo}), referencesPlugin, seeds.map(seed => definitionSeedsFacet.of(seed, {source: 'test'})))
   await repo.whenPropertyDefinitionsReady(WS)
   await materializePropertySeeds(repo, WS, seeds)
   const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
   for (const seed of seeds) await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, seed.seedKey))
   const target = await getOrCreateDailyNote(repo, WS, '2026-01-06')
-  const title = (await target.load())!.content
-  await target.setContent('Trip planning')
-  await repo.awaitProcessors()
-  if (!childBacked) await db.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = ?", [WS])
+  if (!alias) await target.setContent('Trip planning')
   const oldInstant = '2026-02-03T00:00:00.000Z'
-  await db.db.execute("UPDATE blocks SET properties_json = json_patch(properties_json, ?), updated_at = updated_at + 1 WHERE id = 'row-0'",
-    [JSON.stringify({[day.name]: target.id, [legacy.name]: target.id, [stale.name]: oldInstant})])
-  await repo.load('row-0')
-  expect(repo.block('row-0').peek()?.properties).toMatchObject({[day.name]: target.id, [legacy.name]: target.id})
+  const row = repo.block('row-0')
+  const staleField = propertyDefinitionBlockId(WS, stale.seedKey)
+  if (childBacked) {
+    await row.set(day, target.id)
+    if (alias) await target.set(aliasesProp, [alias, '2026-01-06'])
+    await row.set(legacy, target.id)
+    await row.set(stale, 'historical-placeholder')
+  }
+  if (alias) await target.setContent('Trip planning')
+  await repo.awaitProcessors()
+  const values = childBacked
+    ? (await repo.query.propertyRows({ownerId: row.id, fieldId: staleField}).load())?.fields[0]?.values
+    : undefined
+  const valueId = values?.[0]?.id
+  const properties = {[day.name]: target.id, [legacy.name]: target.id, [stale.name]: oldInstant}
+  await db.db.writeTransaction(async tx => {
+    if (!childBacked) await tx.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = ?", [WS])
+    await tx.execute("UPDATE blocks SET properties_json = json_patch(properties_json, ?), updated_at = updated_at + 1 WHERE id = ?",
+      [JSON.stringify(properties), row.id])
+    if (valueId) {
+      await tx.execute("UPDATE blocks SET content = ?, reference_target_id = NULL, references_json = '[]', updated_at = updated_at + 1 WHERE id = ?",
+        [oldInstant, valueId])
+    }
+  })
+  await repo.load(row.id)
+  if (valueId) {
+    await repo.load(valueId)
+    expect(repo.block(valueId).peek()?.content).toBe(oldInstant)
+  }
+  expect(row.peek()?.properties).toMatchObject(properties)
   repo.setReadOnly(readOnly)
 
-  mount(childBacked)
-  await waitFor(() => {
-    const cells = document.querySelector(`[data-table-row="row-0"]`)!
-    const days = [...cells.querySelectorAll('a')].filter(link => link.textContent === title)
-    expect(days.map(link => link.getAttribute('href'))).toEqual([`#${WS}/${target.id}`, `#${WS}/${target.id}`])
-    expect(days.map(link => link.getAttribute('title'))).toEqual(['Trip planning', 'Trip planning'])
-    expect(cells.textContent).not.toContain(target.id)
-    expect(cells.querySelector('[aria-label="Change day"], [aria-label="Choose day"]')).toBeNull()
+  await act(async () => { mount(childBacked, childBacked && !readOnly) })
+  const cells = await waitFor(() => {
+    const cells = document.querySelector<HTMLElement>('[data-table-row="row-0"]')
+    expect(cells).not.toBeNull()
+    return within(cells!)
   })
-  const row = within(document.querySelector<HTMLElement>('[data-table-row="row-0"]')!)
-  await row.findByText('2026-02-03, not linked')
-  const relink = row.queryByRole('button', {name: 'Relink day'})
-  const noteId = dailyNoteBlockId(WS, '2026-02-03')
-  expect(await repo.load(noteId)).toBeNull()
-  expect((await repo.load('row-0'))?.properties[stale.name]).toBe(oldInstant)
-  if (readOnly) {
-    expect(relink).toBeNull()
+  await waitFor(() => {
+    const links = cells.getAllByRole('link').filter(link => link.getAttribute('href') === `#${WS}/${target.id}`)
+    expect(links).toHaveLength(2)
+    expect(links[0]).toHaveTextContent(alias ?? 'Trip planning')
+    expect(links[1]).toHaveTextContent('Trip planning')
+  })
+  if (childBacked && !readOnly) {
+    const link = cells.getAllByRole('link').find(link => link.getAttribute('href') === `#${WS}/${target.id}`)!
+    const value = link.closest<HTMLElement>('[data-table-value]')!
+    const id = value.dataset.blockId!
+    const button = await within(value).findByRole('button', {name: 'Reschedule date'})
+    expect(within(value).getAllByRole('button', {name: 'Reschedule date'})).toHaveLength(1)
+    expect(await repo.load(id)).toMatchObject({content: alias ? `[[${alias}]]` : `((${target.id}))`, referenceTargetId: target.id})
+    fireEvent.click(button)
+    const picker = await within(document.body).findByRole('dialog', {name: 'Reschedule block'})
+    expect(within(picker).getByRole('button', {name: /Jan(?:uary)? 6, 2026/})).toHaveAttribute('aria-pressed', 'true')
+    const next = dailyNoteBlockId(WS, '2026-01-07')
+    expect(await repo.load(next)).toBeNull()
+    await act(async () => fireEvent.click(within(picker).getByRole('button', {name: /Jan(?:uary)? 7, 2026/})))
+    await waitFor(async () => expect(await repo.load(id)).toMatchObject({content: '[[January 7th, 2026]]', referenceTargetId: next}))
+    properties[day.name] = next
   } else {
-    expect(relink).toBeEnabled()
-    fireEvent.click(relink!)
-    expect(await row.findByRole('link', {name: 'February 3rd, 2026'})).toHaveAttribute('href', `#${WS}/${noteId}`)
-    expect((await repo.load('row-0'))?.properties[stale.name]).toBe(noteId)
+    expect(cells.queryByRole('button', {name: 'Reschedule date'})).toBeNull()
   }
+  const text = await cells.findByText(oldInstant)
+  expect(text.closest('a')).toBeNull()
+  expect(await repo.load(dailyNoteBlockId(WS, '2026-02-03'))).toBeNull()
+  expect(row.peek()?.properties).toMatchObject(properties)
+  if (childBacked) {
+    expect(text.closest('[data-table-value]')).toHaveAttribute('data-block-id', valueId)
+    expect((await repo.load(valueId!))?.content).toBe(oldInstant)
+    if (!readOnly) {
+      const editor = await editAt(valueId!, 'end')
+      expect(editor.state.doc.toString()).toBe(oldInstant)
+    }
+  } else {
+    expect(text.closest('[data-table-value]')).toBeNull()
+  }
+}, 20_000)
+
+it('shows a pending day reference in a table value cell while its target is missing', async () => {
+  const day = seedProperty({
+    seedKey: 'test/property/tables-gesture-pending-day', revision: 1, name: 'gesture:pending-day',
+    preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
+  })
+  configureRuntime(dailyNotesPlugin({repo}), referencesPlugin, definitionSeedsFacet.of(day))
+  await materializePropertySeeds(repo, WS, [day])
+  const fieldId = propertyDefinitionBlockId(WS, day.seedKey)
+  const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
+  await addColumn(repo, viewId!, fieldId)
+  const initial = await getOrCreateDailyNote(repo, WS, '2026-07-02')
+  await repo.block('row-0').set(day, initial.id)
+  await repo.awaitProcessors()
+  const values = (await repo.query.propertyRows({ownerId: 'row-0', fieldId}).load())?.fields[0]?.values
+  const id = values?.[0]?.id
+  expect(id).toBeDefined()
+  await db.db.writeTransaction(tx => tx.execute(
+    "UPDATE blocks SET content = ?, reference_target_id = NULL, references_json = '[]', updated_at = updated_at + 1 WHERE id = ?",
+    ['[[July 3rd, 2026]]', id]))
+  expect(await repo.load(id!)).toMatchObject({content: '[[July 3rd, 2026]]', referenceTargetId: null})
+
+  mount()
+  const cell = await waitFor(() => {
+    const element = document.querySelector<HTMLElement>(`[data-table-value][data-block-id="${id}"]`)
+    expect(element).not.toBeNull()
+    return within(element!)
+  })
+  expect(await cell.findByRole('status', {name: 'Waiting for reference target'})).toBeInTheDocument()
+  expect(cell.getByText(/July 3rd, 2026/)).toBeInTheDocument()
+  expect(cell.queryByLabelText('Invalid property value')).toBeNull()
 })
 
 // The mounted grid and all three sort transitions take about a second locally.

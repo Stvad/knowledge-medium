@@ -597,6 +597,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       mutators,
       processors,
       contentReferencePrefill,
+      valuePresets,
       propertySchemaResolverFor: resolverFor,
       outlineSkippedFieldIdsFor: (workspaceId: string) => {
         let ids = outlineSkippedIdsByWorkspace.get(workspaceId)

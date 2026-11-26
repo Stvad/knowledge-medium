@@ -225,6 +225,8 @@ export const runPropertyCellDivergenceCheck = async (
         }
         fieldsChecked += 1
         const stored = Object.hasOwn(cell, schema.name) ? cell[schema.name] : undefined
+        // A member this device cannot resolve keeps its stored value
+        // (`projectFieldValue`), so a disagreement there cannot be audited until it resolves.
         const projected = projectFieldValue(schema, rows.map(row => valuesOf.get(row.id) ?? []), stored)
         const kind = divergenceOf(stored, projected)
         if (kind === null) continue

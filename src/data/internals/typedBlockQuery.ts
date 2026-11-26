@@ -473,7 +473,7 @@ const compileAncestorPredicate = (
 }
 
 const compileAlternatives = (
-  predicates: readonly BlockPredicate[], context: WhereContext, workspaceId: string,
+  predicates: readonly BlockPredicate[], context: WhereContext, workspaceId?: string,
 ): CompiledClause => {
   const alternatives = predicates.map(predicate => isSelfScope(predicate)
     ? compilePredicateAgainstRow(predicate, 'b', context, workspaceId)
@@ -571,8 +571,8 @@ export const hasCandidateAxis = (
  *  pre-fetch ancestor dep nodes (e.g. `resolveTypedBlocks`) call this
  *  before issuing the dep SQL so an invalid query doesn't trigger
  *  exactly the expensive walk the gate is meant to prevent. */
-export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery, context: WhereContext): void => {
-  if (needsAncestorChain(query) && !hasCandidateAxis(query, p => isSelfScope(p) && selfPredicateNarrows(p, context))) {
+const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery, context: WhereContext, candidateIds?: readonly string[]): void => {
+  if (candidateIds === undefined && needsAncestorChain(query) && !hasCandidateAxis(query, p => isSelfScope(p) && selfPredicateNarrows(p, context))) {
     throw new Error(
       '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +
       '(parentId, types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
@@ -585,8 +585,13 @@ const candidateSource = (
   normalized: ResolvedTypedBlockQuery,
   context: WhereContext,
   recognition: RecognitionParams,
+  candidateIds?: readonly string[],
 ): {sql: string; params: unknown[]; distinct: boolean} => {
-  const types = normalized.types ?? []
+  // A caller-provided candidate set drives the block lookups. Membership
+  // predicates then probe each candidate instead of enumerating workspace matches.
+  const workspaceDriven = candidateIds === undefined
+  const indexedTypes = workspaceDriven ? normalized.types ?? [] : []
+  const indexedReference = workspaceDriven ? normalized.referencedBy : undefined
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
   const params: unknown[] = []
@@ -612,8 +617,8 @@ const candidateSource = (
   // `b.workspace_id = ?`. In the referencedBy branch there is no
   // `b.workspace_id = ?` to propagate from — scoping comes via
   // `br.workspace_id = ?` — and the planner uses the PK autoindex instead.
-  const membership = typeMembership('bt', types)
-  const typeJoin = types.length > 0
+  const membership = typeMembership('bt', indexedTypes)
+  const typeJoin = indexedTypes.length > 0
     ? `
       JOIN block_types bt
         ON bt.block_id = b.id
@@ -626,26 +631,28 @@ const candidateSource = (
   // `params` is still empty here, so one push before the branch covers both.
   params.push(...membership.params)
 
-  if (normalized.referencedBy !== undefined) {
+  if (indexedReference !== undefined) {
     from = `
       FROM block_references br
       JOIN blocks b ON b.id = br.source_id${typeJoin}
     `.trim()
-    const target = referenceTarget(normalized.referencedBy)
+    const target = referenceTarget(indexedReference)
     clauses.push('br.workspace_id = ?', target.sql, 'b.deleted = 0')
     params.push(normalized.workspaceId, ...target.params)
   } else {
     let index = ''
     if (normalized.anyOf?.length === 0) {
       // The group compiles to `0`, which SQLite plans with no index; forcing one leaves it no plan at all.
+    } else if (candidateIds !== undefined) {
+      index = ' INDEXED BY sqlite_autoindex_blocks_1'
     } else if (normalized.parentId !== undefined) {
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
-    } else if (!types.length && normalized.anyOf?.length &&
+    } else if (!indexedTypes.length && normalized.anyOf?.length &&
       normalized.anyOf.every(p => isSelfScope(p) && hasIndexedMembershipTerm(p))) {
       // Before ANALYZE SQLite can scan the workspace index for a disjunction of indexed source-id lists.
       index = ' INDEXED BY sqlite_autoindex_blocks_1'
-    } else if (typeof normalized.order === 'object' && !types.length &&
+    } else if (typeof normalized.order === 'object' && !indexedTypes.length &&
       !normalized.where && predicateGroups(normalized).every(group => group.length === 0)) {
       // Arbitrary property sorts visit the workspace's live rows. Keep foreign workspaces off that path.
       index = ' INDEXED BY idx_blocks_workspace_active'
@@ -655,6 +662,16 @@ const candidateSource = (
     params.push(normalized.workspaceId)
   }
 
+  if (candidateIds !== undefined) {
+    clauses.push('b.id IN (SELECT value FROM json_each(?))')
+    params.push(JSON.stringify(candidateIds))
+    const {types, referencedBy} = normalized
+    if (types?.length || referencedBy !== undefined) {
+      const predicate = compilePredicateAgainstRow({types, referencedBy}, 'b', context)
+      clauses.push(predicate.sql)
+      params.push(...predicate.params)
+    }
+  }
   if (normalized.parentId !== undefined) {
     clauses.push('b.parent_id = ?')
     params.push(normalized.parentId)
@@ -674,7 +691,7 @@ const candidateSource = (
   }
 
   if (normalized.anyOf !== undefined && !hasAncestorScope(normalized.anyOf)) {
-    const group = compileAlternatives(normalized.anyOf, context, normalized.workspaceId)
+    const group = compileAlternatives(normalized.anyOf, context, workspaceDriven ? normalized.workspaceId : undefined)
     clauses.push(group.sql)
     params.push(...group.params)
   }
@@ -699,7 +716,7 @@ const candidateSource = (
   }
 
   // An inner join can repeat a block through distinct matching types or reference fields.
-  const distinct = types.length > 1 || normalized.referencedBy !== undefined
+  const distinct = indexedTypes.length > 1 || indexedReference !== undefined
   return {sql: `${from} WHERE ${clauses.join(' AND ')}`, params, distinct}
 }
 
@@ -707,8 +724,9 @@ export const buildCandidatesCte = (
   query: ResolvedTypedBlockQuery,
   context: WhereContext,
   recognition: RecognitionParams = NO_REGISTRY_RECOGNITION_PARAMS,
+  candidateIds?: readonly string[],
 ): CompiledTypedBlockQuery => {
-  const source = candidateSource(query, context, recognition)
+  const source = candidateSource(query, context, recognition, candidateIds)
   return {sql: `candidates AS (SELECT DISTINCT b.id ${source.sql})`, params: source.params}
 }
 
@@ -778,15 +796,15 @@ const resultOrder = (query: ResolvedTypedBlockQuery, context: WhereContext): Com
 export const compileTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
   context: WhereContext,
-  opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams} = {},
+  opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams; candidateIds?: readonly string[]} = {},
 ): CompiledTypedBlockQuery => {
   const normalized = normalizeTypedBlockQuery(query, opts.projection)
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
 
-  assertAncestorWalkBounded(normalized, context)
+  assertAncestorWalkBounded(normalized, context, opts.candidateIds)
 
-  const source = candidateSource(normalized, context, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS)
+  const source = candidateSource(normalized, context, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS, opts.candidateIds)
   const params = source.params
   const isCount = opts.projection === 'count'
   const select = opts.projection === 'ids' ? 'b.id AS id' : buildQualifiedBlockColumnsSql('b')
@@ -809,7 +827,7 @@ export const compileTypedBlockQuery = (
   const filterClauses: string[] = []
 
   if (normalized.anyOf && hasAncestorScope(normalized.anyOf)) {
-    const group = compileAlternatives(normalized.anyOf, context, normalized.workspaceId)
+    const group = compileAlternatives(normalized.anyOf, context, opts.candidateIds === undefined ? normalized.workspaceId : undefined)
     filterClauses.push(group.sql)
     params.push(...group.params)
   }

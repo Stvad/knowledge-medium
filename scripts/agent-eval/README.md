@@ -19,6 +19,12 @@ No browser, dev server or pairing is involved. A run imports the fixture into a 
 copy of the app's data layer once, then gives every task a fresh copy of that database,
 served to the agent through the real bridge, CLI and MCP server.
 
+Run `pnpm bench:agent` to measure tool latency without a model. It builds the
+CLI and relay, seeds the fixture, and times a search, a nested outline and the
+first page of a 2,000-child outline. Each measurement has one warm-up and 20
+timed JSON reads. The CLI starts a process per read. MCP uses one stdio session
+and reports its handshake separately. Both verify the returned note content.
+
 ## How a run works
 
 1. `run` builds `packages/agent-cli` (incremental): the agent runs its built `kmagent`

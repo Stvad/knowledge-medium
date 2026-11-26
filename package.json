@@ -45,7 +45,8 @@
     "agent": "node packages/agent-cli/dist/cli.js",
     "agent-dispatch": "node packages/agent-dispatch/dist/daemon.js",
     "headless": "node scripts/headless/launch.ts",
-    "agent-eval": "vite-node --config vitest.config.ts scripts/agent-eval/cli.ts --"
+    "agent-eval": "vite-node --config vitest.config.ts scripts/agent-eval/cli.ts --",
+    "bench:agent": "pnpm run compile:packages && vite-node --config vitest.config.ts scripts/agent-eval/benchmark.ts"
   },
   "dependencies": {
     "@babel/standalone": "^8.1.1",

@@ -56,11 +56,11 @@ import {
   type SameTxCtx,
   type Tx,
 } from '@/data/api'
+import type { ProposedValueChild } from '@/data/api/tx'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
-  encodedPropertyValueToChildContents,
   scalarValueRow,
   scalarDuplicates,
   valueChildContentToEncoded,
@@ -78,6 +78,7 @@ import {
 import { jsonValuesEqual, persistedJsonKey } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { deleteSubtreeAnnouncedInTx, deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { deriveReferenceColumns, sameTxReferenceTargetLookups } from './referenceTargetProcessor'
 import { mintPropertyChildRow } from './propertyChildMint'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -241,7 +242,7 @@ const valueChildField = async (
 /** The value a schema's field rows project onto their owner's cell, in
  *  deterministic `(order_key, id)` order — `undefined` when nothing parses,
  *  which §9 reads as "key unset" while the rows stay visible and fixable in
- *  the tree. Single-valued takes the first parseable value; multi-valued
+ *  the tree. Single-valued reads its first decodable or pending row; multi-valued
  *  AGGREGATES the members (`childContentsToEncodedPropertyValue` owns both
  *  rules, and the dedupe that makes divergence and multiplicity one shape).
  *
@@ -256,6 +257,7 @@ const valueChildField = async (
 export const projectFieldRowValues = (
   schema: AnyPropertySchema,
   perFieldRow: readonly (readonly (Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null})[])[],
+  storedWhileAwaiting: unknown,
 ): unknown | undefined => {
   // NO field row at all: the key is unset. That is the only thing that unsets a
   // multi-valued property, and it is the precondition
@@ -264,7 +266,7 @@ export const projectFieldRowValues = (
   if (perFieldRow.length === 0) return undefined
   // `unionValuesAcrossFieldRows` owns what happens across the rows.
   return childContentsToEncodedPropertyValue(
-    schema, unionValuesAcrossFieldRows(schema, perFieldRow))
+    schema, unionValuesAcrossFieldRows(schema, perFieldRow), storedWhileAwaiting)
 }
 
 type ValueRowState = Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null}
@@ -273,58 +275,37 @@ type ValueRowState = Pick<BlockData, 'id' | 'content'> & {readonly referenceTarg
  *  child-backed cell asks this, so none can disagree about a member this device
  *  cannot read yet; a block merge is the exception, and says why.
  *
- *  It is {@link projectFieldRowValues} until a value row awaiting its reference
- *  target ({@link awaitsReferenceTarget}) could be part of the value. That
- *  member is unknown on this device, not absent, so the rows' lack of it is no
- *  evidence it was removed, and the write becomes `stored` with the caller's
- *  change applied ({@link withPendingMembersKept}). `departed` are the BEFORE
- *  states of the value rows that change removed or rewrote. */
+ *  A single value is {@link projectFieldRowValues}, whose decoder already holds
+ *  `stored` for a pending row ahead of the first readable one. A list is too,
+ *  until one of its value rows awaits its reference target
+ *  ({@link awaitsReferenceTarget}). That member is unknown on this device, not
+ *  absent, so the rows' lack of it is no evidence it was removed, and the write
+ *  becomes `stored` with the caller's change applied
+ *  ({@link withPendingMembersKept}). `departed` are the BEFORE states of the
+ *  value rows that change removed or rewrote. */
 export const projectFieldValue = (
   schema: AnyPropertySchema,
   perFieldRow: readonly (readonly ValueRowState[])[],
   stored: unknown,
   departed: readonly ValueRowState[] = [],
 ): unknown | undefined => {
-  const projected = projectFieldRowValues(schema, perFieldRow)
-  if (!pendingCouldBeInValue(schema, perFieldRow)) return projected
-  return withPendingMembersKept(schema, stored, projected, departed.flatMap(row => valuesOfRow(schema, row)))
+  const projected = projectFieldRowValues(schema, perFieldRow, stored)
+  if (memberCodecOf(schema.codec) === undefined
+    || !perFieldRow.some(rows => rows.some(row => awaitsReferenceTarget(schema, row)))) return projected
+  const removed = departed.flatMap(row => projectFieldRowValues(schema, [[row]], undefined) as unknown[])
+  return withPendingMembersKept(stored, projected, removed)
 }
 
-/** Any pending row of a list could be one of its members. A single value is its
- *  first readable row's, so only a pending row before that one could be it. */
-const pendingCouldBeInValue = (
-  schema: AnyPropertySchema, perFieldRow: readonly (readonly ValueRowState[])[],
-): boolean => {
-  const rows = unionValuesAcrossFieldRows(schema, perFieldRow)
-  if (memberCodecOf(schema.codec) !== undefined) return rows.some(row => awaitsReferenceTarget(schema, row))
-  for (const row of rows) {
-    if (awaitsReferenceTarget(schema, row)) return true
-    if (valuesOfRow(schema, row).length > 0) return false
-  }
-  return false
-}
-
-/** What one value row reads as, as a list of values: a list member, or a
- *  single value. */
-const valuesOfRow = (schema: AnyPropertySchema, row: ValueRowState): unknown[] => {
-  const value = projectFieldRowValues(schema, [[row]])
-  if (value === undefined) return []
-  return memberCodecOf(schema.codec) !== undefined && Array.isArray(value) ? value : [value]
-}
-
-/** `stored` with a change applied, while a pending member keeps the rows from
- *  answering for the whole value. A list holds each member as many times as
- *  the rows give it or as `stored` does less the copies the change `removed`,
+/** A stored list with a change applied, while a pending member keeps the rows
+ *  from answering for the whole list. Each member is held as many times as the
+ *  rows give it or as `stored` does less the copies the change `removed`,
  *  whichever is more: stored members first in stored order, then the projected
- *  ones it adds. Any other stored value is kept, unless the change `removed`
- *  it. An absent key takes the projection. */
+ *  ones it adds. An absent key takes the projection; a stored value that is not
+ *  a list is kept as it is. */
 export const withPendingMembersKept = (
-  schema: AnyPropertySchema, stored: unknown, projected: unknown | undefined, removed: readonly unknown[],
+  stored: unknown, projected: unknown | undefined, removed: readonly unknown[],
 ): unknown | undefined => {
   if (stored === undefined) return projected
-  if (memberCodecOf(schema.codec) === undefined) {
-    return removed.some(value => jsonValuesEqual(value, stored)) ? projected : stored
-  }
   if (!Array.isArray(stored) || !Array.isArray(projected)) return stored
   const countOf = (members: readonly unknown[]): Map<string, number> => {
     const counts = new Map<string, number>()
@@ -927,22 +908,19 @@ export const plannedFieldRow = (
  *  to `tx.createMany`. Its owners all predate it, so its rows take random ids,
  *  as `mintPropertyChildRow` would give them.
  *
- *  Takes CONTENTS, not the encoded value: the pass encodes (with
- *  `encodedPropertyValueToChildContents`, as the live reconcile does) inside
- *  its per-key guard, where the encoder's throw on a value no codec takes
- *  costs that key, not the batch. */
+ *  Proposed named links carry the target resolved in this transaction. */
 export const valueChildRowsFor = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  contents: readonly string[],
+  contents: readonly ProposedValueChild[],
 ): NewBlockData[] => {
   const keys = keysBetween(null, null, contents.length)
-  return contents.map((content, index) => ({
+  return contents.map((row, index) => ({
     workspaceId: fieldRow.workspaceId,
     parentId: fieldRow.id,
     orderKey: keys[index]!,
-    content,
-    references: tx.derivedReferencesFor(content),
+    ...row,
+    references: tx.derivedReferencesFor(row.content),
   }))
 }
 
@@ -990,7 +968,7 @@ export const upsertFieldRow = async (
 
 /**
  * Reconcile ONE field row's value children to `contents` — the content of each
- * value child, in sibling order, as {@link encodedPropertyValueToChildContents}
+ * value child, in sibling order, as {@link Tx.propertyValueChildContents}
  * computed it from the owner's cell.
  *
  * THE cell → children writer. `tx.setProperty`'s eager dual-write and the
@@ -1025,7 +1003,7 @@ export const reconcileFieldValueChildren = async (
   // by a caller: a scalar has exactly one content here by construction, which
   // is what lets the single-value branch below take a `string` rather than a
   // list it has to defend against being empty.
-  const contents = encodedPropertyValueToChildContents(schema, encoded)
+  const contents = await tx.propertyValueChildContents(schema, encoded, fieldRow.workspaceId)
   // §9 value set: bit-filtered, in `(order_key, id)` order — a nested marked
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
@@ -1033,7 +1011,7 @@ export const reconcileFieldValueChildren = async (
     await reconcileSingleValueChild(tx, fieldRow, schema, values, contents[0]!, additive)
     return
   }
-  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
+  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents.map(row => row.content), additive)
 }
 
 /** Mint one value child. `valueKey` is `content`'s `MemberKeys.content`, and
@@ -1041,23 +1019,26 @@ export const reconcileFieldValueChildren = async (
 export const createValueChild = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  content: string,
+  proposed: ProposedValueChild,
   orderKey: string,
   {valueKey, occurrence}: {valueKey: string; occurrence: number},
 ): Promise<string> => mintPropertyChildRow(tx, {
   workspaceId: fieldRow.workspaceId,
   parentId: fieldRow.id,
   orderKey,
-  content,
-  references: tx.derivedReferencesFor(content),
+  ...proposed,
+  references: tx.derivedReferencesFor(proposed.content),
 }, {kind: 'value', occurrence, valueKey})
+
+// A clear leaves the next populated peer readable. Replaying that clear during materialization must use the original row.
+const clearedScalarRows = new WeakMap<Tx['meta'], Map<string, string>>()
 
 const reconcileSingleValueChild = async (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
   values: readonly BlockData[],
-  content: string,
+  proposed: ProposedValueChild,
   /** See {@link MaterializeOptions.additive}. */
   additive: boolean,
 ): Promise<void> => {
@@ -1066,21 +1047,34 @@ const reconcileSingleValueChild = async (
   // against `content`, the cell value the primary was just permitted to
   // disagree with, which would fold a row that is no duplicate of it (#1021).
   if (additive && values.length > 0) return
+  const {content} = proposed
   const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
-  const primary = scalarValueRow(schema, values, content)
+  const clearedId = content === '' ? clearedScalarRows.get(tx.meta)?.get(fieldRow.id) : undefined
+  const primary = (clearedId && values.find(row => row.id === clearedId && row.content === ''))
+    || scalarValueRow(schema, values, content)
   if (!primary) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
+    await createValueChild(tx, fieldRow, proposed, keyAtStart(values[0]?.orderKey ?? null), slot)
     return
   }
+  if (content === '') {
+    let cleared = clearedScalarRows.get(tx.meta)
+    if (!cleared) clearedScalarRows.set(tx.meta, cleared = new Map())
+    cleared.set(fieldRow.id, primary.id)
+  } else {
+    clearedScalarRows.get(tx.meta)?.delete(fieldRow.id)
+  }
   let sameValue = primary.content === content
-  if (!sameValue) {
+  if (!sameValue && !proposed.referenceTargetId) {
     try {
-      sameValue = jsonValuesEqual(valueChildContentToEncoded(schema, primary), valueChildContentToEncoded(schema, content))
+      sameValue = jsonValuesEqual(valueChildContentToEncoded(schema, primary), valueChildContentToEncoded(schema, proposed))
     } catch {
       // An unreadable primary is repaired by the requested spelling.
     }
   }
-  if (!sameValue) await tx.update(primary.id, {content})
+  if (!sameValue) await tx.update(primary.id, proposed)
+  else if (proposed.referenceTargetId && proposed.referenceTargetId !== primary.referenceTargetId) {
+    await tx.stampReferenceTarget(primary.id, proposed.referenceTargetId, false)
+  }
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as
@@ -1202,7 +1196,7 @@ const reconcileMemberValueChildren = async (
     const occurrence = occurrences.get(memberKey) ?? 0
     occurrences.set(memberKey, occurrence + 1)
     if (!existing) {
-      await createValueChild(tx, fieldRow, contents[i]!, orderKey, {valueKey: memberKey, occurrence})
+      await createValueChild(tx, fieldRow, {content: contents[i]!}, orderKey, {valueKey: memberKey, occurrence})
       continue
     }
     // Content is deliberately NOT rewritten to the canonical spelling: the row
@@ -1480,14 +1474,19 @@ export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor(
   watches: {kind: 'event', events: [PROPERTY_VALUES_RESOLVED_EVENT]},
   settledWrites: true,
   apply: async (event, ctx) => {
-    if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const rows: ProjectableRow[] = []
     for (const resolved of event.emittedEvents) {
       for (const id of (resolved.payload as ResolvedPropertyValuesEvent).valueIds) {
         const row = await ctx.tx.get(id)
-        if (row) rows.push(row)
+        if (!row || row.deleted) continue
+        if (row.referenceTargetId == null) {
+          const derived = await deriveReferenceColumns(row.content, row.workspaceId, sameTxReferenceTargetLookups(ctx.tx))
+          if (derived.targetId && !derived.isFieldForm) await ctx.tx.stampReferenceTarget(id, derived.targetId, false)
+        }
+        rows.push(row)
       }
     }
+    if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'full')
   },
 })

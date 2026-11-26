@@ -22,6 +22,7 @@ import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
   awaitsReferenceTarget,
+  scalarValueRow,
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
   encodedPropertyValueToChildContents,
@@ -199,30 +200,21 @@ describe('awaitsReferenceTarget', () => {
 })
 
 describe('withPendingMembersKept', () => {
-  const refs = defineProperty('refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
-  const ref = defineProperty('ref', {codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault})
-  const shape = defineProperty('shape', {codec: codecs.unsafeIdentity<string[]>(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
-
   it.each([
-    ['an absent key takes the projection', refs, undefined, ['a'], [], ['a']],
-    ['a list keeps a member the projection lacks', refs, ['a', 'b'], ['a'], [], ['a', 'b']],
-    ['a list is never emptied', refs, ['a'], [], [], ['a']],
-    ['a list is never unset', refs, ['a'], undefined, [], ['a']],
-    ['a malformed list cell is kept as it is', refs, 'a', ['b'], [], 'a'],
-    ['a list gains a projected member, after its own', refs, ['a', 'b'], ['c', 'a'], [], ['a', 'b', 'c']],
-    ['a list keeps its order when nothing is added', refs, ['b', 'a'], ['a', 'b'], [], ['b', 'a']],
-    ['copies are counted', refs, ['a'], ['a', 'a'], [], ['a', 'a']],
-    ['a removed member leaves', refs, ['a', 'c'], [], ['a'], ['c']],
-    ['a rewritten member is replaced', refs, ['a', 'c'], ['b'], ['a'], ['c', 'b']],
-    ['a member removed and still projected stays in place', refs, ['a', 'c'], ['a'], ['a'], ['a', 'c']],
-    ['one removed copy leaves one copy', refs, ['a', 'a', 'c'], [], ['a'], ['a', 'c']],
-    ['a scalar keeps its value', ref, 'a', 'b', ['x'], 'a'],
-    ['a scalar the change rewrote takes the projection', ref, 'a', 'b', ['a'], 'b'],
-    ['a scalar is never unset', ref, 'a', undefined, [], 'a'],
-    // Only a list's members are counted; any other array is one value.
-    ['an array scalar keeps its value', shape, ['a'], ['a', 'b'], [], ['a']],
-  ] as const)('%s', (_case, schema, stored, projected, removed, expected) => {
-    expect(withPendingMembersKept(schema, stored, projected, removed)).toEqual(expected)
+    ['an absent key takes the projection', undefined, ['a'], [], ['a']],
+    ['a list keeps a member the projection lacks', ['a', 'b'], ['a'], [], ['a', 'b']],
+    ['a list is never emptied', ['a'], [], [], ['a']],
+    ['a list is never unset', ['a'], undefined, [], ['a']],
+    ['a malformed list cell is kept as it is', 'a', ['b'], [], 'a'],
+    ['a list gains a projected member, after its own', ['a', 'b'], ['c', 'a'], [], ['a', 'b', 'c']],
+    ['a list keeps its order when nothing is added', ['b', 'a'], ['a', 'b'], [], ['b', 'a']],
+    ['copies are counted', ['a'], ['a', 'a'], [], ['a', 'a']],
+    ['a removed member leaves', ['a', 'c'], [], ['a'], ['c']],
+    ['a rewritten member is replaced', ['a', 'c'], ['b'], ['a'], ['c', 'b']],
+    ['a member removed and still projected stays in place', ['a', 'c'], ['a'], ['a'], ['a', 'c']],
+    ['one removed copy leaves one copy', ['a', 'a', 'c'], [], ['a'], ['a', 'c']],
+  ] as const)('%s', (_case, stored, projected, removed, expected) => {
+    expect(withPendingMembersKept(stored, projected, removed)).toEqual(expected)
   })
 })
 
@@ -1843,6 +1835,28 @@ describe('a scalar write rewrites the value the cell reads', () => {
     const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
     return {repo, fieldId: field!.id, valueId: value!.id}
   }
+
+  it('clears the populated optional number once and preserves a divergent peer', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const schema = defineProperty('count', {
+      codec: codecs.optionalNumber, defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
+    })
+    registerDefinition(repo, 'optional-count', COUNT_FIELD_ID, schema)
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', schema, 5), {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(async tx => {
+      await tx.create({id: 'blank', workspaceId: WS, parentId: field!.id, orderKey: 'Zz', content: ''})
+      await tx.create({id: 'peer', workspaceId: WS, parentId: field!.id, orderKey: 'z', content: '9'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await bagOf('p')).toMatchObject({count: 5})
+    await repo.tx(tx => tx.setProperty('p', schema, undefined), {scope: ChangeScope.BlockDefault})
+    expect(await contentOf(value!.id)).toBe('')
+    expect(await contentOf('peer')).toBe('9')
+    expect(await bagOf('p')).toMatchObject({count: 9})
+  })
 
   it('leaves a block ahead of the value alone', async () => {
     const {repo, fieldId, valueId} = await setupCount()
@@ -3540,7 +3554,7 @@ describe('propertyCellValueRejection asks what the projection will ask', () => {
     // The symptom the disagreement produced: this is what the cell would have
     // become if the write above had been accepted.
     const contents = encodedPropertyValueToChildContents(choiceListSchema, ['a', 'b'])
-    expect(childContentsToEncodedPropertyValue(choiceListSchema, contents)).toEqual(['a', 'b'])
+    expect(childContentsToEncodedPropertyValue(choiceListSchema, contents, undefined)).toEqual(['a', 'b'])
   })
 })
 
@@ -3705,6 +3719,19 @@ describe('content <-> value codecs: blank numeric content is unparseable, not ze
     expect(content).toBe('0')
     expect(valueChildContentToEncoded(numberSchema, content)).toBe(0)
   })
+
+  it('stores an unset optional number as empty content and still reads legacy null text', () => {
+    const optionalNumberSchema = defineProperty('maybe-count', {
+      codec: codecs.optionalNumber,
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(propertyValueToChildContent(optionalNumberSchema, undefined)).toBe('')
+    expect(valueChildContentToEncoded(optionalNumberSchema, '')).toBeNull()
+    expect(valueChildContentToEncoded(optionalNumberSchema, 'null')).toBeNull()
+    expect(valueChildContentToEncoded(optionalNumberSchema, '0')).toBe(0)
+    expect(() => valueChildContentToEncoded(optionalNumberSchema, ' ')).toThrow(CodecError)
+  })
 })
 
 describe('content <-> value codecs: "null"-collision escaping (PR #386 review fix)', () => {
@@ -3738,6 +3765,23 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = encodedToValueChildContent(nullableStringSchema, null)
     expect(content).toBe('null')
     expect(valueChildContentToEncoded(nullableStringSchema, content)).toBeNull()
+  })
+
+  it.each(['', '""'])('preserves an existing optional string with content %j', content => {
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBe(content)
+    expect(propertyValueToChildContent(nullableStringSchema, content)).toBe(content)
+  })
+
+  it('stores and reads a literal raw JSON null', () => {
+    const rawJson = kernelValuePresetCoresById['raw-json']
+    const schema = defineProperty('raw-value', {
+      codec: rawJson.build(rawJson.defaultConfig),
+      defaultValue: rawJson.defaultValue,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(propertyValueToChildContent(schema, null)).toBe('null')
+    expect(valueChildContentToEncoded(schema, 'null')).toBeNull()
+    expect(() => valueChildContentToEncoded(schema, '')).toThrow(CodecError)
   })
 
   it('ordinary strings are stored verbatim, unchanged', () => {
@@ -3797,7 +3841,7 @@ describe('content <-> value codecs: a JSON-spelled value child carries no span (
     for (const value of VALUES) {
       const legacy = JSON.stringify(value)
       expect(valueChildContentToEncoded(jsonSchema, legacy)).toEqual(value)
-      expect(childContentsToEncodedPropertyValue(listSchema, [legacy])).toEqual([value])
+      expect(childContentsToEncodedPropertyValue(listSchema, [legacy], undefined)).toEqual([value])
     }
   })
 
@@ -3937,6 +3981,20 @@ describe('content <-> value codecs: reference value decoding', () => {
     changeScope: ChangeScope.BlockDefault,
   })
 
+  it('uses a blank optional ref only after all populated or pending peers', () => {
+    const blank = {content: ''}
+    const pending = {content: '[[pending]]'}
+    const target = {content: '((chosen))'}
+    for (const [peer, expected] of [[pending, 'previous'], [target, 'chosen']] as const) {
+      const rows = [blank, peer, target]
+      expect(childContentsToEncodedPropertyValue(optionalRefSchema, rows, 'previous')).toBe(expected)
+      expect(scalarValueRow(optionalRefSchema, rows)).toBe(peer)
+      expect(scalarValueRow(optionalRefSchema, rows, '((new))')).toBe(peer)
+    }
+    expect(childContentsToEncodedPropertyValue(optionalRefSchema, [blank, 'unreadable'], 'previous')).toBeNull()
+    expect(scalarValueRow(optionalRefSchema, [blank, {content: 'unreadable'}])).toBe(blank)
+  })
+
   it('writes a ref value as `((id))`, not the bare id', () => {
     expect(propertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
     expect(encodedToValueChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
@@ -3996,14 +4054,12 @@ describe('content <-> value codecs: reference value decoding', () => {
       .toThrow()
   })
 
-  it('an optional ref preserves an explicit null (sentinel wins over the form check)', () => {
-    const content = encodedToValueChildContent(optionalRefSchema, null)
-    expect(content).toBe('null')
-    // Must NOT throw despite `null` being no reference form at all — the
-    // generic null sentinel runs first, so an intentionally-unset optional ref
-    // decodes to its unset form (encoded as null, like every other
-    // null-accepting codec).
-    expect(valueChildContentToEncoded(optionalRefSchema, content)).toBeNull()
+  it('stores an unset optional ref as empty content and still reads legacy null text', () => {
+    expect(propertyValueToChildContent(optionalRefSchema, undefined)).toBe('')
+    expect(valueChildContentToEncoded(optionalRefSchema, '')).toBeNull()
+    expect(valueChildContentToEncoded(optionalRefSchema, 'null')).toBeNull()
+    expect(() => valueChildContentToEncoded(optionalRefSchema, ' ')).toThrow(CodecError)
+    expect(() => valueChildContentToEncoded(refSchema, '')).toThrow(CodecError)
   })
 })
 
@@ -5177,34 +5233,34 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     convertValueChildContent(schemaOf(from), schemaOf(to), content)
 
   it('carries the VALUE across a pure spelling disagreement, both directions', () => {
-    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
-    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
+    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"', encoded: 'x'})
+    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x', encoded: 'x'})
   })
 
   it('re-reads the TEXT where the target cannot hold the value', () => {
     // The round trip fails on a type change, which is what routes every
     // coercion here without an ordering rule of its own. Asserted on the
     // canonicalized content: carrying the value would have kept the spacing.
-    expect(convert('string', 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
-    expect(convert('string', 'boolean', ' true ')).toEqual({outcome: 'converted', content: 'true'})
+    expect(convert('string', 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42', encoded: 42})
+    expect(convert('string', 'boolean', ' true ')).toEqual({outcome: 'converted', content: 'true', encoded: true})
   })
 
   it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
-    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
-    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
+    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"', encoded: '42'})
+    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"', encoded: '[1,2]'})
   })
 
   it('re-reads the text for a row the OLD codec cannot read', () => {
     // A decline that has nothing to do with the target: within ONE `number`
     // property re-typed to `list`, the readable row keeps its number while
     // this stale one is re-read as JSON.
-    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
+    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]', encoded: [1, 2]})
   })
 
   it('resolves the authored named reference when changing text to ref', () => {
     expect(convertValueChildContent(schemaOf('string'), schemaOf('ref'), {
       content: '[[Page]]', referenceTargetId: 'page-target',
-    })).toEqual({outcome: 'converted', content: '((page-target))'})
+    })).toEqual({outcome: 'converted', content: '((page-target))', encoded: 'page-target'})
     expect(convert('string', 'ref', '[[Page]]')).toEqual({outcome: 'unreadable'})
     expect(convert('string', 'ref', 'Mary')).toEqual({outcome: 'unreadable'})
   })
@@ -5212,7 +5268,7 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
   it('preserves named reference identity when changing ref to text or a list', () => {
     const row = {content: '[[Page]]', referenceTargetId: 'page-target'}
     expect(convertValueChildContent(schemaOf('ref'), schemaOf('string'), row))
-      .toEqual({outcome: 'converted', content: 'page-target'})
+      .toEqual({outcome: 'converted', content: 'page-target', encoded: 'page-target'})
     expect(convertValueChildContent(schemaOf('ref'), {...schemaOf('ref'), codec: codecs.refList()}, row))
       .toEqual({outcome: 'converted', content: '[[Page]]'})
   })
@@ -5222,7 +5278,7 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     // the spelling for truthiness rather than for null would fall through to
     // the text route and keep the JSON `""` verbatim — #1055 again, at the one
     // value where it is invisible.
-    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
+    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: '', encoded: ''})
   })
 
   it('keeps a bare `null` the OLD codec read as the literal word (#1030)', () => {
@@ -5231,7 +5287,7 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     // word and the value route carries it. Settled only where a spelling
     // holds: `list` -> `string` has none, and the text route decides it the
     // other way.
-    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
+    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"', encoded: 'null'})
   })
 })
 

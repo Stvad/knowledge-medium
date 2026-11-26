@@ -6,6 +6,7 @@ import {
   type BlockMergeAliasRewrite,
   type Tx,
 } from '@/data/api'
+import { storedPropertyValue } from './rowProperty'
 import { keysBetween } from './orderKey'
 import {
   fieldRowValues,
@@ -147,10 +148,10 @@ export const foldBlocksInTx = async (
       if (schema === null) continue
       const perFieldRow = await fieldRowValues(tx, children, fieldId, isFieldDefinition)
       if (perFieldRow === null) continue
-      // The plain projection, not `projectFieldValue`'s hold of a pending
-      // member: MATERIALIZE runs next and cannot yet match a pending row to the
-      // member it stands for (#1861), so holding it here mints a duplicate row.
-      const projected = projectFieldRowValues(schema, perFieldRow)
+      // The plain projection, not `projectFieldValue`'s list hold: MATERIALIZE
+      // runs next and cannot yet match a pending row to the list member it
+      // stands for (#1861), so holding it here mints a duplicate row.
+      const projected = projectFieldRowValues(schema, perFieldRow, storedPropertyValue(mergedProperties, schema.name))
       // `undefined` = nothing under the rows parses. Leave the merged bag's own
       // answer alone rather than unsetting: §9's unset is PROJECT's call to
       // make on a settled write, not a merge's.
