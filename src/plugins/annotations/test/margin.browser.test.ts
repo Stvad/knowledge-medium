@@ -315,36 +315,46 @@ it('can wheel past the final card and back', async () => {
 // The Chromium run took 83s under concurrent load including the cold app boot.
 it('shows author stamps and a self rule in a discussion with mixed authors', async () => {
   const {peerId, agentId, selfId} = await page.evaluate<Awaited<ReturnType<typeof seedAuthorStamps>>>(
-    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedAuthorStamps(${JSON.stringify(fixture.closed.commentId)}))`,
+    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedAuthorStamps(${JSON.stringify(fixture.first.commentId)}))`,
   )
-  await page.getByRole('button', {name: 'Show closed', exact: true}).click({timeout: 5_000})
-  const discussion = card(fixture.closed)
+  await row(fixture.first).getByRole('button', {name: '3 open comment threads'}).click({timeout: 5_000})
+  const discussion = card(fixture.first)
   await discussion.getByText('A follow-up from automation.', {exact: true}).waitFor({timeout: 5_000})
   const authored = (text: string) => discussion.locator('[data-comment-author]').filter({
     has: page.getByText(text, {exact: true}),
   })
-  const self = authored('A closed discussion on the same source.')
+  const self = authored('First card in a dense group.')
   const peer = authored('Feedback from a peer.')
   const agent = authored('A follow-up from automation.')
   const stamp = (entry: Locator) => entry.locator('[data-author-stamp]')
+  const visibleStamp = (entry: Locator) => stamp(entry).filter({visible: true})
 
-  for (const [entry, name, profileId, ownership, initials] of [
-    [self, 'You', selfId, 'self', 'FR'],
-    [peer, 'Peer Reviewer', peerId, 'other', 'PR'],
-    [agent, 'Review Bot', agentId, 'other', 'RB'],
+  for (const [entry, name, profileId, ownership] of [
+    [self, 'You', selfId, 'self'],
+    [peer, 'Peer Reviewer', peerId, 'other'],
+    [agent, 'Review Bot', agentId, 'other'],
   ] as const) {
     const link = entry.getByRole('link', {name, exact: true})
     await link.waitFor({timeout: 5_000})
     expect(await link.getAttribute('href')).toContain(profileId)
     expect(await entry.getAttribute('data-comment-author')).toBe(ownership)
-    expect(await stamp(entry).textContent()).toBe(initials)
   }
+  expect(await visibleStamp(self).count()).toBe(0)
+  expect(await visibleStamp(peer).textContent()).toBe('PR')
+  expect(await visibleStamp(agent).textContent()).toBe('RB')
   expect(await self.locator('[data-comment-author]').count()).toBe(0)
   expect(await peer.locator('[data-comment-author]').count()).toBe(0)
 
-  const corner = (entry: Locator) => stamp(entry).evaluate(element => parseFloat(getComputedStyle(element).borderTopLeftRadius))
-  expect(await corner(self)).toBeGreaterThan(await corner(agent))
-  expect(await corner(peer)).toBe(await corner(self))
+  const corner = (entry: Locator) => visibleStamp(entry).evaluate(element => parseFloat(getComputedStyle(element).borderTopLeftRadius))
+  expect(await corner(peer)).toBeGreaterThan(await corner(agent))
+
+  await peer.getByRole('link', {name: 'Peer Reviewer', exact: true}).hover({timeout: 5_000})
+  expect(await visibleStamp(peer).evaluate(element => {
+    for (let ancestor: Element | null = element; ancestor && !ancestor.hasAttribute('data-comment-author'); ancestor = ancestor.parentElement) {
+      if (getComputedStyle(ancestor).textDecorationLine.includes('underline')) return true
+    }
+    return false
+  })).toBe(false)
 
   const readRule = (entry: Locator) => entry.evaluate(element => {
     const owner = element.closest('[data-comment-turn]') ?? element
@@ -378,10 +388,10 @@ it('shows author stamps and a self rule in a discussion with mixed authors', asy
     `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.setFixtureAuthorPicture(${JSON.stringify(selfId)}, ${present}))`,
   )
   await setPicture(true)
-  const photo = stamp(self).locator('img')
+  const photo = visibleStamp(self).locator('img')
   await photo.waitFor({timeout: 5_000})
   await expect.poll(() => photo.evaluate(image => image instanceof HTMLImageElement && image.naturalWidth), {timeout: 5_000}).toBe(8)
   await setPicture(false)
-  await expect.poll(() => photo.count(), {timeout: 5_000}).toBe(0)
-  expect(await stamp(self).textContent()).toBe('FR')
+  await expect.poll(() => visibleStamp(self).count(), {timeout: 5_000}).toBe(0)
+  expect(await self.getByRole('link', {name: 'You', exact: true}).isVisible()).toBe(true)
 }, 90_000)

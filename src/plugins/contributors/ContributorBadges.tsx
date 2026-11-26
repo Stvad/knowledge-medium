@@ -185,19 +185,24 @@ const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer
   const kind = profile?.kind
   const nonHuman = kind && kind !== 'human'
   const pictureId = profile?.pictureId
-  const stamp = (
-    <span data-author-stamp="" aria-hidden="true" className={`relative inline-grid size-5 shrink-0 place-items-center overflow-hidden text-[10px] font-semibold leading-none ${nonHuman ? 'rounded' : 'rounded-full'} ${author.isSelf ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
-      {initialsOf(name)}
-      {pictureId && <ProfilePicture picture={block.repo.block(pictureId)} workspaceId={workspaceId}/>}
-    </span>
+  const identity = (
+    <>
+      <span
+        data-author-stamp="" aria-hidden="true"
+        className={`relative inline-grid size-5 shrink-0 place-items-center overflow-hidden bg-muted text-[10px] font-semibold leading-none text-muted-foreground empty:hidden ${nonHuman ? 'rounded' : 'rounded-full'}`}
+      >
+        {!author.isSelf && initialsOf(name)}
+        {pictureId && <ProfilePicture picture={block.repo.block(pictureId)} workspaceId={workspaceId}/>}
+      </span>
+      <span className={linkedId ? 'truncate underline underline-offset-2' : 'truncate'}>{label}</span>
+    </>
   )
-  const identity = <>{stamp}<span className="truncate">{label}</span></>
-  const byline = 'inline-flex min-w-0 items-center gap-1 font-medium text-foreground'
+  const byline = 'inline-flex min-w-0 items-center gap-1.5 font-medium text-foreground'
   return (
     <div data-comment-author={author.isSelf ? 'self' : 'other'} className="w-full">
       <div {...gutterHeader} className="flex flex-wrap items-center gap-x-1 text-xs leading-5 text-muted-foreground">
         {linkedId
-          ? <a href={href} onClick={open} title={name} className={`${byline} hover:underline`}>{identity}</a>
+          ? <a href={href} onClick={open} title={name} className={`${byline} no-underline`}>{identity}</a>
           : <span className={byline}>{identity}</span>}
         {nonHuman && <span>· {kind}</span>}
         <span title={formatAbsoluteDateTime(author.createdAt)}>· {formatRelativeTime(author.createdAt, now)}</span>
