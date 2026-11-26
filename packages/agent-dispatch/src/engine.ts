@@ -346,9 +346,8 @@ export const createEngine = (deps: EngineDeps) => {
     // first, so a queued streamed reconcile never lands AFTER (and clobbers)
     // the note.
     let writes: Promise<unknown> = Promise.resolve()
-    // Last cumulative text streamed into the reply — kept so a FAILED run
-    // that had already streamed most of its (billed) answer keeps that
-    // partial (collapsed to a single note block) instead of discarding it.
+    // A failed run includes the latest text received from the runner, even
+    // if that text was still buffered when the run ended.
     let lastStreamedText = ''
     // Set once a TERMINAL reply (the ok answer, or the failure/partial note)
     // has been written. The infra-catch checks it so a transient blip on the
