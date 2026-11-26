@@ -59,7 +59,7 @@ import {
   type AppMountContribution,
   type HeaderItemContribution,
 } from '@/extensions/core.js'
-import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { blockContentDecoratorsFacet, blockReadContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
@@ -69,7 +69,7 @@ import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
-import { DayPropertyEditor } from './DayPropertyEditor'
+import { DayPropertyControl } from './DayPropertyControl'
 import { dayValuePresetCore, isDayReferenceSchema } from './schema'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
 import { dateNavDecoratorContribution } from './DateNavDecorator.tsx'
@@ -78,6 +78,8 @@ import { todayDailyNoteLanding } from './landing.ts'
 import { dailyNotesDeletionGuard } from './deletionGuard.ts'
 import { blockDateAdapterFacet } from './blockDateAdapter.ts'
 import { referenceDateAdapter } from './referenceDateAdapter.ts'
+import { dayValueReferenceAdapter } from './dayValueReferenceAdapter'
+import { dayValueReferenceControlContribution } from './DayValueReferenceControl'
 import { wikilinkDisplayDecoratorFacet } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
 import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
@@ -155,8 +157,7 @@ const {presentation: dayPresentation} = defineSplitPreset(dayValuePresetCore, {
   id: dayValuePresetCore.id,
   label: 'Date',
   Glyph: CalendarDays,
-  Editor: DayPropertyEditor,
-  InlineEditor: DayPropertyEditor,
+  Editor: DayPropertyControl,
   matchesSchema: isDayReferenceSchema,
 })
 
@@ -201,7 +202,10 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
       spreadBlockDatesGroupHeaderEntry,
       {source: 'daily-notes'},
     ),
+    // A whole day value takes its date from the note, even if its label looks like a different date.
+    blockDateAdapterFacet.of(dayValueReferenceAdapter, {source: 'daily-notes'}),
     blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
+    blockReadContentDecoratorsFacet.of(dayValueReferenceControlContribution, {source: 'daily-notes'}),
     wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
     // Two-finger date scrub rides the core continuous-gesture loop now
     // (arbitration + the touch-action / pointer-listener seam live there); the

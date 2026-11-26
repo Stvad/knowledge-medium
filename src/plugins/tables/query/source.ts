@@ -12,7 +12,7 @@ import { useTypes } from '@/hooks/typeRegistry'
 import { usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { parseOutermostReferences } from '@/plugins/references/referenceParser'
 import { queryFieldIdOf, queryProp } from '../schema'
-import { parseQuery, type ParsedQuery, type QueryClauses, type QueryProperty, type QueryResolver } from './parse'
+import { parseQuery, type ParseOptions, type ParsedQuery, type QueryClauses, type QueryProperty, type QueryResolver } from './parse'
 import { readTableQueryFacets, refValueTarget, type TableQueryFacets } from './registrations'
 
 const propertyOf = (definitions: PropertyDefinitionRegistrySnapshot | null, fieldId: string | undefined): QueryProperty | undefined => {
@@ -81,22 +81,29 @@ const SELECTS_NOTHING: QueryClauses = {anyOf: []}
 /** The query property's definition id in this workspace (`queryFieldIdOf`). */
 export const useQueryFieldId = (repo: Repo): string | undefined => queryFieldIdOf(usePropertyDefinitions(repo))
 
-/** The host's parsed query; null when the host has none (its rows are its
- *  children), undefined until its names first resolve. */
-export const useTableQuery = (host: Block, workspaceId: string, facets: TableQueryFacets): TableQuery | null | undefined => {
-  const value = useHandle(host, {selector: data => data ? safeDecodeRowProperty(data, queryProp) : ''})
-  const text = value ?? ''
+/** Resolve a block query against the workspace's live definitions and aliases. */
+export const useParsedBlockQuery = (
+  host: Block, workspaceId: string, text: string, facets: TableQueryFacets,
+  boundedCandidates: ParseOptions['boundedCandidates'] = false,
+): ParsedQuery | null | undefined => {
   const aliases = useMemo(() => [...new Set(parseOutermostReferences(text).map(ref => ref.alias))].sort(), [text])
   const aliasIds = useAliasIds(host.repo, workspaceId, aliases)
   const definitions = usePropertyDefinitions(host.repo)
   const types = useTypes()
-  const resolved = useMemo(() => {
+  return useMemo(() => {
     if (!text.trim()) return null
     if (!aliasIds) return undefined
     const resolver = queryResolver(host.repo, workspaceId, definitions, types, aliasIds, facets)
-    const parsed = parseQuery(text, resolver, {selfId: host.id})
-    return {text, parsed, clauses: parsed.terms.length > 0 ? parsed.query : SELECTS_NOTHING}
-  }, [aliasIds, definitions, facets, host.id, host.repo, text, types, workspaceId])
+    return parseQuery(text, resolver, {selfId: host.id, boundedCandidates})
+  }, [aliasIds, boundedCandidates, definitions, facets, host.id, host.repo, text, types, workspaceId])
+}
+
+/** The host's parsed query; null when the host has none (its rows are its
+ *  children), undefined until its names first resolve. */
+export const useTableQuery = (host: Block, workspaceId: string, facets: TableQueryFacets): TableQuery | null | undefined => {
+  const text = useHandle(host, {selector: data => data ? safeDecodeRowProperty(data, queryProp) : ''})
+  const parsed = useParsedBlockQuery(host, workspaceId, text, facets)
+  const resolved = useMemo(() => parsed && {text, parsed, clauses: parsed.terms.length > 0 ? parsed.query : SELECTS_NOTHING}, [parsed, text])
   // While an edited query's new aliases resolve, the last query stands: going
   // back to loading would unmount the grid, and the rows made in it with it.
   const [last, setLast] = useState(resolved)

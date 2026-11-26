@@ -9,6 +9,7 @@
 import { propertyValue, seedType, type TypeSeedDeclaration } from '@/data/api'
 import { typeInitialValuesProcessor } from '@/data/typeInitialValues'
 import {
+  charExcludeProp,
   charLimitProp,
   charProfileProp,
   charScopeProp,
@@ -19,23 +20,25 @@ export const CHAR_COUNTER_TYPE = 'char-counter'
 export const WORD_COUNTER_TYPE = 'word-counter'
 export const COUNTER_TYPES: readonly string[] = [CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE]
 
-const counterProperties = [charLimitProp, charScopeProp, charProfileProp]
+const counterProperties = [charLimitProp, charScopeProp, charProfileProp, charExcludeProp]
+
+const exclusionHelp = ' In subtree scope, `char:exclude` skips branches matching a block query, such as `#Draft` or `status=private`.'
 
 export const CHAR_COUNTER_TYPE_CONTRIBUTIONS: readonly TypeSeedDeclaration[] = [
   seedType({
     seedKey: 'system:character-counter/type/char-counter',
-    revision: 1,
+    revision: 2,
     id: CHAR_COUNTER_TYPE,
     label: 'Character counter',
-    description: 'Shows a live count below the block: characters or words (`char:profile`), for the block, each direct child, or the whole subtree (`char:scope`). Set an optional limit to see `count / limit` and an over-limit warning.',
+    description: 'Shows a live count below the block: characters or words (`char:profile`), for the block, each direct child, or the whole subtree (`char:scope`). Set an optional limit to see `count / limit` and an over-limit warning.' + exclusionHelp,
     properties: counterProperties,
   }),
   seedType({
     seedKey: 'system:character-counter/type/word-counter',
-    revision: 1,
+    revision: 2,
     id: WORD_COUNTER_TYPE,
     label: 'Word counter',
-    description: 'Shows a live word count below the block for the block and everything nested under it. Change `char:scope` or `char:profile` to count something else; set an optional limit to see `count / limit`.',
+    description: 'Shows a live word count below the block for the block and everything nested under it. Change `char:scope` or `char:profile` to count something else; set an optional limit to see `count / limit`.' + exclusionHelp,
     properties: counterProperties,
   }),
 ]

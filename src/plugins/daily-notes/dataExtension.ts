@@ -7,8 +7,11 @@ import {
   valuePresetCoresFacet,
 } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet.js'
-import type { ScalarPresetConversion } from '@/data/api'
-import { getOrCreateDailyNoteInTx, isValidDateAlias, journalPageSpec } from './dailyNotes.ts'
+import { faithfulWikilinkReplacement } from '@/plugins/references/referenceParser'
+import { hasBlockType } from '@/data/properties'
+import { referenceBlockContentForId } from '@/data/referenceBlock'
+import type { ScalarPresetConversion, AnyValuePresetCore } from '@/data/api'
+import { claimDailyNoteAliases, dailyNoteTitle, getOrCreateDailyNoteInTx, isValidDateAlias, journalPageSpec } from './dailyNotes.ts'
 import { dailyNotesLocalSchema } from './localSchema.ts'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType, dayValuePresetCore, isDayReferenceSchema } from './schema.ts'
 
@@ -31,8 +34,27 @@ const convertDateToDay: ScalarPresetConversion = {
   },
 }
 
+// Claiming a free long alias on an ISO-only daily note accepts one whole-column properties write.
+const dayValueReference: NonNullable<AnyValuePresetCore['valueChildReference']> = {
+  matchesSchema: isDayReferenceSchema,
+  async resolve(tx, workspaceId, id) {
+    const target = await tx.get(id)
+    if (!target || target.deleted || target.workspaceId !== workspaceId || !hasBlockType(target, DAILY_NOTE_TYPE)) return
+    const isIsoSeat = isValidDateAlias(target.content)
+    const title = isIsoSeat ? dailyNoteTitle(target.content) : target.content
+    const link = faithfulWikilinkReplacement(title)
+    if (!link) return referenceBlockContentForId(id)
+    let owner = await tx.aliasLookup(link.refAlias, workspaceId)
+    if (!owner && isIsoSeat) {
+      await claimDailyNoteAliases(tx, id, [link.refAlias])
+      owner = await tx.aliasLookup(link.refAlias, workspaceId)
+    }
+    return owner?.id === id ? link.text : referenceBlockContentForId(id)
+  },
+}
+
 export const dailyNotesDataExtension: AppExtension = [
-  valuePresetCoresFacet.of({...dayValuePresetCore, scalarConversion: convertDateToDay}, {source: 'daily-notes'}),
+  valuePresetCoresFacet.of({...dayValuePresetCore, scalarConversion: convertDateToDay, valueChildReference: dayValueReference}, {source: 'daily-notes'}),
   definitionSeedsFacet.of(dailyNoteDateProp, {source: 'daily-notes'}),
   typeSeedsFacet.of(dailyNoteType, {source: 'daily-notes'}),
   localSchemaFacet.of(dailyNotesLocalSchema, {source: 'daily-notes'}),
