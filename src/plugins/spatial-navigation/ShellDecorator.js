@@ -1,1 +1,1 @@
-export{kD as SpatialNavigationShellDecorator}from"../../../chunks/app-CsM0Ag7D.js";
+export{CD as SpatialNavigationShellDecorator}from"../../../chunks/app-D7fSG-C1.js";

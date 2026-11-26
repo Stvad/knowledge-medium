@@ -1,1 +1,1 @@
-export{WC as pickMergeContentStrategy}from"../../../chunks/app-CsM0Ag7D.js";
+export{RC as pickMergeContentStrategy}from"../../../chunks/app-D7fSG-C1.js";

@@ -1,1 +1,1 @@
-export{qP as ShortcutHelpHeaderItem}from"../../../chunks/app-CsM0Ag7D.js";
+export{QP as ShortcutHelpHeaderItem}from"../../../chunks/app-D7fSG-C1.js";

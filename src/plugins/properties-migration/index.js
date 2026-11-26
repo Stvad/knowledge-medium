@@ -1,1 +1,1 @@
-export{Xc as migratePropertiesToBlocksAction,Kc as propertiesMigrationPlugin}from"../../../chunks/app-CsM0Ag7D.js";
+export{Uc as migratePropertiesToBlocksAction,zc as propertiesMigrationPlugin}from"../../../chunks/app-D7fSG-C1.js";
