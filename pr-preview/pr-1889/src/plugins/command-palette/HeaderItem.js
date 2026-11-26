@@ -1,0 +1,1 @@
+export{MF as CommandPaletteHeaderItem}from"../../../chunks/app-D29iEcsW.js";

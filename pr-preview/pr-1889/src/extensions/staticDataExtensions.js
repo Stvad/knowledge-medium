@@ -1,0 +1,1 @@
+export{vZ as staticDataExtensions}from"../../chunks/app-D29iEcsW.js";

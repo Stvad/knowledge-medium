@@ -1,0 +1,1 @@
+export{ipt as deriveWorkspaceIdNamespace}from"../../../chunks/app-D29iEcsW.js";

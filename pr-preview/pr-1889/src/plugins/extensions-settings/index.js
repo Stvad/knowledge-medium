@@ -1,0 +1,1 @@
+export{pv as extensionsOverridesProp,mv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-D29iEcsW.js";

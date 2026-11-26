@@ -1,0 +1,1 @@
+export{$gt as SYSTEM_AUTHOR_PREFIX,e_t as isSystemAuthor,t_t as systemAuthor}from"../../../chunks/app-D29iEcsW.js";

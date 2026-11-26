@@ -1,0 +1,1 @@
+export{KN as BlockLink}from"../../../chunks/app-D29iEcsW.js";
