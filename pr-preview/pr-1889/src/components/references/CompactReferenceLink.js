@@ -1,1 +1,0 @@
-export{WN as CompactReferenceLink}from"../../../chunks/app-D6XGC5cp.js";

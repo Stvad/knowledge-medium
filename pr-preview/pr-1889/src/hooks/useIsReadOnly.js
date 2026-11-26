@@ -1,1 +1,0 @@
-export{xC as useIsReadOnly}from"../../chunks/app-D6XGC5cp.js";
