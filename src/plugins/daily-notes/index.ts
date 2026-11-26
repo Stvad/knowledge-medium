@@ -78,8 +78,8 @@ import { todayDailyNoteLanding } from './landing.ts'
 import { dailyNotesDeletionGuard } from './deletionGuard.ts'
 import { blockDateAdapterFacet } from './blockDateAdapter.ts'
 import { referenceDateAdapter } from './referenceDateAdapter.ts'
-import { dayIdReferenceAdapter } from './dayIdReferenceAdapter'
-import { dayIdReferenceControlContribution } from './DayIdReferenceControl'
+import { dayValueReferenceAdapter } from './dayValueReferenceAdapter'
+import { dayValueReferenceControlContribution } from './DayValueReferenceControl'
 import { wikilinkDisplayDecoratorFacet } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
 import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
@@ -202,9 +202,10 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
       spreadBlockDatesGroupHeaderEntry,
       {source: 'daily-notes'},
     ),
+    // A whole day value takes its date from the note, even if its label looks like a different date.
+    blockDateAdapterFacet.of(dayValueReferenceAdapter, {source: 'daily-notes'}),
     blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
-    blockDateAdapterFacet.of(dayIdReferenceAdapter, {source: 'daily-notes'}),
-    blockReadContentDecoratorsFacet.of(dayIdReferenceControlContribution, {source: 'daily-notes'}),
+    blockReadContentDecoratorsFacet.of(dayValueReferenceControlContribution, {source: 'daily-notes'}),
     wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
     // Two-finger date scrub rides the core continuous-gesture loop now
     // (arbitration + the touch-action / pointer-listener seam live there); the

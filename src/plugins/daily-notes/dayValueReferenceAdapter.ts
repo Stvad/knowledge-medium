@@ -1,8 +1,7 @@
 import { ChangeScope, type AnyPropertySchema, type BlockData } from '@/data/api'
 import { takesTextEdit } from '@/data/blockTypes'
 import { hasBlockType } from '@/data/properties'
-import { isFieldValueChild, isPropertyFieldInstance } from '@/data/propertyChildren'
-import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
+import { isFieldValueChild, isPropertyFieldInstance, readRefValue } from '@/data/propertyChildren'
 import type { Repo } from '@/data/repo'
 import type { BlockDateAdapter } from './blockDateAdapter'
 import { dailyNoteIsoFromRow } from './dailyNotes'
@@ -11,11 +10,11 @@ import { DAILY_NOTE_TYPE, isDayReferenceSchema } from './schema'
 
 type Row = BlockData | null | undefined
 
-export const idDayReferenceCandidate = (row: Row) => {
+export const dayValueReferenceCandidate = (row: Row) => {
   if (!takesTextEdit(row) || row.parentId === null || !isFieldValueChild(row)) return null
-  const parsed = parseExactReferenceBlockContent(row.content)
-  return parsed?.kind === 'blockRef' && !parsed.fieldForm
-    ? {workspaceId: row.workspaceId, parentId: row.parentId, targetId: parsed.id}
+  const reference = readRefValue(row.content, row.referenceTargetId)
+  return reference.kind === 'id'
+    ? {workspaceId: row.workspaceId, parentId: row.parentId, targetId: reference.id}
     : null
 }
 
@@ -30,7 +29,7 @@ export const dayReferenceTargetIso = (row: Row, workspaceId: string) =>
     ? dailyNoteIsoFromRow(row)
     : null
 
-const idDayReferenceIso = (repo: Repo, workspaceId: string, field: Row, target: Row): string | null => {
+const dayValueReferenceIso = (repo: Repo, workspaceId: string, field: Row, target: Row): string | null => {
   const resolved = dayField(field, workspaceId, id => {
     const resolution = repo.propertySchemaResolverFor(workspaceId).resolveField(id)
     return resolution.status === 'resolved' ? resolution.schema : null
@@ -38,29 +37,29 @@ const idDayReferenceIso = (repo: Repo, workspaceId: string, field: Row, target: 
   return resolved ? dayReferenceTargetIso(target, workspaceId) : null
 }
 
-export const dayIdReferenceAdapter: BlockDateAdapter = {
-  id: 'daily-notes.day-id-reference',
+export const dayValueReferenceAdapter: BlockDateAdapter = {
+  id: 'daily-notes.day-value-reference',
   canHandle: block => {
-    const candidate = idDayReferenceCandidate(block.peek())
+    const candidate = dayValueReferenceCandidate(block.peek())
     if (!candidate) return false
     const {workspaceId, parentId, targetId} = candidate
     const {repo} = block
-    return idDayReferenceIso(repo, workspaceId, repo.block(parentId).peek(), repo.block(targetId).peek()) !== null
+    return dayValueReferenceIso(repo, workspaceId, repo.block(parentId).peek(), repo.block(targetId).peek()) !== null
   },
   getCurrentIso: async block => {
-    const candidate = idDayReferenceCandidate(block.peek() ?? await block.load())
+    const candidate = dayValueReferenceCandidate(block.peek() ?? await block.load())
     if (!candidate) return null
     const {repo} = block
     const {workspaceId, parentId, targetId} = candidate
     const field = repo.block(parentId)
     const target = repo.block(targetId)
     const [fieldRow, targetRow] = await Promise.all([field.peek() ?? field.load(), target.peek() ?? target.load()])
-    return idDayReferenceIso(repo, workspaceId, fieldRow, targetRow)
+    return dayValueReferenceIso(repo, workspaceId, fieldRow, targetRow)
   },
   setIso: async (block, iso) => {
     if (block.repo.isReadOnly) return false
     return block.repo.tx(async tx => {
-      const candidate = idDayReferenceCandidate(await tx.get(block.id))
+      const candidate = dayValueReferenceCandidate(await tx.get(block.id))
       if (!candidate) return false
       const {workspaceId, parentId, targetId} = candidate
       const field = dayField(await tx.get(parentId), workspaceId, id => tx.resolvePropertyFieldSchema(workspaceId, id))

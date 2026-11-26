@@ -7,7 +7,7 @@ import * as structuralEdits from '@/data/structuralEditPolicy'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
 import { definitionSeedsFacet, queryableFieldsFacet, refTargetComparablePropertiesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
+import { aliasesProp, editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -215,10 +215,12 @@ const press = (view: EditorView, key: string, options: {shiftKey?: boolean} = {}
 const focused = () => peekFocusedBlockLocation(ui())
 
 it.each([
-  {storage: 'old property bags', childBacked: false, readOnly: false},
-  {storage: 'editable value blocks', childBacked: true, readOnly: false},
-  {storage: 'read-only value blocks', childBacked: true, readOnly: true},
-])('renders note links and exact stale day text in $storage', async ({childBacked, readOnly}) => {
+  {storage: 'old property bags', childBacked: false, readOnly: false, alias: null},
+  {storage: 'editable ID value blocks', childBacked: true, readOnly: false, alias: null},
+  {storage: 'editable named values after a rename', childBacked: true, readOnly: false, alias: 'Trip planning'},
+  {storage: 'editable named values with a date-shaped alias different from the actual day', childBacked: true, readOnly: false, alias: 'January 8th, 2026'},
+  {storage: 'read-only value blocks', childBacked: true, readOnly: true, alias: null},
+])('renders note links and exact stale day text in $storage', async ({childBacked, readOnly, alias}) => {
   const day = seedProperty({
     seedKey: 'test/property/tables-gesture-day', revision: 1, name: 'gesture:day',
     preset: dayValuePresetCore, changeScope: ChangeScope.BlockDefault,
@@ -238,15 +240,17 @@ it.each([
   const [viewId] = await repo.query.typedBlockIds(viewQuery(HOST, WS)).load()
   for (const seed of seeds) await addColumn(repo, viewId!, propertyDefinitionBlockId(WS, seed.seedKey))
   const target = await getOrCreateDailyNote(repo, WS, '2026-01-06')
-  await target.setContent('Trip planning')
+  if (!alias) await target.setContent('Trip planning')
   const oldInstant = '2026-02-03T00:00:00.000Z'
   const row = repo.block('row-0')
   const staleField = propertyDefinitionBlockId(WS, stale.seedKey)
   if (childBacked) {
     await row.set(day, target.id)
+    if (alias) await target.set(aliasesProp, [alias, '2026-01-06'])
     await row.set(legacy, target.id)
     await row.set(stale, 'historical-placeholder')
   }
+  if (alias) await target.setContent('Trip planning')
   await repo.awaitProcessors()
   const values = childBacked
     ? (await repo.query.propertyRows({ownerId: row.id, fieldId: staleField}).load())?.fields[0]?.values
@@ -277,15 +281,18 @@ it.each([
     return within(cells!)
   })
   await waitFor(() => {
-    const links = cells.getAllByRole('link', {name: 'Trip planning'})
-    expect(links.map(link => link.getAttribute('href'))).toEqual([`#${WS}/${target.id}`, `#${WS}/${target.id}`])
+    const links = cells.getAllByRole('link').filter(link => link.getAttribute('href') === `#${WS}/${target.id}`)
+    expect(links).toHaveLength(2)
+    expect(links[0]).toHaveTextContent(alias ?? 'Trip planning')
+    expect(links[1]).toHaveTextContent('Trip planning')
   })
   if (childBacked && !readOnly) {
-    const link = cells.getAllByRole('link', {name: 'Trip planning'})[0]!
+    const link = cells.getAllByRole('link').find(link => link.getAttribute('href') === `#${WS}/${target.id}`)!
     const value = link.closest<HTMLElement>('[data-table-value]')!
     const id = value.dataset.blockId!
     const button = await within(value).findByRole('button', {name: 'Reschedule date'})
-    expect(await repo.load(id)).toMatchObject({content: `((${target.id}))`, referenceTargetId: target.id})
+    expect(within(value).getAllByRole('button', {name: 'Reschedule date'})).toHaveLength(1)
+    expect(await repo.load(id)).toMatchObject({content: alias ? `[[${alias}]]` : `((${target.id}))`, referenceTargetId: target.id})
     fireEvent.click(button)
     const picker = await within(document.body).findByRole('dialog', {name: 'Reschedule block'})
     expect(within(picker).getByRole('button', {name: /Jan(?:uary)? 6, 2026/})).toHaveAttribute('aria-pressed', 'true')

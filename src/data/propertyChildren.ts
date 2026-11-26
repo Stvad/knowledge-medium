@@ -509,7 +509,7 @@ type RefValueReading =
   | {readonly kind: 'awaits-target'}
   | {readonly kind: 'not-a-reference'}
 
-const readRefValue = (content: string, referenceTargetId: string | null | undefined): RefValueReading => {
+export const readRefValue = (content: string, referenceTargetId: string | null | undefined): RefValueReading => {
   const exact = parseExactReferenceBlockContent(content)
   if (!exact || exact.fieldForm) return {kind: 'not-a-reference'}
   // ID forms remain readable before derivation (including sync arrival).
