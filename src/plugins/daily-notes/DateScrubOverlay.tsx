@@ -22,6 +22,7 @@ import { createPortal } from 'react-dom'
 import type { Block } from '@/data/block'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useRepo } from '@/context/repo.js'
+import { parseIsoDay } from '@/utils/dailyPage'
 import { addDaysIso, todayIso } from './dailyNotes.ts'
 import {
   pickBlockDateAdapter,
@@ -34,9 +35,8 @@ import {
 } from './dateScrubGesture.ts'
 
 const formatPretty = (iso: string): string => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!match) return iso
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  const date = parseIsoDay(iso)
+  if (!date) return iso
   return date.toLocaleDateString('en-US', {
     weekday: 'short',
     day: 'numeric',

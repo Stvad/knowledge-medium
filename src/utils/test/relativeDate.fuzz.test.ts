@@ -43,7 +43,7 @@ const roamOf = (y: number, m: number, d: number): string => `${MONTHS[m - 1]} ${
  *  whole accepted range so its edges are explored. */
 const yearArb = fc.oneof(
   {weight: 3, arbitrary: fc.integer({min: 1990, max: 2040})},
-  {weight: 1, arbitrary: fc.integer({min: 1000, max: 9999})},
+  {weight: 1, arbitrary: fc.integer({min: 0, max: 9999})},
 )
 
 const validDayArb = fc.tuple(yearArb, fc.integer({min: 1, max: 12}))
@@ -54,14 +54,12 @@ const overflowDayArb = fc.tuple(yearArb, fc.integer({min: 1, max: 12}))
   .filter(([y, m]) => daysIn(y, m) < 31)
   .chain(([y, m]) => fc.tuple(fc.constant(y), fc.constant(m), fc.integer({min: daysIn(y, m) + 1, max: 31})))
 
-const NOW = new Date(2026, 3, 28, 10, 30)
-
 describe('parseLiteralDailyPageTitle', () => {
   it('accepts both canonical aliases of every real day and names that day', () => {
     fc.assert(
       fc.property(validDayArb, fc.boolean(), ([y, m, d], roam) => {
         const title = roam ? roamOf(y, m, d) : isoOf(y, m, d)
-        const parsed = parseLiteralDailyPageTitle(title, NOW)
+        const parsed = parseLiteralDailyPageTitle(title)
         expect(parsed?.iso).toBe(isoOf(y, m, d))
         expect([parsed!.date.getFullYear(), parsed!.date.getMonth() + 1, parsed!.date.getDate()]).toEqual([y, m, d])
       }),
@@ -72,7 +70,7 @@ describe('parseLiteralDailyPageTitle', () => {
   it('rejects a day past the end of its month in either form', () => {
     fc.assert(
       fc.property(overflowDayArb, fc.boolean(), ([y, m, d], roam) => {
-        expect(parseLiteralDailyPageTitle(roam ? roamOf(y, m, d) : isoOf(y, m, d), NOW)).toBeNull()
+        expect(parseLiteralDailyPageTitle(roam ? roamOf(y, m, d) : isoOf(y, m, d))).toBeNull()
       }),
       fuzzParams(200),
     )
@@ -96,7 +94,7 @@ describe('parseLiteralDailyPageTitle', () => {
     })
     fc.assert(
       fc.property(fc.oneof(nearMissArb, fc.string({maxLength: 24})), title => {
-        const parsed = parseLiteralDailyPageTitle(title, NOW)
+        const parsed = parseLiteralDailyPageTitle(title)
         if (!parsed) return
         const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(parsed.iso)
         expect(match, `iso ${parsed.iso}`).not.toBeNull()

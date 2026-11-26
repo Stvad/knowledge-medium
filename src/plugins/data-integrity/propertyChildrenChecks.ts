@@ -224,8 +224,9 @@ export const runPropertyCellDivergenceCheck = async (
           continue
         }
         fieldsChecked += 1
-        const projected = projectFieldRowValues(schema, rows.map(row => valuesOf.get(row.id) ?? []))
         const stored = Object.hasOwn(cell, schema.name) ? cell[schema.name] : undefined
+        // A permanently unresolved scalar retains its cell, so a disagreement cannot be audited until resolution.
+        const projected = projectFieldRowValues(schema, rows.map(row => valuesOf.get(row.id) ?? []), stored)
         const kind = divergenceOf(stored, projected)
         if (kind === null) continue
         divergentCells += 1

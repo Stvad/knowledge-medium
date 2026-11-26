@@ -83,6 +83,8 @@
 
 import {
   defineSameTxProcessor,
+  memberCodecOf,
+  type ProposedValueChild,
   derivedRefKey,
   reconcileDerived,
   ProcessorRejection,
@@ -121,7 +123,6 @@ import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
-  encodedToValueChildContent,
   valueChildContentToEncoded,
   fieldRowValues,
   propertyCellValueRejection,
@@ -784,6 +785,7 @@ const valuesLostBy = (
   change: DefinitionChange,
   perFieldRow: readonly (readonly BlockData[])[],
   projected: unknown,
+  stored: unknown,
 ): number => {
   // A SHORT-CIRCUIT, not a guard: deleting it changes no outcome, because a
   // rename re-spells nothing and both sides then project identically. It saves
@@ -792,7 +794,7 @@ const valuesLostBy = (
   if (!change.encodingChanged) return 0
   const held = projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
     change.beforeSchema,
-    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow),
+    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow), stored,
   ))
   return Math.max(0, held - projectedValueCount(change.schema, projected))
 }
@@ -811,11 +813,11 @@ const recordRefusal = (refusals: Map<string, ConversionRefusal>, fieldId: string
 const convertedScalar = async (
   change: DefinitionChange, ctx: SameTxCtx, workspaceId: string,
   encoded: unknown, refusals: Map<string, ConversionRefusal>, ownerId: string, sourceText?: string,
-): Promise<unknown> => {
+) => {
   const result = await change.conversion!.convert(encoded, {tx: ctx.tx, types: ctx.types, propertySchemas: ctx.propertySchemas, workspaceId}, sourceText)
   if ('encoded' in result) {
     if (result.encoded === undefined) throw new Error('A scalar conversion must return a stored value')
-    if (!propertyCellValueRejection(change.schema, result.encoded)) return result.encoded
+    if (!propertyCellValueRejection(change.schema, result.encoded)) return result
     recordRefusal(refusals, change.fieldId, ownerId, 'destination type cannot store this value')
   } else {
     recordRefusal(refusals, change.fieldId, ownerId, result.refused)
@@ -869,15 +871,15 @@ const applyToParent = async (
       if (childBacked) {
         const schema = {...change.schema, fieldId: change.fieldId}
         await materializePropertyChildrenForExistingRow(ctx.tx,
-          {...parent, properties: {...parent.properties, [schema.name]: converted}},
+          {...parent, properties: {...parent.properties, [schema.name]: converted.encoded}},
           {resolveNameSchema: () => schema}, [schema.name])
       }
-      assignments.push({name: change.newName, value: converted, unset: false})
+      assignments.push({name: change.newName, value: converted.encoded, unset: false})
       continue
     }
     if (change.conversion && !childBacked) {
       const projected = childContentsToEncodedPropertyValue(change.beforeSchema,
-        unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow))
+        unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow), undefined)
       if (!jsonValuesEqual(storedPropertyValue(parent.properties, change.oldName), projected)) {
         recordRefusal(refusals, change.fieldId, parentId, 'stored cell and field rows disagree')
         continue
@@ -907,7 +909,7 @@ const applyToParent = async (
         // new one has a spelling for what that read; where it has none the
         // text route re-reads `null` and the ambiguity decides the other way
         // (`list` -> `string`).
-        let canonical: string
+        let proposed: ProposedValueChild
         if (change.conversion) {
           let encoded: unknown
           try {
@@ -918,14 +920,22 @@ const applyToParent = async (
           }
           const converted = await convertedScalar(change, ctx, parent.workspaceId, encoded, refusals, parentId, value.content)
           if (converted === undefined) continue
-          canonical = encodedToValueChildContent(change.schema, converted)
+          const [child] = await ctx.tx.propertyValueChildContents(change.schema, converted.encoded, parent.workspaceId)
+          proposed = child!
         } else {
           const conversion = convertValueChildContent(change.beforeSchema, change.schema, value)
           if (conversion.outcome === 'unreadable') continue
-          canonical = conversion.content
+          proposed = 'encoded' in conversion && !memberCodecOf(change.schema.codec)
+            ? (await ctx.tx.propertyValueChildContents(change.schema, conversion.encoded, parent.workspaceId))[0]!
+            : {content: conversion.content}
         }
-        group.push({...value, content: canonical})
-        if (value.content === canonical) continue
+        const canonical = proposed.content
+        if (value.content === canonical) {
+          const target = proposed.referenceTargetId ?? value.referenceTargetId
+          if (target !== value.referenceTargetId) await ctx.tx.stampReferenceTarget(value.id, target ?? null, false)
+          group.push({...value, referenceTargetId: target})
+          continue
+        }
         // Re-stamp the reference columns from the REWRITTEN content, the same
         // duty every same-tx processor that rewrites `content` after
         // `core.deriveReferenceTarget` already ran carries (merge retarget,
@@ -936,11 +946,12 @@ const applyToParent = async (
         // `((id))` becomes the bare id. Always an update of an existing row,
         // so an unresolvable alias clears the column rather than preserving a
         // prior id.
-        const derived = await deriveReferenceColumns(
-          canonical, parent.workspaceId, referenceLookups,
-        )
+        const derived = proposed.referenceTargetId
+          ? {targetId: proposed.referenceTargetId, isFieldForm: false}
+          : await deriveReferenceColumns(canonical, parent.workspaceId, referenceLookups)
         const patch: Parameters<typeof ctx.tx.update>[1] = {content: canonical}
         const nextTargetId = derived.targetId ?? null
+        group.push({...value, content: canonical, referenceTargetId: nextTargetId})
         if ((value.referenceTargetId ?? null) !== nextTargetId) {
           patch.referenceTargetId = nextTargetId
         }
@@ -963,8 +974,10 @@ const applyToParent = async (
     // first-parseable-wins read here would publish one member and let
     // MATERIALIZE reap the rest.
     const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
-    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
-    const lost = valuesLostBy(change, perFieldRow, projected)
+    const stored = storedPropertyValue(parent.properties, change.oldName)
+    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents,
+      change.encodingChanged ? undefined : stored)
+    const lost = valuesLostBy(change, perFieldRow, projected, stored)
     if (lost > 0) {
       lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)
       lostParents.add(parentId)
@@ -1141,7 +1154,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       for (const row of rows) parents.add(row.id)
       if (change.retainedDefault !== undefined) {
         const converted = await convertedScalar(change, ctx, event.workspaceId, change.retainedDefault, refusals, change.fieldId)
-        if (converted !== undefined) await ctx.tx.setProperty(change.fieldId, propertyDefaultProp, converted)
+        if (converted !== undefined) await ctx.tx.setProperty(change.fieldId, propertyDefaultProp, converted.encoded)
       }
     }
     // This tx PARSED and BUILT each changing definition's row, so its field

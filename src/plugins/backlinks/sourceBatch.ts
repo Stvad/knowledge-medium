@@ -16,7 +16,9 @@
 
 import type { QueryCtx, QueryReadDb } from '@/data/api'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { propertyNameProp } from '@/data/properties'
+import { optionalRefValuePresetCore, refValuePresetCore } from '@/data/kernelValuePresetCores'
+import { presetConfigProp, presetIdProp, propertyNameProp } from '@/data/properties'
+import { DAILY_NOTE_TYPE, dayValuePresetCore } from '@/plugins/daily-notes/schema'
 import {
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
@@ -46,13 +48,21 @@ type Answer<P extends Projection> = P extends 'ids' ? readonly string[] : number
 // A canonical value reference repeats its owner's same-field edge. Other
 // content and edges keep their own source, including notes below value blocks.
 // An unresolved definition cannot establish that identity, so its values stay visible.
+// Day fields also store whole wikilinks as their canonical reference spelling.
 const backlinkSourcesSql = (
   targetCount: number,
   projection: Projection,
   edges: EdgePredicate,
 ): string => {
+  const preset = `json_extract(definition.properties_json, '$."${presetIdProp.name}"')`
+  const targetTypes = `$."${presetConfigProp.name}".targetTypes`
+  const dayField = `(${preset} = '${dayValuePresetCore.id}' OR (
+    ${preset} IN ('${refValuePresetCore.id}', '${optionalRefValuePresetCore.id}')
+    AND json_array_length(definition.properties_json, '${targetTypes}') = 1
+    AND json_extract(definition.properties_json, '${targetTypes}[0]') = '${DAILY_NOTE_TYPE}'
+  ))`
   const pairs = `eligible_edges AS (
-    SELECT br.target_id, br.source_field, b.id, b.parent_id, b.content, b.workspace_id
+    SELECT br.target_id, br.source_field, br.alias, b.id, b.parent_id, b.content, b.workspace_id, b.reference_target_id
       FROM block_references br
       JOIN blocks b ON b.id = br.source_id
      WHERE br.workspace_id = ?
@@ -71,7 +81,9 @@ const backlinkSourcesSql = (
          AND owner_edge.target_id = e.target_id
          AND owner_edge.source_field = json_extract(definition.properties_json, '$."${propertyNameProp.name}"')
         WHERE e.source_field = ''
-          AND e.content = '((' || e.target_id || '))'
+          AND (e.content = '((' || e.target_id || '))' OR (
+            e.reference_target_id = e.target_id AND e.content = '[[' || e.alias || ']]' AND ${dayField}
+          ))
           AND field.id = e.parent_id AND field.is_field_form = 1 AND field.deleted = 0
           AND field.workspace_id = e.workspace_id
           AND field.workspace_id = definition.workspace_id

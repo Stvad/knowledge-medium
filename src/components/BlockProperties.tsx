@@ -30,7 +30,6 @@ import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
   deleteProperty,
-  resolveAndWriteProperty,
   writeProperty,
 } from './propertyPanel/actions'
 import {
@@ -111,6 +110,12 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const typesRegistry = useTypes()
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly
+  // A field stops being a draft when its value is stored, even if its control
+  // saved it directly. Undo must not bring the draft back.
+  const isStoredDraft = (ref: SyntheticPropertyRef) => ref.blockId === block.id && Object.hasOwn(properties, ref.name)
+  if (syntheticProperties.some(isStoredDraft)) {
+    setSyntheticProperties(syntheticProperties.filter(ref => !isStoredDraft(ref)))
+  }
   const syntheticRows = useMemo(
     () => syntheticProperties
       .filter(ref =>
@@ -234,11 +239,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       row.schemaUnknown
       || block.repo.userSchemas.getSchemaBlockId(row.name) !== undefined
     )
-    const clearSyntheticProperty = () => {
-      setSyntheticProperties(refs =>
-        refs.filter(ref => ref.blockId !== block.id || ref.name !== row.name),
-      )
-    }
     return (
       <PropertyRow
         key={`${sectionId}:${row.name}`}
@@ -249,15 +249,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         recentlyMaterialized={recentlyMaterializedName === row.name}
         onNavigate={handlePropertyRowKeyDown}
         onConfigure={() => void handleConfigure(row)}
-        onChange={(next) => {
-          void writeProperty(block, row.schema, next).then(written => { if (written) clearSyntheticProperty() })
-        }}
-        resolveAndChange={async (resolve, options) => {
-          const written = await resolveAndWriteProperty(block, row.schema, resolve,
-            options?.ifUnchanged ? {expectedEncoded: row.encodedValue} : undefined)
-          if (written) clearSyntheticProperty()
-          return written
-        }}
+        onChange={next => void writeProperty(block, row.schema, next)}
         onDelete={() => void deleteProperty({
           block,
           properties,

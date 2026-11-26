@@ -425,7 +425,7 @@ describe('multi-value: N contents round-trip to the list, duplicates and empties
   const roundTrips = (schema: typeof stringListSchema, members: readonly string[]): void => {
     const contents = encodedPropertyValueToChildContents(
       schema, schema.codec.encode(members))
-    expect(childContentsToEncodedPropertyValue(schema, contents)).toEqual(members)
+    expect(childContentsToEncodedPropertyValue(schema, contents, undefined)).toEqual(members)
   }
 
   it('string-list: arbitrary members, including ones shaped like the grammar', () => {

@@ -130,6 +130,18 @@ describe('blockDateAdapter dispatch', () => {
 })
 
 describe('referenceDateAdapter', () => {
+  it('scrubs historical long-form date links across years below 0100', async () => {
+    const repo = makeRepo()
+    await repo.tx(tx => tx.create({id: 'historical', workspaceId: 'ws', parentId: null, orderKey: 'a',
+      content: '[[March 1st, 900]]'}), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('historical')
+    await block.load()
+    expect(referenceDateAdapter.canHandle(block)).toBe(true)
+    expect(await referenceDateAdapter.setIso(block, '0001-01-02')).toBe(true)
+    expect(block.peek()?.content).toBe('[[January 2nd, 1]]')
+    expect(await referenceDateAdapter.getCurrentIso(block)).toBe('0001-01-02')
+  })
+
   it('canHandle refuses source, with a date reference in it or not', async () => {
     const repo = makeRepo()
     await repo.tx(tx => tx.create({
