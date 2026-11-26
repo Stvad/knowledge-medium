@@ -1,1 +1,0 @@
-export{CX as closePowerSyncDbIfOpen,wX as ensurePowerSyncReady,TX as getActiveSyncResolver,EX as getActiveUserId,DX as getPowerSyncDb,OX as isRemoteSyncActive,kX as syncObserverDepsFor,AX as syncResolverForUser,jX as webDatabaseOptions}from"../../chunks/app-CClm5431.js";

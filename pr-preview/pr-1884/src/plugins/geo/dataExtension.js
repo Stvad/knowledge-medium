@@ -1,1 +1,0 @@
-export{M$ as geoDataExtension}from"../../../chunks/app-CClm5431.js";

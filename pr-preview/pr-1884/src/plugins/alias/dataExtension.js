@@ -1,1 +1,0 @@
-export{D6 as aliasDataExtension}from"../../../chunks/app-CClm5431.js";

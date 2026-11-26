@@ -1,1 +1,0 @@
-export{ipt as deriveWorkspaceIdNamespace}from"../../../chunks/app-CClm5431.js";

@@ -1,1 +1,0 @@
-export{zc as propertiesMigrationPlugin}from"../../../chunks/app-CClm5431.js";

@@ -1,1 +1,0 @@
-export{V4 as characterCounterDataExtension}from"../../../chunks/app-CClm5431.js";

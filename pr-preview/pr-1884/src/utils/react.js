@@ -1,1 +1,0 @@
-export{OV as useIsMobile,kV as usePointerCoarse}from"../../chunks/app-CClm5431.js";

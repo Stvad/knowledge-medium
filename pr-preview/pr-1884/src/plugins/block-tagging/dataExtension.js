@@ -1,1 +1,0 @@
-export{ip as blockTaggingDataExtension}from"../../../chunks/app-CClm5431.js";

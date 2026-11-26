@@ -1,1 +1,0 @@
-export{gJ as isIOS,_J as isMacPlatform}from"../../chunks/app-CClm5431.js";

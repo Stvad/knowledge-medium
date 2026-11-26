@@ -1,1 +1,0 @@
-export{IR as ClientLocalSettings,LR as clientLocalSettings}from"../../chunks/app-CClm5431.js";

@@ -1,1 +1,0 @@
-export{WF as SWIPE_QUICK_ACTIONS_GESTURE_ID,GF as SWIPE_TRIGGER_PX,KF as swipeRecognizer}from"../../../chunks/app-CClm5431.js";

@@ -1,1 +1,0 @@
-export{NY as usePropertySchemas}from"../../chunks/app-CClm5431.js";

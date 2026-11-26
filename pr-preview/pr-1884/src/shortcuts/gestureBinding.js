@@ -1,1 +1,0 @@
-export{CR as gestureBindingDescriptor,wR as matchesGestureEvent}from"../../chunks/app-CClm5431.js";
