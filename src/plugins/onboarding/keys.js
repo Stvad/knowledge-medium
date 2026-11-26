@@ -1,1 +1,1 @@
-export{UP as defaultKeys,WP as sharedKeys,GP as vimKeys}from"../../../chunks/app-D7fSG-C1.js";
+export{UP as defaultKeys,WP as sharedKeys,GP as vimKeys}from"../../../chunks/app-BE60Yu1F.js";

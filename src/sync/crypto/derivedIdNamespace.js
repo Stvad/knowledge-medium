@@ -1,1 +1,1 @@
-export{ipt as deriveWorkspaceIdNamespace}from"../../../chunks/app-D7fSG-C1.js";
+export{ipt as deriveWorkspaceIdNamespace}from"../../../chunks/app-BE60Yu1F.js";
