@@ -1,1 +1,1 @@
-export{Wc as ConfirmMigrationDialog}from"../../../chunks/app-D29iEcsW.js";
+export{Wc as ConfirmMigrationDialog}from"../../../chunks/app-D6XGC5cp.js";
