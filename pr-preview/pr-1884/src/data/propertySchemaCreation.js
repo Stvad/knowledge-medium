@@ -1,1 +1,1 @@
-export{RY as adoptOrCreatePropertySchema}from"../../chunks/app-DXHTLgoZ.js";
+export{RY as adoptOrCreatePropertySchema}from"../../chunks/app-CClm5431.js";

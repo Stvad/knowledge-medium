@@ -1,1 +1,1 @@
-export{u8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-DXHTLgoZ.js";
+export{u8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CClm5431.js";
