@@ -1,1 +1,1 @@
-export{MX as releasePowerSyncConnection}from"../../chunks/app-BXAQw1vl.js";
+export{BX as releasePowerSyncConnection}from"../../chunks/app-DpwOBDSC.js";

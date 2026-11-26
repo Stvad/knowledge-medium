@@ -1,1 +1,1 @@
-export{WP as ShortcutHelpHeaderItem}from"../../../chunks/app-BXAQw1vl.js";
+export{QP as ShortcutHelpHeaderItem}from"../../../chunks/app-DpwOBDSC.js";
