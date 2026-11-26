@@ -1,0 +1,1 @@
+export{pU as BlockReadText}from"../../../chunks/app-Dra5rodG.js";

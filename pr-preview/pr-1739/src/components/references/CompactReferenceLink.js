@@ -1,0 +1,1 @@
+export{WN as CompactReferenceLink}from"../../../chunks/app-Dra5rodG.js";
