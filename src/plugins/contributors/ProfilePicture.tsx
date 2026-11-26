@@ -12,12 +12,11 @@ const ResolvedPicture = ({asset}: {asset: AssetUrlArgs}) => {
   return <img alt="" className="absolute inset-0 size-full bg-inherit object-cover" src={state.url} onError={() => reportDecodeFailure(state.url)} />
 }
 
-export const ProfilePicture = ({block, pictureId, workspaceId}: {
-  block: Block
-  pictureId: string
+export const ProfilePicture = ({picture, workspaceId}: {
+  picture: Block
   workspaceId: string
 }) => {
-  const asset = useHandle(block.repo.block(pictureId), {
+  const asset = useHandle(picture, {
     selector: row => {
       if (!row || row.workspaceId !== workspaceId || !safeDecodeRowProperty(row, typesProp).includes(MEDIA_TYPE)) return null
       const mime = safeDecodeRowProperty(row, mediaMimeProp)

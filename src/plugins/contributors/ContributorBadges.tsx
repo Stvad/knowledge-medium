@@ -188,7 +188,7 @@ const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer
   const stamp = (
     <span data-author-stamp="" aria-hidden="true" className={`relative inline-grid size-5 shrink-0 place-items-center overflow-hidden text-[10px] font-semibold leading-none ${nonHuman ? 'rounded' : 'rounded-full'} ${author.isSelf ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
       {initialsOf(name)}
-      {pictureId && <ProfilePicture block={block} pictureId={pictureId} workspaceId={workspaceId}/>}
+      {pictureId && <ProfilePicture picture={block.repo.block(pictureId)} workspaceId={workspaceId}/>}
     </span>
   )
   const identity = <>{stamp}<span className="truncate">{label}</span></>

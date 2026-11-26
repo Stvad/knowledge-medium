@@ -34,7 +34,7 @@ it('renders a verified decorative image and drops it on decode failure or media 
     properties: {[typesProp.name]: [MEDIA_TYPE], [mediaHashProp.name]: 'sha256:ab', [mediaMimeProp.name]: 'image/png'},
   }), options)
   const {container, unmount} = render(
-    <ProfilePicture block={repo.block('comment')} pictureId="picture" workspaceId={WORKSPACE} />,
+    <ProfilePicture picture={repo.block('picture')} workspaceId={WORKSPACE} />,
   )
   const getImage = () => container.querySelector('img')
   await waitFor(() => expect(getImage()).toHaveAttribute('src', expect.stringMatching(/^blob:/)))
@@ -45,7 +45,7 @@ it('renders a verified decorative image and drops it on decode failure or media 
   unmount()
 
   const secondMount = render(
-    <ProfilePicture block={repo.block('comment')} pictureId="picture" workspaceId={WORKSPACE} />,
+    <ProfilePicture picture={repo.block('picture')} workspaceId={WORKSPACE} />,
   )
   await waitFor(() => expect(secondMount.container.querySelector('img')).toBeInTheDocument())
   await act(async () => { await repo.tx(tx => tx.delete('picture'), options) })
@@ -65,7 +65,7 @@ it.each([
   }), options)
   expect(await repo.block('picture').load()).toMatchObject({workspaceId, deleted: false})
   const {container} = render(
-    <ProfilePicture block={repo.block('comment')} pictureId="picture" workspaceId={WORKSPACE} />,
+    <ProfilePicture picture={repo.block('picture')} workspaceId={WORKSPACE} />,
   )
   expect(resolve).not.toHaveBeenCalled()
   expect(container.querySelector('img')).toBeNull()
