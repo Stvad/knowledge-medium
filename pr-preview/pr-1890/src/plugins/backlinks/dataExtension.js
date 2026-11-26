@@ -1,0 +1,1 @@
+export{i3 as backlinksDataExtension}from"../../../chunks/app-D1FT7WZ_.js";

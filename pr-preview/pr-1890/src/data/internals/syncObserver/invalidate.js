@@ -1,0 +1,1 @@
+export{W7 as applySyncInvalidation}from"../../../../chunks/app-D1FT7WZ_.js";
