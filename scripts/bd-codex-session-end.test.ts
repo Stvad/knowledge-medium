@@ -47,6 +47,10 @@ describe('resolveMainRepoRoot', () => {
   })
 })
 
+// The production probe budget (1s) is tuned for Codex's 3s hook cap; under full-gate load a
+// `git rev-parse` can exceed it, so tests that need a real probe to succeed allow more.
+const LOADED_PROBE_TIMEOUT = 15_000
+
 describe('launchSessionEndSync', () => {
   it('returns before the detached sync finishes and writes its stdout/stderr to the shared log', async () => {
     const { main, cwd } = makeGitRepo({ worktree: true })
@@ -99,9 +103,9 @@ process.stdout.write('fake sync ready\\n')
       'failure',
       `process.stderr.write('fake sync failure\\n'); process.exitCode = 1\n`,
     )
-    const result = launchSessionEndSync({ cwd, syncScript: fixture })
+    const result = launchSessionEndSync({ cwd, syncScript: fixture, probeTimeout: LOADED_PROBE_TIMEOUT })
 
-    expect(result.started).toBe(true)
+    expect(result.started, result.error).toBe(true)
     await waitForLog(syncLogPath(realpathSync(main)), 'fake sync failure')
   }, 20_000)
 
@@ -109,9 +113,9 @@ process.stdout.write('fake sync ready\\n')
     const { main, cwd } = makeGitRepo()
     const child = { once: vi.fn(), unref: vi.fn() }
     const spawnImpl = vi.fn(() => child)
-    const result = launchSessionEndSync({ cwd, syncScript: '/tmp/fake-sync.mjs', spawnImpl })
+    const result = launchSessionEndSync({ cwd, syncScript: '/tmp/fake-sync.mjs', spawnImpl, probeTimeout: LOADED_PROBE_TIMEOUT })
 
-    expect(result.started).toBe(true)
+    expect(result.started, result.error).toBe(true)
     expect(spawnImpl).toHaveBeenCalledWith(
       process.execPath,
       ['/tmp/fake-sync.mjs', '--quiet'],
@@ -119,7 +123,7 @@ process.stdout.write('fake sync ready\\n')
     )
     expect(child.unref).toHaveBeenCalledOnce()
     expect(existsSync(join(main, '.beads', 'embeddeddolt'))).toBe(false)
-  })
+  }, 20_000)
 
   it('reports launch failures on stderr and preserves the failure in the log', () => {
     const { main, cwd } = makeGitRepo()
