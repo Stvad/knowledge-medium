@@ -1,1 +1,1 @@
-export{YO as BreadcrumbRenderer}from"../../../chunks/app-BH1XdjKv.js";
+export{YO as BreadcrumbRenderer}from"../../../chunks/app-DXy2t6tH.js";
