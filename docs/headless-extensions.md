@@ -190,7 +190,7 @@ The host never resurrects a message the owner deleted: the ingest checks the der
 
 ## 8. Slices
 
-0. **Pinned URL imports in tabs.** This slice is core, changes tabs, and stands on its own: it closes the gap that an approval does not cover a URL import's bytes.
+0. **Pinned URL imports in tabs.** This slice is core, changes tabs, and stands on its own. It closes the gap that an approval does not cover a URL import's bytes for every pinned import; slice 0b closes it for the rest.
    - The pinned-import reader and the freezer.
    - The placeholder plugin, with the `COMPILER_VERSION` bump.
    - `vendored` on the approval record, and blob substitution at load.
