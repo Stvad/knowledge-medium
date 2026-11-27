@@ -1,1 +1,0 @@
-export{Ppt as isChildBackedPropertiesWorkspace}from"../chunks/app-BhMwcM1h.js";
