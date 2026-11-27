@@ -656,6 +656,44 @@ describe('mention lifecycle', () => {
     expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('done')
   })
 
+  it.each([
+    {delivery: 'channel', retryStatus: 'running'},
+    {delivery: 'spawn', retryStatus: 'queued'},
+  ])('keeps a stale $delivery retry $retryStatus while its thread is busy', async ({delivery, retryStatus}) => {
+    const backlinks = [{id: 'active'}]
+    const {graph, blocks} = fakeGraph({backlinks, blocks: {
+      parent: {properties: {[PROPS.session]: 'sess-thread'}},
+      active: {parentId: 'parent', content: '[[claude]] active follow-up'},
+      retry: {parentId: 'parent', content: '[[claude]] earlier follow-up', properties: {
+        [PROPS.status]: 'running', [PROPS.watcher]: 'mentions', [PROPS.attempts]: 1,
+        [PROPS.updatedAt]: NOW - STALE_RUNNING_MS - 1,
+      }},
+      fresh: {parentId: 'parent', content: '[[claude]] new follow-up'},
+    }})
+    let release = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    const runTask = vi.fn(async () => { await held; return okRun() })
+    const deliverToChannel = vi.fn(async () => { await held })
+    const dispatch = delivery === 'channel' ? deliverToChannel : runTask
+    const engine = engineWith({graph, runTask, deliverToChannel, config: mentionConfig({
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery}],
+    })})
+
+    try {
+      await engine.tick()
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+      backlinks.push({id: 'retry'}, {id: 'fresh'})
+      await engine.tick()
+      await vi.waitFor(() => expect(blocks.get('fresh')?.properties?.[PROPS.status]).toBe('queued'))
+    } finally {
+      release()
+      await engine.drain()
+    }
+
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(blocks.get('retry')?.properties).toMatchObject({[PROPS.status]: retryStatus, [PROPS.attempts]: 1})
+  })
+
   it('cancels a running task: aborts the run, parks it error:cancelled, and clears the flag', async () => {
     const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
@@ -2206,17 +2244,24 @@ describe('channel delivery (experimental)', () => {
     expect(deliverToChannel).not.toHaveBeenCalled()
   })
 
-  it('delivers a queued channel mention with a Stop before there is a running session to clear it for', async () => {
-    const {graph, cancelClears} = fakeGraph({
+  it('parks a stopped queued channel mention without delivering it', async () => {
+    const {graph, blocks, reconciles, cancelClears} = fakeGraph({
       backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {properties: {[PROPS.status]: 'queued', [PROPS.cancel]: NOW}}},
+      blocks: {'b-1': {content: '[[claude]] follow up', properties: {
+        [PROPS.status]: 'queued', [PROPS.watcher]: 'mentions', [PROPS.executor]: 'claude',
+        [PROPS.activity]: THREAD_BUSY_ACTIVITY, [PROPS.cancel]: NOW,
+      }}},
     })
     const deliverToChannel = vi.fn(async () => {})
     const engine = engineWith({graph, deliverToChannel, config: channelConfig()})
     await engine.tick()
     await engine.drain()
-    expect(deliverToChannel).toHaveBeenCalledOnce()
+    expect(deliverToChannel).not.toHaveBeenCalled()
     expect(cancelClears).toEqual([])
+    expect(blocks.get('b-1')?.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.activity]: '', [PROPS.cancel]: '',
+    })
+    expect(reconciles.at(-1)?.markdown).toContain('cancelled')
   })
 
   it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {

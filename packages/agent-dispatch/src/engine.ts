@@ -286,8 +286,8 @@ export const createEngine = (deps: EngineDeps) => {
       return {pending: false, reason: 'ineligible-row'} as const
     }
     if (source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
-      if (task.watcher.delivery === 'spawn') return {pending: false, reason: 'cancelled'} as const
-      if (status === 'running') return {pending: false, reason: 'clear-cancel'} as const
+      if (status === 'queued' || task.watcher.delivery === 'spawn') return {pending: false, reason: 'cancelled'} as const
+      return {pending: false, reason: 'clear-cancel'} as const
     }
     return decidePending({
       source, nowMs: now(), editingActiveAtMs,
@@ -416,7 +416,9 @@ export const createEngine = (deps: EngineDeps) => {
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) {
       refundLaunch(launchStamp)
-      if (block.properties?.[PROPS.status] === 'queued') return
+      // A stale channel claim may still be active in the ambient session.
+      if (block.properties?.[PROPS.status] === 'queued'
+        || (decision.reason === 'stale-running' && watcher.delivery === 'channel')) return
       log(`[${watcher.name}] ${sourceId} waiting: its thread's session ${session} is still running`)
       await graph.setTaskProps(sourceId, {
         status: 'queued', watcher: watcher.name, executor: runner.executor, activity: THREAD_BUSY_ACTIVITY, nowMs: now(),
