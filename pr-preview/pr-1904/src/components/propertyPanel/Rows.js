@@ -1,1 +1,1 @@
-export{GW as MetadataRow,KW as PropertySectionLabel}from"../../../chunks/app-BR_olI5D.js";
+export{GW as MetadataRow,KW as PropertySectionLabel}from"../../../chunks/app-CuVlsfu7.js";

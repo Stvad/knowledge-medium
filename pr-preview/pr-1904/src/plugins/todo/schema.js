@@ -1,1 +1,1 @@
-export{SZ as TODO_TYPE,CZ as statusProp,wZ as todoType}from"../../../chunks/app-BR_olI5D.js";
+export{SZ as TODO_TYPE,CZ as statusProp,wZ as todoType}from"../../../chunks/app-CuVlsfu7.js";

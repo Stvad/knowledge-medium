@@ -1,1 +1,1 @@
-export{CA as mintCanary,wA as validateCanary}from"../../../chunks/app-BR_olI5D.js";
+export{CA as mintCanary,wA as validateCanary}from"../../../chunks/app-CuVlsfu7.js";
