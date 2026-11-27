@@ -1,1 +1,1 @@
-export{CC as useIsReadOnly}from"../../chunks/app-CuVlsfu7.js";
+export{CC as useIsReadOnly}from"../../chunks/app-B1wrkHjd.js";
