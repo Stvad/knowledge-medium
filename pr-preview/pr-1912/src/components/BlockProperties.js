@@ -1,1 +1,1 @@
-export{sG as BlockProperties}from"../../chunks/app-BD3cYXSo.js";
+export{lG as BlockProperties}from"../../chunks/app-De-lIFbD.js";

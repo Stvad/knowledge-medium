@@ -1,1 +1,1 @@
-export{Bz as LazyBlockComponent}from"../../chunks/app-BD3cYXSo.js";
+export{Hz as LazyBlockComponent}from"../../chunks/app-De-lIFbD.js";
