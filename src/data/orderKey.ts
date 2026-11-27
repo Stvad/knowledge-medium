@@ -20,6 +20,7 @@
  */
 
 import {
+  generateNKeysBetween,
   generateJitteredKeyBetween,
   generateNJitteredKeysBetween,
 } from 'fractional-indexing-jittered'
@@ -43,6 +44,10 @@ export const keysBetween = (
   upper: string | null,
   n: number,
 ): string[] => generateNJitteredKeysBetween(lower, upper, n)
+
+/** Stable initial keys for a batch of siblings, independent of per-insert jitter. */
+export const originalSiblingKeys = (count: number): string[] =>
+  generateNKeysBetween(null, null, count)
 
 /** First key — for an empty sibling list, or to put a new row at the
  *  very start. */

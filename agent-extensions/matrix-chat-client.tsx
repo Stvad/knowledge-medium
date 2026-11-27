@@ -22,7 +22,7 @@ import { showError, showInfo, showSuccess } from '@/utils/toast.js'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import type { BlockRenderer } from '@/types.js'
-import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
+import { keyAtEnd, keysBetween, originalSiblingKeys } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
@@ -454,6 +454,14 @@ interface BlockDef {
   properties?: Record<string, unknown>
 }
 
+interface MessageNode extends BlockDef {
+  /** Local schemas can drop different bullets during promotion. IDs and sibling
+   *  order use the pre-promotion path so every writer agrees on surviving nodes. */
+  parsedPath: number[]
+  originalSiblingCount: number
+  children?: MessageNode[]
+}
+
 const isListItem = (line: string) => /^(\s*)-\s+/.test(line)
 
 const parseListItem = (line: string) => {
@@ -577,7 +585,7 @@ interface PromotionWalk {
   diagnostics: string[]
 }
 
-const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, path: number[] = []): BlockDef[] =>
+const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, path: number[] = []): MessageNode[] =>
   blocks.flatMap((block, index) => {
     const blockPath = [...path, index]
     const children = Array.isArray(block.children) ? block.children : []
@@ -595,8 +603,10 @@ const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, p
     walk.diagnostics.push(...promotion.diagnostics)
 
     const promotedChildren = withPromotedMatrixProperties(children, walk, blockPath)
-    const next: BlockDef = {
+    const next: MessageNode = {
       ...block,
+      parsedPath: blockPath,
+      originalSiblingCount: blocks.length,
       properties: mergeProperties(block.properties, promotion.promoted),
       children: promotedChildren.length ? promotedChildren : undefined,
     }
@@ -636,7 +646,7 @@ const createBlocksFromEvent = (
   event: any,
   matrixClient: any,
   repo: any,
-): {tree: BlockDef[]; diagnostics: string[]} => {
+): {tree: MessageNode[]; diagnostics: string[]} => {
   const text = getMessageText(event, matrixClient)
   const walk: PromotionWalk = {
     options: matrixPromotionOptions(repo),
@@ -654,34 +664,21 @@ const createBlocksFromEvent = (
 // ---------------------------------------------------------------------------
 // write the message into today's daily note
 
-// Deterministic id for a node of a message tree, keyed by the matrix event id
-// and the node's index path within that message. `[0]` is the message root
-// (the single elected-first block under the day's tag block); `[0, 1]` is its
-// second child, and so on. Same event + same path → same id on every device.
-const messageNodeId = (workspaceId: string, eventId: string, path: number[]): string =>
+/** Uses MessageNode.parsedPath: `[0]` is the message root, `[0, 1]` its second child as written. */
+export const messageNodeId = (workspaceId: string, eventId: string, path: number[]): string =>
   pluginBlockId(workspaceId, MATRIX_NS, `event:${eventId}:${path.join('.')}`)
 
 const createBlockTree = async (
   tx: any,
   workspaceId: string,
   parentId: string,
-  blockDefinitions: BlockDef[],
+  blockDefinitions: MessageNode[],
+  orderKeys: string[],
   eventId: string,
   rootProperties?: Record<string, unknown>,
-  path: number[] = [],
 ): Promise<void> => {
-  if (!blockDefinitions.length) return
-
-  const existingChildren = await tx.childrenOf(parentId, workspaceId)
-  const orderKeys = keysBetween(
-    existingChildren.at(-1)?.orderKey ?? null,
-    null,
-    blockDefinitions.length,
-  )
-
-  for (const [index, block] of blockDefinitions.entries()) {
-    const nodePath = [...path, index]
-    const isMessageRoot = path.length === 0 && index === 0
+  for (const block of blockDefinitions) {
+    const isMessageRoot = block.parsedPath.length === 1
     const merged = mergeProperties(isMessageRoot ? rootProperties : undefined, block.properties)
     // The message root is marked as a `matrix-message` block so its event
     // metadata renders under that type in the property panel. addBlockType…
@@ -692,16 +689,17 @@ const createBlockTree = async (
       : merged
 
     const id = await tx.create({
-      id: messageNodeId(workspaceId, eventId, nodePath),
+      id: messageNodeId(workspaceId, eventId, block.parsedPath),
       workspaceId,
       parentId,
-      orderKey: orderKeys[index],
+      orderKey: orderKeys[block.parsedPath.at(-1)!],
       content: block.content,
       properties,
     })
 
-    if (Array.isArray(block.children) && block.children.length) {
-      await createBlockTree(tx, workspaceId, id, block.children, eventId, undefined, nodePath)
+    if (block.children?.length) {
+      const childKeys = originalSiblingKeys(block.children[0].originalSiblingCount)
+      await createBlockTree(tx, workspaceId, id, block.children, childKeys, eventId)
     }
   }
 }
@@ -792,6 +790,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       workspaceId,
       tagBlockId,
       messageTree,
+      keysBetween(messageChildren.at(-1)?.orderKey ?? null, null, messageTree.length),
       eventId,
       {
         [eventIdProp.name]: eventId,

@@ -357,7 +357,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     category: 'data',
     importPath: '@/data/orderKey.js',
     description: 'Fractional-index order keys for inserting blocks at deterministic positions among siblings.',
-    exports: ['keyAtEnd', 'keyAtStart', 'keyBetween', 'keysBetween'],
+    exports: ['keyAtEnd', 'keyAtStart', 'keyBetween', 'keysBetween', 'originalSiblingKeys'],
     types: [],
   },
 
