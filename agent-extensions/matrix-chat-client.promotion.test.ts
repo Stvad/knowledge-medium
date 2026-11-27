@@ -58,6 +58,8 @@ import { createTestRepo } from '@/data/test/createTestRepo.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.js'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { siblingPrecedes } from '@/data/orderKey.js'
+import { propertyFieldContent } from '@/data/propertyChildren.js'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.js'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
@@ -67,6 +69,7 @@ import matrixContributions, {
   homeserverProp,
   matrixChatPrefsType,
   matrixIngestEffect,
+  messageNodeId,
   nextBatchKey,
   tokenKey,
   roomIdProp,
@@ -76,6 +79,7 @@ const WS = 'ws-matrix'
 const HOMESERVER = 'https://matrix.test'
 const ROOM = '!room:matrix.test'
 const destination = {workspaceId: WS, baseUrl: HOMESERVER, roomId: ROOM}
+const SHARED_EVENT_ID = '$evt-shared'
 
 /** The app shell owns mounts and effects; a repo-level runtime takes neither.
  *  `matrixIngestEffect.start({repo})` is then called by hand — exactly what
@@ -161,6 +165,27 @@ const cellBag = async (id: string): Promise<Record<string, unknown>> => {
   return JSON.parse(row.properties_json) as Record<string, unknown>
 }
 
+type MessageRow = {
+  id: string
+  parent_id: string | null
+  content: string
+  orderKey: string
+  properties_json: string
+  is_field_form: number | null
+}
+
+const messageRows = (rootId: string): Promise<MessageRow[]> => sharedDb.db.getAll<MessageRow>(
+  `WITH RECURSIVE message(id) AS (
+     SELECT id FROM blocks WHERE id = ? AND deleted = 0
+     UNION ALL
+     SELECT b.id FROM blocks b JOIN message ON b.parent_id = message.id
+      WHERE b.deleted = 0
+   )
+   SELECT id, parent_id, content, order_key AS orderKey, properties_json, is_field_form
+     FROM blocks JOIN message USING (id)`,
+  [rootId],
+)
+
 const savedCursor = (): string | null => {
   const raw = window.localStorage.getItem(nextBatchKey(destination))
   return raw ? (JSON.parse(raw) as {nextBatch: string}).nextBatch : null
@@ -168,12 +193,13 @@ const savedCursor = (): string | null => {
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-beforeEach(async () => {
+const resetReplica = async (): Promise<void> => {
   timeline.clear()
   window.localStorage.clear()
   await resetTestDb(sharedDb.db)
   await seedFlippedWorkspace()
-})
+}
+beforeEach(resetReplica)
 afterEach(() => {
   stopIngest?.()
   stopIngest = undefined
@@ -336,5 +362,136 @@ describe('matrix ingest into a child-backed workspace', () => {
       // still read the previous cursor.
       expect(savedCursor()).toBe('cursor-2')
     }, {timeout: 10_000, interval: 50})
+  }, 30_000)
+
+  it('merges conflicting-schema replicas without shifting attribute or nested message rows', async () => {
+    const rootId = messageNodeId(WS, SHARED_EVENT_ID, [0])
+    const makeReplica = async (presetId: 'number' | 'string') => {
+      const repo = await setup()
+      const schema = await repo.userSchemas.addSchema({name: 'matrix:count', presetId})
+      await configureIngest(repo)
+      timeline.set('cursor-0', syncBody('cursor-1', [messageEvent(
+        SHARED_EVENT_ID,
+        [
+          '- hello',
+          '  - count:: many',
+          '  - ordinary',
+          '    - count:: nested many',
+          '    - nested ordinary',
+        ].join('\n'),
+      )]))
+
+      // Give the writers different jitter so preserving order cannot depend
+      // on a favorable draw from either one.
+      const random = vi.spyOn(Math, 'random').mockReturnValue(presetId === 'string' ? 0.1 : 0.9)
+      try {
+        stopIngest = matrixIngestEffect.start({repo})
+        await vi.waitFor(() => expect(savedCursor()).toBe('cursor-1'), {timeout: 10_000, interval: 50})
+        const rows = await messageRows(rootId)
+        return {
+          rows: new Map(rows.map(row => [row.id, row])),
+          countFieldContent: propertyFieldContent(schema.fieldId),
+        }
+      } finally {
+        stopIngest?.()
+        stopIngest = undefined
+        random.mockRestore()
+      }
+    }
+
+    // Each reset/reseed is an independent replica with the same event root.
+    const {rows: promotingRows, countFieldContent} = await makeReplica('string')
+    await resetReplica()
+    const {rows: decliningRows} = await makeReplica('number')
+    const countId = messageNodeId(WS, SHARED_EVENT_ID, [0, 0])
+    const ordinaryId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1])
+    const nestedCountId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1, 0])
+    const nestedOrdinaryId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1, 1])
+    const promotedCounts = [[rootId, 'many', countId], [ordinaryId, 'nested many', nestedCountId]] as const
+    for (const [parentId, value, bulletId] of promotedCounts) {
+      const promoting = promotingRows.get(parentId)
+      const declining = decliningRows.get(parentId)
+      expect.soft(promoting && JSON.parse(promoting.properties_json)['matrix:count']).toBe(value)
+      expect.soft(declining && Object.hasOwn(JSON.parse(declining.properties_json), 'matrix:count'),
+        `declining parent omits property: ${value}`).toBe(false)
+      expect.soft(promoting && promotingRows.has(bulletId), `promoting parent omits bullet: ${value}`).toBe(false)
+    }
+
+    for (const [id, label] of [[ordinaryId, 'ordinary'], [nestedOrdinaryId, 'nested ordinary']]) {
+      const promoting = promotingRows.get(id)
+      const declining = decliningRows.get(id)
+      expect.soft(promoting && declining && promoting.orderKey === declining.orderKey,
+        `both replicas keep sibling order: ${label}`).toBe(true)
+    }
+
+    const eventMetadata = (row: MessageRow) =>
+      Object.fromEntries(Object.entries(JSON.parse(row.properties_json) as Record<string, unknown>)
+        .filter(([key]) => key.startsWith('matrix-event:')))
+    const rootMetadata = {
+      'matrix-event:id': SHARED_EVENT_ID,
+      'matrix-event:room': ROOM,
+      'matrix-event:url': `https://matrix.to/#/${ROOM}/${SHARED_EVENT_ID}`,
+      'matrix-event:author': '@someone:matrix.test',
+      'matrix-event:timestamp': 1_700_000_000_000,
+    }
+
+    for (const [firstRows, secondRows, uploadOrder] of [
+      [promotingRows, decliningRows, 'promoter first'],
+      [decliningRows, promotingRows, 'decliner first'],
+    ] as const) {
+      // The sync conflict policy is first-create-wins for rows sharing an id.
+      // This stand-in covers creates; later PATCH uploads are outside it.
+      const merged = new Map<string, MessageRow>()
+      for (const row of [...firstRows.values(), ...secondRows.values()]) {
+        if (!merged.has(row.id)) merged.set(row.id, row)
+      }
+      const root = merged.get(rootId)
+      const countBullet = merged.get(countId)
+      const ordinary = merged.get(ordinaryId)
+      const nestedCount = merged.get(nestedCountId)
+      const nestedOrdinary = merged.get(nestedOrdinaryId)
+
+      const children = (parentId: string): MessageRow[] =>
+        [...merged.values()].filter(row => row.parent_id === parentId).sort((a, b) =>
+          a.id === b.id ? 0 : siblingPrecedes(a, b) ? -1 : 1)
+
+      const contents = (parentId: string): string[] => children(parentId)
+        .map(row => row.is_field_form === 1 ? 'property field' : row.content)
+
+      for (const [id, label] of [
+        [countId, 'count'], [ordinaryId, 'ordinary'], [nestedCountId, 'nested count'], [nestedOrdinaryId, 'nested ordinary'],
+      ]) {
+        const row = merged.get(id)
+        expect.soft(row && (JSON.parse(row.properties_json).types ?? []).includes('matrix-message'),
+          `${uploadOrder}: ${label} omits message type`).toBe(false)
+        expect.soft(row && eventMetadata(row), `${uploadOrder}: ${label} omits event metadata`).toEqual({})
+      }
+      for (const [id, label] of [[countId, 'count'], [nestedCountId, 'nested count'], [nestedOrdinaryId, 'nested ordinary']]) {
+        expect.soft(merged.get(id) && children(id), `${uploadOrder}: ${label} is a leaf`).toEqual([])
+      }
+
+      expect.soft(root?.content).toBe('hello')
+      expect.soft(root && root.parent_id === promotingRows.get(rootId)?.parent_id).toBe(true)
+      expect.soft(countBullet).toMatchObject({content: 'count:: many', parent_id: rootId})
+      expect.soft(ordinary).toMatchObject({content: 'ordinary', parent_id: rootId})
+      expect.soft(nestedCount).toMatchObject({content: 'count:: nested many', parent_id: ordinaryId})
+      expect.soft(nestedOrdinary).toMatchObject({content: 'nested ordinary', parent_id: ordinaryId})
+      expect.soft(root && JSON.parse(root.properties_json).types).toEqual(['matrix-message'])
+      expect.soft(root && eventMetadata(root)).toEqual(rootMetadata)
+
+      // In this fixture the count field and the root's type and metadata
+      // fields sort between the two authored siblings.
+      const rootFields = Array<string>(Object.keys(rootMetadata).length + 2).fill('property field')
+      expect.soft(contents(rootId), uploadOrder).toEqual(['count:: many', ...rootFields, 'ordinary'])
+      expect.soft(contents(ordinaryId), uploadOrder)
+        .toEqual(['count:: nested many', 'property field', 'nested ordinary'])
+
+      for (const [parentId, value] of promotedCounts) {
+        const fields = children(parentId).filter(row =>
+          row.is_field_form === 1 && row.content === countFieldContent)
+        expect.soft(fields, uploadOrder).toHaveLength(1)
+        expect.soft(fields.flatMap(field => children(field.id)).map(row => row.content)).toEqual([value])
+      }
+    }
   }, 30_000)
 })

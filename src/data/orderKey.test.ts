@@ -5,6 +5,7 @@ import {
   keyAtStart,
   keyBetween,
   keysBetween,
+  originalSiblingKeys,
 } from './orderKey'
 
 describe('orderKey helpers', () => {
@@ -43,6 +44,24 @@ describe('orderKey helpers', () => {
     for (let i = 1; i < full.length; i++) {
       expect(full[i - 1] < full[i]).toBe(true)
     }
+  })
+
+  it('originalSiblingKeys is repeatable and returns strictly ordered keys', () => {
+    const first = originalSiblingKeys(8)
+    const second = originalSiblingKeys(8)
+
+    expect(second).toEqual(first)
+    expect(first).toHaveLength(8)
+    for (let i = 1; i < first.length; i++) {
+      expect(first[i - 1] < first[i]).toBe(true)
+    }
+  })
+
+  it('original sibling keys remain valid bounds for inserting between siblings', () => {
+    const [lower, upper] = originalSiblingKeys(2)
+    const inserted = keyBetween(lower, upper)
+
+    expect(lower < inserted && inserted < upper).toBe(true)
   })
 
   it('keyAtStart / keyAtEnd surround a singleton sibling', () => {

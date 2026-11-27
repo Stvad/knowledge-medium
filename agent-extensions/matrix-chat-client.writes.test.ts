@@ -27,7 +27,7 @@ const config = {
   accessToken: 'fixture', autoStart: true,
 }
 
-function fixture() {
+function fixture(body = 'example') {
   const tx = {
     childrenOf: vi.fn<() => Promise<Array<{id: string, content: string}>>>().mockResolvedValue([]),
     get: vi.fn(async () => null),
@@ -38,7 +38,7 @@ function fixture() {
     tx: (run: (writer: typeof tx) => Promise<void>) => run(tx),
     propertySchemas: new Map(),
   }
-  const event = {type: 'm.room.message', event_id: '$example', content: {msgtype: 'm.text', body: 'example'}}
+  const event = {type: 'm.room.message', event_id: '$example', content: {msgtype: 'm.text', body}}
   const batch = {next_batch: 'after', rooms: {join: {[config.roomId]: {timeline: {events: [event]}}}}}
   const client = {http: {authedRequest: vi.fn().mockResolvedValueOnce(batch)}}
   const switchWorkspace = () => { repo.activeWorkspaceId = 'second' }
@@ -70,13 +70,23 @@ it('skips tag creation when the workspace changes during the tag lookup', async 
   expect(writes.tag).not.toHaveBeenCalled()
 })
 
-it('skips message creation when the workspace changes during the child lookup', async () => {
+it('skips message creation when the workspace changes during the tag-children lookup', async () => {
   const {tx, switchWorkspace, run} = fixture()
   tx.childrenOf
     .mockResolvedValueOnce([{id: 'tag', content: '[[matrix-messages]]'}])
-    .mockResolvedValueOnce([])
     .mockImplementationOnce(async () => { switchWorkspace(); return [] })
   await run()
-  expect(tx.childrenOf).toHaveBeenCalledTimes(3)
+  expect(tx.childrenOf).toHaveBeenNthCalledWith(2, 'tag', config.workspaceId)
   expect(tx.create).not.toHaveBeenCalled()
+})
+
+it('checks the workspace again before creating a nested message row', async () => {
+  const {tx, switchWorkspace, run} = fixture('- root\n  - child')
+  tx.childrenOf.mockResolvedValueOnce([{id: 'tag', content: '[[matrix-messages]]'}])
+  tx.create.mockImplementationOnce(async () => {
+    switchWorkspace()
+    return 'message'
+  })
+  await run()
+  expect(tx.create.mock.calls).toEqual([[expect.objectContaining({content: 'root'})]])
 })
