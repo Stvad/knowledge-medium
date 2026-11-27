@@ -169,7 +169,7 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
     state: memoryState(),
     runTask: vi.fn(async () => okRun()),
     deliverToChannel: vi.fn(async () => {}),
-    mcpConfigPath: '/tmp/mcp.json',
+    mcpConfig: {path: 'dispatch.json', serverNames: ['km']},
     log: () => {},
     now: () => NOW,
     delay: async () => {}, // no-op so deliverReply retries don't slow tests
@@ -1425,7 +1425,7 @@ describe('mention lifecycle', () => {
           name: 'mentions',
           target: 'claude',
           settleMs: 0,
-          runner: {executor: 'claude', allowedTools: ['Bash(git:*)']},
+          runner: {executor: 'claude', allowedTools: ['Bash(git:*)'], allowedPlugins: ['guard@local']},
         }],
       }),
     })
@@ -1433,6 +1433,7 @@ describe('mention lifecycle', () => {
     await engine.tick()
     await engine.drain()
 
+    expect(runTask.mock.calls[0][0]).toMatchObject({allowedPlugins: ['guard@local']})
     const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
     expect(tools).toContain('mcp__km__get_block')
     expect(tools).toContain('WebSearch')

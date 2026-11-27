@@ -7,7 +7,7 @@ import * as structuralEdits from '@/data/structuralEditPolicy'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
 import { definitionSeedsFacet, queryableFieldsFacet, refTargetComparablePropertiesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { aliasesProp, editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
+import { aliasesProp, editorFocusRequestProp, editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -210,6 +210,13 @@ const editAt = async (blockId: string, at: 'start' | 'end', renderScopeId = SCOP
 
 const press = (view: EditorView, key: string, options: {shiftKey?: boolean} = {}) => {
   fireEvent.keyDown(view.contentDOM, {key, code: key, ...options})
+}
+
+const pressTabAndWaitForEditorFocus = async (view: EditorView) => {
+  const focusRequest = ui().peekProperty(editorFocusRequestProp) ?? 0
+  press(view, 'Tab')
+  // The panel focus request follows the indent. Let it commit before resetting the shared DB.
+  await waitFor(() => expect(ui().peekProperty(editorFocusRequestProp)).toBeGreaterThan(focusRequest))
 }
 
 const focused = () => peekFocusedBlockLocation(ui())
@@ -508,7 +515,7 @@ describe('a list cell draws its members as outline blocks', () => {
     mount()
     const [alpha, beta] = await memberIds()
     const view = await editAt(beta!, 'end')
-    press(view, 'Tab')
+    await pressTabAndWaitForEditorFocus(view)
     await waitFor(async () => expect((await repo.load(beta!))?.parentId).toBe(alpha))
     await waitFor(() => expect(document.querySelector(
       `[data-table-list] [data-block-id="${alpha}"] [data-block-id="${beta}"]`)).not.toBeNull())
@@ -663,7 +670,7 @@ describe('a row draws its children', () => {
       expect(blockId).not.toBe(id)
       return blockId!
     })
-    press(await editorOn(created), 'Tab')
+    await pressTabAndWaitForEditorFocus(await editorOn(created))
     await waitFor(async () => expect((await repo.load(created))?.parentId).toBe(id))
   })
 })
@@ -891,7 +898,7 @@ describe('the outline’s verbs between rows', () => {
 
   it('Tab nests a row under the row above, where it shows as its child', async () => {
     mount()
-    press(await editAt('row-1', 'end'), 'Tab')
+    await pressTabAndWaitForEditorFocus(await editAt('row-1', 'end'))
     await waitFor(async () => expect((await repo.load('row-1'))?.parentId).toBe('row-0'))
     await waitFor(() => expect(document.querySelector('[data-table-row="row-0"] [data-table-notes] [data-block-id="row-1"]')).not.toBeNull())
     expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE})
@@ -901,9 +908,8 @@ describe('the outline’s verbs between rows', () => {
     mount()
     const view = await editAt('row-0', 'end')
     const nest = vi.spyOn(structuralEdits, 'indentDrawnBlock')
-    press(view, 'Tab')
-    await waitFor(() => expect(nest).toHaveBeenCalledWith(repo.block('row-0'), expect.anything()))
-    await act(() => nest.mock.results[0]!.value)
+    await pressTabAndWaitForEditorFocus(view)
+    expect(nest).toHaveBeenCalledWith(repo.block('row-0'), expect.anything())
     expect((await repo.load('row-0'))?.parentId).toBe(HOST)
   })
 

@@ -6,6 +6,7 @@ working here (the corrections that recur most — read these first):
 - do small adjacent work instead of filing it: while making a change you were asked for, and within its scope, if fixing a nearby problem costs about what describing it would, do it and say so. File what is genuinely separate.
 - when you need a decision: one question, each option with a concrete example and its tradeoff, and your pick. Define any term you introduce; don't coin a name for something that already has one.
 - a question usually wants the assessment, not the fix; a request for a change wants it done and committed. In chat, name issues by GitHub number (how to get one: "publishing" below), not by bead id.
+- a session you start for a self-contained task is Vlad's to talk to: link it in one line and stop. Never relay its reports, check on it or message it; a wake-up about it gets no tool calls and at most one short line. Track children only when THIS session needs their results (`bd recall feedback_delegated_sessions_are_vlads_not_relayed`).
 
 verification and the inner loop (keep the edit→verify cycle tight):
 - iterate against ONE test file: `pnpm vitest run <path>` (~1s). `pnpm run check` is the full gate, for before a commit: about 1.5–3 min on a quiet machine, several times that while other sessions run gates. It queues machine-wide (`KM_CHECK_SLOTS`, default 2) and names the gates it waits on; when tests fail it re-runs the failing files one at a time and prints `verdict: failed only in the full run …` or `verdict: fails alone too …`, beside the load average.

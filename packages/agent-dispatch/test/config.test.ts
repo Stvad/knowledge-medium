@@ -4,6 +4,51 @@ import path from 'node:path'
 import {configSchema, MAX_RUN_TIMEOUT_MS, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
+  const configWithToolRule = (rule: string) => ({
+    workspaceId: 'ws-test',
+    defaultAllowedTools: [rule],
+    watchers: [{
+      kind: 'backlinks', name: 'mentions', target: 'claude',
+      runner: {executor: 'claude', allowedTools: [rule]},
+    }],
+  })
+
+  it.each(['Bash Read', 'Bash,Read', 'Bash\tRead', 'Bash(git *) Read', 'Bash(git *),Read',
+    '', '  ', '(git *)', 'Bash(git *', 'Bash(git *))', 'Bash(git *)(npm *)', 'Bash(git *)Read',
+  ])('rejects %j as a single Claude tool rule in either allowlist', rule => {
+    const result = configSchema.safeParse(configWithToolRule(rule))
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues).toEqual([
+      expect.objectContaining({path: ['defaultAllowedTools', 0], message: expect.stringMatching(/one Claude tool rule/)}),
+      expect.objectContaining({path: ['watchers', 0, 'runner', 'allowedTools', 0], message: expect.stringMatching(/one Claude tool rule/)}),
+    ])
+  })
+
+  it.each(['WebSearch', 'Bash(echo (a, b))', 'Read(src/a,b.ts)', 'mcp__km__graph_search'])(
+    'preserves the Claude tool rule %j in both allowlists', rule => {
+      const config = parseConfig(configWithToolRule(`  ${rule}  `))
+      expect(config.defaultAllowedTools).toEqual([rule])
+      expect(config.watchers[0].runner).toMatchObject({allowedTools: [rule]})
+    },
+  )
+
+  const configWithPlugin = (plugin: string) => ({
+    workspaceId: 'ws-test',
+    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', runner: {executor: 'claude', allowedPlugins: [plugin]}}],
+  })
+
+  it.each(['', 'guard', 'guard@', '@local', 'guard@local@x', 'guard @local'])('rejects %j as a plugin id', plugin => {
+    const result = configSchema.safeParse(configWithPlugin(plugin))
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues).toEqual([
+      expect.objectContaining({path: ['watchers', 0, 'runner', 'allowedPlugins', 0], message: expect.stringMatching(/name@marketplace/)}),
+    ])
+  })
+
+  it('keeps a trimmed plugin id', () => {
+    expect(parseConfig(configWithPlugin(' guard@local ')).watchers[0].runner).toMatchObject({allowedPlugins: ['guard@local']})
+  })
+
   it('refuses the retired quietMs rather than ignoring a meaning that changed', () => {
     expect(() => parseConfig({
       workspaceId: 'ws-test',
