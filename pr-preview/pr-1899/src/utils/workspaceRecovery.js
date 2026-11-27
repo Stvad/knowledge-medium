@@ -1,1 +1,1 @@
-export{Ku as describeWorkspaceRematerialization,qu as rematerializeWorkspaceWithFeedback}from"../../chunks/app-IkphmdPz.js";
+export{Ku as describeWorkspaceRematerialization,qu as rematerializeWorkspaceWithFeedback}from"../../chunks/app-7C27XE4I.js";
