@@ -2509,12 +2509,11 @@ describe('query row tasks', () => {
       await running
       await engine.drain()
     }
-    await tick(engineWith(deps))
-
-    expect(runTask).toHaveBeenCalledOnce()
     expect(blocks.get('alpha')?.properties).toMatchObject({
       [PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: '',
     })
+    await tick(engineWith(deps))
+    expect(runTask).toHaveBeenCalledOnce()
     expect(reconciles).toEqual([])
   })
 
