@@ -1,0 +1,1 @@
+export{Bc as MigrationGate}from"../../../chunks/app-COXBhNBn.js";

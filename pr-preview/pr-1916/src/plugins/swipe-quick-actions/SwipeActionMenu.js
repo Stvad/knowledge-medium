@@ -1,0 +1,1 @@
+export{GF as SwipeActionMenu}from"../../../chunks/app-COXBhNBn.js";

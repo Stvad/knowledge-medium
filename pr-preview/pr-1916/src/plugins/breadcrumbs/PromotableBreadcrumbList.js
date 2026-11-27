@@ -1,0 +1,1 @@
+export{JO as PromotableBreadcrumbList}from"../../../chunks/app-COXBhNBn.js";

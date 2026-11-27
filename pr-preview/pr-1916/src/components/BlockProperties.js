@@ -1,0 +1,1 @@
+export{WW as BlockProperties}from"../../chunks/app-COXBhNBn.js";

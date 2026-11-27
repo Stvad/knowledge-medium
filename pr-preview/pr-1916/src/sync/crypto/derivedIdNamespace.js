@@ -1,0 +1,1 @@
+export{spt as deriveWorkspaceIdNamespace}from"../../../chunks/app-COXBhNBn.js";

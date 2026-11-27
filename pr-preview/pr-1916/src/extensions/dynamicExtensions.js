@@ -1,0 +1,1 @@
+export{HR as dynamicExtensionsExtension}from"../../chunks/app-COXBhNBn.js";

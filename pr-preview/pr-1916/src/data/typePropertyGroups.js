@@ -1,0 +1,1 @@
+export{hG as typePropertyGroups}from"../../chunks/app-COXBhNBn.js";
