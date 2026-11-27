@@ -152,6 +152,14 @@ export interface CreateThreadOptions {
   description?: string
 }
 
+const commentsPageForTarget = async (repo: Repo, targetId: string) => {
+  // A pooled reader can lag a local commit. Use the block handle's committed
+  // snapshot for the workspace lookup. The write checks the live row in annotatableTarget.
+  const target = await repo.block(targetId).load()
+  if (!target) throw missingTarget(targetId)
+  return getOrCreateCommentsPage(repo, target.workspaceId)
+}
+
 /** An open thread root on `targetId`, filed under the comments page. */
 const writeThreadRoot = (
   repo: Repo,
@@ -185,13 +193,8 @@ export const createThread = async (
 ): Promise<CreatedThread> => {
   if (anchor) assertQuotable(anchor)
   if (replacement !== undefined) assertSuggestion(anchor, replacement)
-  const target = await repo.load(targetId)
-  if (!target) throw missingTarget(targetId)
-
-  const container = await getOrCreateCommentsPage(repo, target.workspaceId)
+  const container = await commentsPageForTarget(repo, targetId)
   return repo.tx(async tx => {
-    // The load above already refused a missing or deleted target; this also
-    // catches a delete that lands between it and this tx.
     const current = await annotatableTarget(tx, targetId)
     if (anchor && resolveAnchor(current.content, anchor).state !== 'exact') {
       throw new AnchorChangedError(replacement === undefined
@@ -272,9 +275,7 @@ export interface MoveToOwnThreadArgs {
  *  comment of a new thread on the whole of `targetId`. One undo step; returns
  *  the new thread's root. */
 export const moveToOwnThread = async (repo: Repo, {commentId, targetId}: MoveToOwnThreadArgs): Promise<string> => {
-  const target = await repo.load(targetId)
-  if (!target) throw missingTarget(targetId)
-  const container = await getOrCreateCommentsPage(repo, target.workspaceId)
+  const container = await commentsPageForTarget(repo, targetId)
   return repo.tx(async tx => {
     const thread = await commentThreadInTx(tx, commentId)
     if (!thread) throw new ThreadRefusal('Only a comment in a thread can move to a thread of its own.')

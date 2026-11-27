@@ -147,10 +147,23 @@ describe('createThread', () => {
     expect(await threadsOf('B')).toHaveLength(1)
   })
 
-  it('refuses a target deleted between the first read and the creating tx', async () => {
+  it('can comment on a just-committed target while a pooled read still misses it', async () => {
     const load = repo.load.bind(repo)
-    vi.spyOn(repo, 'load').mockImplementationOnce(async id => {
-      const row = await load(id)
+    vi.spyOn(repo, 'load').mockImplementation((id, options) =>
+      id === 'B' ? Promise.resolve(null) : load(id, options))
+    try {
+      const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'First comment'})
+      expect(await threadsOf('B')).toContain(threadId)
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('refuses a target deleted between the first read and the creating tx', async () => {
+    const target = repo.block('B')
+    const load = target.load.bind(target)
+    vi.spyOn(target, 'load').mockImplementationOnce(async () => {
+      const row = await load()
       await repo.tx(tx => tx.delete('B'), opts)
       return row
     })
@@ -333,6 +346,7 @@ describe('moveToOwnThread', () => {
 
   it('offers the blocks the comment links on its thread’s page, in link order', async () => {
     const {point} = await reviewThread()
+    await repo.awaitProcessors()
     expect(await ownThreadTargets(repo, point)).toEqual([C])
   })
 })
