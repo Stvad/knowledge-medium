@@ -1,6 +1,6 @@
 # Installed extensions in the headless host
 
-> **Status:** Proposed. Nothing is implemented. Two decisions are settled by the owner and one is proposed; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
+> **Status:** Proposed. Nothing is implemented. Three decisions are settled by the owner; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
 > Claims are tagged as in [headless-client.md](headless-client.md). **[read]** means seen in the code. **[measured]** means run or queried, and the entry says where. **[reasoned]** means inferred; the slice that would verify it is named.
 
 ## 1. Goal
@@ -61,7 +61,7 @@ The one real lever is the daemon's OS user: a dedicated user with nothing else i
 **The boundary:**
 1. **A host runs an extension block only if its own config names that block id with the path of a reviewed copy of its source.** The config file and the files it names are the trust anchor. The config already stands in for a person's confirmation of a plaintext workspace, though there it sits alongside the server row and here it stands alone. Whoever can write the config or a named file as the daemon's OS user can grant code execution, as they already can by editing the checkout the host runs. That includes any agent session running as that user, and those sessions read graph content. No bridge verb grants, changes or revokes the grant (the extension verbs stay refused), and no synced value takes part: not intent, not approval state, not the source.
 2. **The host runs the reviewed copy, never the live block content** ([§9](#9-decisions) D1, decided). This is the tab's #67 rule with the reviewed file as the pin. The live block still has to exist, since the loader walks live extension blocks, so deleting it in the graph stops the block at the next restart. When the live source differs from the reviewed copy, the host keeps running the reviewed copy. It logs that a review is needed and reports `update-available` in `health`.
-3. **Imports resolve only to what `index.html`'s importmap maps, or to an `https:` URL carrying an integrity hash** ([§5](#pinned-url-imports)). The importmap rule reuses `runnableSpecifier`, so tab and host accept the same specifiers. Specifiers are checked from the AST before anything is imported. Anything else is a load error that names the specifier: an unpinned `https:` import, bare packages, `node:*`, computed `import()`. The host also refuses direct imports of the extension compile and evaluator modules, since they evaluate graph content with no hash check. This is a portability rule, not a sandbox. A pinned source can still use `new Function`, `process.getBuiltinModule`, or code it fetched. The review in rule 4 has to catch "fetches or evaluates code", and also "re-exports a static plugin", since provenance prefixing would start that plugin's effects as the block's own.
+3. **Imports resolve only to what `index.html`'s importmap maps, or to an `https:` URL carrying an integrity hash** ([§5](#pinned-url-imports)). The importmap rule reuses `runnableSpecifier`, so tab and host accept the same specifiers. Specifiers are checked from the AST before anything is imported. Anything else is a load error that names the specifier: an unpinned `https:` import, bare packages, `node:*`, computed `import()`. During the transition ([§9](#9-decisions) D3), a tab is the one exception: it still loads an unpinned `https:` import live, as today, with a warning. The host never does. The host also refuses direct imports of the extension compile and evaluator modules, since they evaluate graph content with no hash check. This is a portability rule, not a sandbox. A pinned source can still use `new Function`, `process.getBuiltinModule`, or code it fetched. The review in rule 4 has to catch "fetches or evaluates code", and also "re-exports a static plugin", since provenance prefixing would start that plugin's effects as the block's own.
 4. **Allowlisting a block trusts it with the workspace key, the host's session and the daemon's OS account.** The operator procedure says this in those words, and lists the review items from rule 3.
 5. **The reviewed copy comes from a reviewed commit, never from the graph.** Copying the live block into the file would let whoever edited the block choose what the host runs. So `health` and the log say only that the live source differs, and never carry its content or hash. To compare them, the host normalises the file the way `install-extension` does before storing, which trims trailing whitespace, so a raw hash of the file never matches **[measured]**. That normalisation becomes one function, shared by install and host.
 6. **A device-stored secret is stored under the destination it may be sent to.** Synced config must not be able to redirect it. For Matrix, the access token is kept per homeserver, so a synced homeserver change finds no token and reports missing-token.
@@ -112,11 +112,14 @@ Because the hash is source text, the tab's existing source pin (#67) and the hos
 
 Multi-module closures are refused, not bundled. A tab has no bundler, and a raw closure would need its specifiers rewritten at load, where blob URLs cannot express cycles **[reasoned]**.
 
-*Adding the pin.* A new `pin-imports <file>` CLI verb runs the freezer and writes the attributes into the file. `install-extension` refuses a URL import with no integrity value. In a tab, the approve flow offers "Pin imports" for an unpinned source. That step rewrites the block's source in one undoable transaction, then approves it. The rewrite splices the attribute in at each import's AST offsets and never regenerates the code, since the source is user data. The new source syncs, so every other device sees `update-available` and keeps its old pin until it approves the new source with "Update", which fetches there. Two devices pinning the same source at once conflict as ordinary concurrent edits to one block, with the same result either way. The host never writes a source; its reviewed file must already be pinned.
+*Adding the pin.* A new `pin-imports <file>` CLI verb runs the freezer and writes the attributes into the file. `install-extension` warns about a URL import with no integrity value during the transition, and refuses one after it. In a tab, the approve flow offers "Pin imports" for an unpinned source. That step rewrites the block's source in one undoable transaction, then approves it. The rewrite splices the attribute in at each import's AST offsets and never regenerates the code, since the source is user data. The new source syncs, so every other device sees `update-available` and keeps its old pin until it approves the new source with "Update", which fetches there. Two devices pinning the same source at once conflict as ordinary concurrent edits to one block, with the same result either way. The host never writes a source; its reviewed file must already be pinned.
 
 *Install verification* (`compileForVerification`, the loader's verify mode) instantiates live source with no record, so it runs the freezer in memory for each pinned import.
 
-*Compiling.* A Babel plugin in the transpile step replaces each pinned specifier with `km-vendored:<integrity>` and drops the attribute, so the pinned compiled string contains no URL. The same plugin refuses an unpinned `https:` import. Refusing there, and not only in the freezer, also covers the load path's recompile of an old record after a compiler bump, which would otherwise emit a live network import. Babel 8 standalone parses the attribute under the loader's presets, and TypeScript 6 accepts it with the existing `https://*` module declaration **[measured]**. The plugin changes the compiled output, so `COMPILER_VERSION` is bumped.
+*Compiling.* A Babel plugin in the transpile step replaces each pinned specifier with `km-vendored:<integrity>` and drops the attribute, so the pinned compiled string contains no URL. An unpinned `https:` import is where the transition lives, in this one place:
+- *During the transition,* the plugin leaves it as a live import, as today, and the loader reports `imports-unpinned`. That surfaces like `update-available`, in the settings row and the approval prompt, with "Pin imports" as its action.
+- *After the transition,* the plugin refuses it. Refusing in the plugin, and not only in the freezer, also covers the load path's recompile of an old record after a compiler bump, which would otherwise emit a live network import.
+- *The host* refuses an unpinned import in both phases, since Node cannot load it. Babel 8 standalone parses the attribute under the loader's presets, and TypeScript 6 accepts it with the existing `https://*` module declaration **[measured]**. The plugin changes the compiled output, so `COMPILER_VERSION` is bumped.
 
 *Instantiating.*
 - *Tab.* The approval record (`CompiledRecord`) gains an optional `vendored: {integrity → module text}`, written only by `approveExtension` after the freezer verifies it. Absent means none, so `isApprovalRecord` keeps accepting every existing approval. At load, each placeholder becomes a blob URL over the stored text.
@@ -193,14 +196,9 @@ The host never resurrects a message the owner deleted: the ingest checks the der
    - `vendored` on the approval record, and blob substitution at load.
    - "Pin imports" in the approve flow, `pin-imports` in the CLI, and the `install-extension` refusal.
 
-   It stops every installed block with an unpinned URL import from loading until it is pinned and re-approved on each device ([§9](#9-decisions) D3). On the owner's replica that is one block, the Matrix extension ([§2](#2-population)). While it is stopped, two things happen, though no stored data changes:
-   - its ingest halts everywhere. A room that gets more than 30 messages meanwhile loses the excess on every client, until the gap fix in slice 3 lands;
-   - its seeds drop out, so writes to its properties are refused or decoded through a preset ([headless-client.md](headless-client.md) §10 "Seeds").
+   Nothing stops loading ([§9](#9-decisions) D3). An extension with an unpinned URL import keeps running in tabs as today and reports `imports-unpinned` until it is pinned and re-approved on each device. On the owner's replica that is one block, the Matrix extension ([§2](#2-population)).
 
-   So the rollout is ordered:
-   1. ship the Matrix gap fix (paging through `prev_batch`) on its own, before slice 0;
-   2. deploy slice 0;
-   3. pin Matrix's import and reinstall it in the same sitting.
+   **0b. End the transition.** Remove the live-import path, so the transpile plugin refuses unpinned imports and `install-extension` refuses them too. This is due once no installed extension reports `imports-unpinned`, checked with one read-only query over the installed extension blocks, as in §2. It is tracked as its own issue when slice 0 is filed. When it lands, an extension still unpinned stops loading until it is pinned. Its seeds then drop out meanwhile, so writes to its properties are refused or decoded through a preset ([headless-client.md](headless-client.md) §10 "Seeds"), though no stored data changes.
 1. **Core seams, with no change in tabs.**
    - The compile-platform setter.
    - The Node evaluator, extracted from `src/test/` to check before importing.
@@ -225,7 +223,7 @@ The host never resurrects a message the owner deleted: the ingest checks the der
    - a static plugin's effect does not start.
 3. **Matrix on the host.** This slice changes the extension first:
    - pin the SDK import: add `&target=es2024` and run `pin-imports`;
-   - page back through `prev_batch` when a timeline comes back `limited`. Today a gap of more than 30 messages since the saved cursor is silently skipped on that client, tabs included. It is filed as a bug of its own and ships before slice 0 (see there);
+   - page back through `prev_batch` when a timeline comes back `limited`. Today a gap of more than 30 messages since the saved cursor is silently skipped on that client, tabs included. It is filed as a bug of its own, and worth shipping on its own, ahead of this slice;
    - read prefs through `readPluginPref` and re-read them on change;
    - key the token by homeserver;
    - remove `migrateEventNamespace`, a one-time data migration gated only by a device-local flag that a new device lacks. It is a no-op today: 0 rows pending and 1,402 already migrated on the owner's tab replica **[measured]**. Removed, it can never fire from the host. `migrateLegacyConfig`, the other flag-gated one-time step, only sets its flag on a device without the legacy blob;
@@ -245,10 +243,10 @@ Deferred: synced vendored bytes, multi-module closures and any bundler, external
 - **D2, decided by the owner (2026-11-27): keep CDN imports working, pinned, and resolved the same way in tab and host** ([§5](#pinned-url-imports)). The rejected alternatives were:
   - removing Matrix's one URL import and refusing URL imports outright;
   - moving the host to Deno, whose lockfile pins remote modules. It would take the host off Node, and its PowerSync SDK depends on a native SQLite addon untested under Deno. It would also leave tabs unpinned.
-- **D3, proposed: when slice 0 lands, an installed extension with an unpinned URL import stops loading until it is pinned.**
-  - *Why:* it closes the gap at once. On the owner's replica it affects one extension, the Matrix one, which slice 3 edits anyway. Ordering the rollout ([§8](#8-slices) slice 0) leaves no ingest gap.
-  - *The other devices:* each must "Update" once to approve the pinned source.
-  - *Rejected:* letting unpinned imports keep loading live, with a warning, for a transition. It would keep the gap open for the length of the transition and add a second load path that must later be removed, for the sake of one extension.
+- **D3, decided by the owner (2026-11-27): a transition period.** When slice 0 lands, an unpinned URL import keeps loading live in tabs, with an `imports-unpinned` warning whose action is "Pin imports". The live path is removed in slice 0b, once nothing installed still reports the warning.
+  - *Cost accepted:* tabs keep the unpinned behaviour for the transition's length, and the transpile plugin carries a second branch until 0b removes it.
+  - *Rejected:* refusing unpinned imports at once. That closes the gap immediately, but an extension stops until someone pins it on every device.
+  - *Unaffected:* the host loads pinned imports only, in both phases.
 
 ## 10. Still open
 
