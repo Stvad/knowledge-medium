@@ -2381,6 +2381,188 @@ describe('query row tasks', () => {
     expect(propWrites.filter(write => write.status === 'running')).toHaveLength(1)
   })
 
+  const askHandoffFixture = () => {
+    const backlinks: NonNullable<FakeGraphSeed['backlinks']> = []
+    const fake = fakeGraph({backlinks, blocks: {alpha: {content: 'Original row text'}}})
+    const {graph, blocks} = fake
+    const block = blocks.get('alpha')!
+    const state = memoryState()
+    const clock = {now: NOW}
+    const now = () => clock.now
+    const log = vi.fn()
+    const mentionRun = vi.fn(async () => okRun({sessionId: 'mention-session'}))
+    const mentions = engineWith({graph, runTask: mentionRun, now})
+    const rowEngine = (runTask: EngineDeps['runTask']) => engineWith({
+      graph, state, runTask, now, log, config: config(),
+    })
+    const showRow = () => {
+      graph.sqlAll = async () => block.properties?.[PROPS.status] ? [] : [{id: 'alpha', label: 'saved row'}]
+    }
+    const ask = () => {
+      block.content = 'Ask about this result [[claude]]'
+      block.properties = {...block.properties, [PROPS.askedAt]: clock.now}
+      block.editedAtMs = clock.now
+      backlinks.push({id: block.id})
+    }
+    return {...fake, block, state, clock, log, mentionRun, mentions, rowEngine, showRow, ask}
+  }
+
+  it('leaves an asked claim discovered only by SQL with its current owner', async () => {
+    const {graph, block, rowEngine, propWrites, ask} = askHandoffFixture()
+    const rowRun = vi.fn(async () => okRun())
+    const engine = rowEngine(rowRun)
+    await tick(engine)
+    block.properties = {[PROPS.status]: 'queued', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1}
+    ask()
+    graph.sqlAll = async () => [{id: block.id}]
+    await tick(engine)
+    expect(propWrites).toEqual([])
+    expect(rowRun).not.toHaveBeenCalled()
+  })
+
+  it('leaves a saved asked block with an old owner name and no claim available to mentions', async () => {
+    const {block, state, rowEngine, propWrites, ask, mentions, mentionRun} = askHandoffFixture()
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], baselineMs: NOW, pending: [{id: block.id}]})
+    block.properties = {[PROPS.watcher]: 'inbox'}
+    ask()
+    await tick(rowEngine(vi.fn(async () => okRun())))
+    expect(propWrites).toEqual([])
+    await tick(mentions)
+    expect(mentionRun).toHaveBeenCalledOnce()
+  })
+
+  it('retires saved input once an asked block belongs to a different watcher', async () => {
+    const {block, state, rowEngine, propWrites, ask} = askHandoffFixture()
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], baselineMs: NOW, pending: [{id: block.id}]})
+    block.properties = {[PROPS.status]: 'running', [PROPS.watcher]: 'mentions'}
+    ask()
+    await tick(rowEngine(vi.fn(async () => okRun())))
+    expect(propWrites).toEqual([])
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([])
+  })
+
+  it('hands a failed row omitted from SQL to a separate mention watcher on the same block', async () => {
+    const {graph, block, state, rowEngine, showRow, ask, mentions, mentionRun, reconciles} = askHandoffFixture()
+    const rowRun = vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'rewrite failed', sessionId: 'row-session'}))
+    const rows = rowEngine(rowRun)
+    await tick(rows)
+    showRow()
+    await tick(rows)
+    expect(await graph.sqlAll('', [])).toEqual([])
+    expect(block.properties).toMatchObject({
+      [PROPS.status]: 'queued', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1, [PROPS.session]: 'row-session',
+    })
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([{id: 'alpha', label: 'saved row'}])
+
+    ask()
+    await tick(mentions)
+    expect(mentionRun).not.toHaveBeenCalled()
+    await tick(rows)
+    expect(block.properties).toMatchObject({
+      [PROPS.status]: 'queued', [PROPS.watcher]: '', [PROPS.attempts]: 0,
+      [PROPS.askedAt]: NOW, [PROPS.session]: 'row-session',
+    })
+
+    await tick(mentions)
+    await tick(rows)
+    expect(rowRun).toHaveBeenCalledOnce()
+    expect(mentionRun).toHaveBeenCalledOnce()
+    expect(block.properties).toMatchObject({
+      [PROPS.status]: 'done', [PROPS.watcher]: 'mentions', [PROPS.attempts]: 1, [PROPS.askedAt]: NOW,
+    })
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([])
+    const replies = reconciles.filter(reply => reply.final)
+    expect(replies.map(reply => reply.parentId)).toEqual(['alpha', 'alpha'])
+    expect(replies[0].markdown).toContain('rewrite failed')
+    expect(replies[1].markdown).toContain('Reply text')
+    expect(replies[0].replyKey).not.toBe(replies[1].replyKey)
+  })
+
+  it('waits for a stranded running row to become stale before handing off its Ask', async () => {
+    const {block, state, clock, rowEngine, ask, mentionRun, mentions} = askHandoffFixture()
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], baselineMs: NOW, pending: [{id: 'alpha'}]})
+    block.properties = {
+      [PROPS.status]: 'running', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1, [PROPS.updatedAt]: NOW,
+    }
+    ask()
+    const rowRun = vi.fn(async () => okRun())
+    await tick(rowEngine(rowRun))
+    await tick(mentions)
+    expect(block.properties).toMatchObject({[PROPS.status]: 'running', [PROPS.watcher]: 'inbox'})
+    expect(mentionRun).not.toHaveBeenCalled()
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([{id: 'alpha'}])
+
+    clock.now += STALE_RUNNING_MS + 1
+    await tick(rowEngine(rowRun))
+    await tick(mentions)
+    expect(rowRun).not.toHaveBeenCalled()
+    expect(mentionRun).toHaveBeenCalledOnce()
+    expect(block.properties).toMatchObject({
+      [PROPS.status]: 'done', [PROPS.watcher]: 'mentions', [PROPS.attempts]: 1, [PROPS.askedAt]: NOW,
+    })
+  })
+
+  it('lets a live row finish before handing off an Ask made during its run', async () => {
+    const {block, clock, rowEngine, showRow, ask, mentionRun, mentions} = askHandoffFixture()
+    const rowFinished = Promise.withResolvers<AgentRunResult>()
+    const rowStarted = Promise.withResolvers<void>()
+    const rowRun = vi.fn(() => {
+      rowStarted.resolve()
+      return rowFinished.promise
+    })
+    const rows = rowEngine(rowRun)
+    await tick(rows)
+    showRow()
+    await rows.tick()
+    await rowStarted.promise
+
+    try {
+      ask()
+      // A long live run can outlast the persisted stale-claim window.
+      clock.now += STALE_RUNNING_MS + 1
+      await rows.tick()
+      await tick(mentions)
+      expect(mentionRun).not.toHaveBeenCalled()
+      expect(block.properties).toMatchObject({[PROPS.status]: 'running', [PROPS.watcher]: 'inbox'})
+    } finally {
+      rowFinished.resolve(okRun({sessionId: 'row-session'}))
+      await rows.drain()
+    }
+    await tick(rows)
+    await tick(mentions)
+    expect(rowRun).toHaveBeenCalledOnce()
+    expect(mentionRun).toHaveBeenCalledOnce()
+    expect(block.properties).toMatchObject({
+      [PROPS.status]: 'done', [PROPS.watcher]: 'mentions', [PROPS.attempts]: 1, [PROPS.askedAt]: NOW,
+    })
+  })
+
+  it.each([
+    {change: 'a newer foreign claim', replacement: {
+      [PROPS.status]: 'running', [PROPS.watcher]: 'another-watcher', [PROPS.attempts]: 2, [PROPS.askedAt]: NOW,
+    }},
+    {change: 'a withdrawn Ask', replacement: {
+      [PROPS.status]: 'queued', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1,
+    }},
+  ])('rechecks the handoff against a fresh block read showing $change', async ({replacement}) => {
+    const {graph, block, state, rowEngine, ask, propWrites, log} = askHandoffFixture()
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], baselineMs: NOW, pending: [{id: 'alpha'}]})
+    block.properties = {[PROPS.status]: 'queued', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1}
+    ask()
+    const readBlock = graph.getBlock
+    const freshRead = vi.fn(async (id: string) => {
+      if (id === block.id) block.properties = {...replacement}
+      return readBlock(id)
+    })
+    graph.getBlock = freshRead
+
+    await tick(rowEngine(vi.fn(async () => okRun())))
+    expect(freshRead).toHaveBeenCalledWith('alpha')
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('tick failed'))
+    expect(propWrites).toEqual([])
+    expect(block.properties).toEqual(replacement)
+  })
+
   it.each([NOW, 0])('drops a saved pending row with Ask Agent timestamp %i before any claim', async askedAt => {
     const seed: FakeGraphSeed = {beingEdited: ['alpha'], blocks: {alpha: {}}}
     const {graph, blocks, propWrites} = fakeGraph(seed)
@@ -2947,6 +3129,7 @@ describe('query row tasks', () => {
     for (const id of ['missing', 'deleted', 'foreign']) {
       expect(log).toHaveBeenCalledWith(expect.stringContaining(`skipped ${id}: no live block`))
     }
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('tick failed'))
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining('skipped finished'))
   })
 

@@ -48,8 +48,8 @@ describe('decidePending', () => {
       .toEqual({pending: true, reason: 'stale-running'})
   })
 
-  it('treats running with NO timestamp as stale (legacy/corrupt marker)', () => {
-    const source = block({properties: {[PROPS.status]: 'running'}})
+  it.each([undefined, String(NOW)])('treats a running claim with invalid timestamp %s as stale', updatedAt => {
+    const source = block({properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: updatedAt}})
     expect(decidePending({source, nowMs: NOW}).pending).toBe(true)
   })
 

@@ -14,7 +14,7 @@ import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunR
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { QueryRow } from './queryDiff.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, isMention, isTerminalTask, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, hasFreshRunningClaim, isMention, isTerminalTask, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt, renderRowTaskPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
@@ -32,11 +32,15 @@ const belongsToWatcher = (block: BlockView, watcher: Watcher) => {
   return !props?.[PROPS.status] || !props[PROPS.watcher] || props[PROPS.watcher] === watcher.name
 }
 
-const eligibleRowTask = (block: BlockView, createdSinceMs: number): boolean => {
-  if (Object.hasOwn(block.properties ?? {}, PROPS.askedAt)) return false
-  const status = block.properties?.[PROPS.status]
+const rowTaskAction = (block: BlockView, watcher: QueryWatcher, createdSinceMs: number): 'run' | 'release' | 'skip' => {
+  const props = block.properties ?? {}
+  const status = props[PROPS.status]
+  if (Object.hasOwn(props, PROPS.askedAt)) {
+    return status && props[PROPS.watcher] === watcher.name ? 'release' : 'skip'
+  }
+  if (!belongsToWatcher(block, watcher) || isTerminalTask(block)) return 'skip'
   const claimed = status === 'running' || (status === 'queued' && taskAttempts(block) > 0)
-  return claimed || (block.createdAt ?? -Infinity) >= createdSinceMs
+  return claimed || (block.createdAt ?? -Infinity) >= createdSinceMs ? 'run' : 'skip'
 }
 
 const postsReply = (task: BlockTask) => task.kind === 'mention' || task.watcher.reply
@@ -273,12 +277,14 @@ export const createEngine = (deps: EngineDeps) => {
       log(`[${watcher.name}] skipped ${id}: block no longer matches the row in the configured workspace`)
       return null
     }
-    if (task.kind === 'row' && !eligibleRowTask(block, task.baselineMs)) return null
     return block
   }
 
   const pendingDecision = (task: BlockTask, source: BlockView, editingActiveAtMs?: number) => {
     const status = source.properties?.[PROPS.status]
+    if (task.kind === 'row' && rowTaskAction(source, task.watcher, task.baselineMs) !== 'run') {
+      return {pending: false, reason: 'ineligible-row'} as const
+    }
     if (task.kind === 'row' && source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
       return {pending: false, reason: 'cancelled'} as const
     }
@@ -439,7 +445,7 @@ export const createEngine = (deps: EngineDeps) => {
     // re-enter the reply write and clobber the answer.
     let terminalReplyDelivered = false
     const attempt = taskAttempts(block) + 1
-    const replyKey = `reply:${sourceId}:${attempt}`
+    const replyKey = task.kind === 'row' ? `row-reply:${sourceId}:${attempt}` : `reply:${sourceId}:${attempt}`
     const replyShape = task.kind === 'row' || task.watcher.splitReply ? 'outline' : 'block'
     // Abort handle for THIS run — a cancel request (agent:cancel, detected
     // in the tick) aborts it, killing the child. `signal.aborted` after the
@@ -799,6 +805,19 @@ export const createEngine = (deps: EngineDeps) => {
     return diff
   }
 
+  /** Ask Agent keeps an active claim. Release it to a mention only after the
+   *  local run settles or a restarted daemon verifies that its claim is stale. */
+  const releaseAskedRow = async (task: Extract<BlockTask, {kind: 'row'}>): Promise<boolean> => {
+    if (running.has(`block:${task.id}`)) return false
+    const fresh = await currentTaskBlock(task)
+    if (!fresh || rowTaskAction(fresh, task.watcher, task.baselineMs) !== 'release' || hasFreshRunningClaim(fresh, now())) return false
+    await graph.setTaskProps(task.id, {
+      status: 'queued', watcher: '', attempts: 0, activity: null, error: null, cancel: null, nowMs: now(),
+    })
+    log(`[${task.watcher.name}] released ${task.id} for its requested mention`)
+    return true
+  }
+
   const tickRowTasks = async (watcher: QueryWatcher) => {
     const key = JSON.stringify([config.workspaceId, watcher.name])
     const tickStartMs = now()
@@ -810,10 +829,10 @@ export const createEngine = (deps: EngineDeps) => {
     })
     const diff = queryDiff(watcher, rows, saved?.baselineIds ?? null)
     if (!saved && diff.oversized) return
-    const candidates = new Map<string, QueryRow>()
-    for (const row of saved?.pending ?? []) candidates.set(row.id, row)
+    const candidates = new Map<string, {row: QueryRow, saved: boolean}>()
+    for (const row of saved?.pending ?? []) candidates.set(row.id, {row, saved: true})
     for (const row of diff.newRows) {
-      if (!candidates.has(row.id)) candidates.set(row.id, row)
+      if (!candidates.has(row.id)) candidates.set(row.id, {row, saved: false})
     }
     const ids = saved ? [...candidates.keys()] : diff.seenIds
     const views = await graph.blockViews(ids, config.workspaceId)
@@ -826,16 +845,27 @@ export const createEngine = (deps: EngineDeps) => {
       return
     }
 
-    const pending = [...candidates.values()].filter(row => {
+    const pending: QueryRow[] = []
+    const tasks: BlockTask[] = []
+    for (const candidate of candidates.values()) {
+      const {row} = candidate
       const view = views.get(row.id)
-      return view && eligibleRowTask(view, saved.baselineMs) && belongsToWatcher(view, watcher) && !isTerminalTask(view)
-    })
+      if (!view) continue
+      const task = {kind: 'row' as const, id: row.id, watcher, row, baselineMs: saved.baselineMs}
+      const action = rowTaskAction(view, watcher, saved.baselineMs)
+      if (action === 'run') {
+        tasks.push(task)
+        pending.push(row)
+      } else if (action === 'release' && candidate.saved && !await releaseAskedRow(task)) {
+        pending.push(row)
+      }
+    }
     // Keep the original columns until the graph reports a terminal state,
     // including while the budget or an editor holds the task.
     if (pending.length !== saved.pending.length || pending.some((row, i) => row !== saved.pending[i])) {
       await state.setRowTasks(key, {...saved, pending})
     }
-    await scheduleBlockTasks(pending.map(row => ({kind: 'row', id: row.id, watcher, row, baselineMs: saved.baselineMs})), views)
+    await scheduleBlockTasks(tasks, views)
   }
 
   const tickQueryWatcher = async (watcher: QueryWatcher) => {

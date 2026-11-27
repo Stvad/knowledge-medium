@@ -49,6 +49,11 @@ export const taskAttempts = (block: BlockView | undefined): number => {
 // A stale row retry reads any partial edits the abandoned run left in its subtree.
 export const STALE_RUNNING_MS = MAX_RUN_TIMEOUT_MS + 5 * 60_000
 
+export const hasFreshRunningClaim = (source: BlockView, nowMs: number): boolean => {
+  const updatedAt = prop(source, PROPS.updatedAt)
+  return prop(source, PROPS.status) === 'running' && typeof updatedAt === 'number' && nowMs - updatedAt < STALE_RUNNING_MS
+}
+
 /** A task is re-claimed at most this many times before it's parked as
  *  `error` — caps the requeue loop (and its bill) when something keeps
  *  crashing or the ambient channel session keeps dropping the event. */
@@ -101,12 +106,8 @@ export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = 
   }
 
   const status = prop(source, PROPS.status)
-  if (status === 'running') {
-    const updatedAt = prop(source, PROPS.updatedAt)
-    const age = typeof updatedAt === 'number' ? nowMs - updatedAt : Number.POSITIVE_INFINITY
-    if (age < STALE_RUNNING_MS) return {pending: false, reason: 'already-processed'}
-    if (taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
-  }
+  if (hasFreshRunningClaim(source, nowMs)) return {pending: false, reason: 'already-processed'}
+  if (status === 'running' && taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
   // `queued` is seen-but-unclaimed: it goes through every gate below.
 
   // Baseline gate only for UNCLAIMED blocks (a claim implies the block
