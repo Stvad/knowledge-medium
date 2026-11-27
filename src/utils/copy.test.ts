@@ -14,6 +14,7 @@ const WS = 'ws-1'
 let sharedDb: TestDb
 let repo: Repo
 let clipboardText: string | null
+let clipboardHtml: string | null
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
@@ -21,6 +22,7 @@ beforeEach(async () => {
   repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
   disarmCut()
   clipboardText = null
+  clipboardHtml = null
   // `ClipboardItem` holds Blobs, or promises of them; keep the text so the
   // test can paste it back.
   vi.stubGlobal('ClipboardItem', class {
@@ -29,6 +31,7 @@ beforeEach(async () => {
   vi.stubGlobal('navigator', {clipboard: {
     write: vi.fn(async ([item]: [{items: Record<string, Blob | Promise<Blob>>}]) => {
       clipboardText = await (await item.items['text/plain']).text()
+      clipboardHtml = item.items['text/html'] ? await (await item.items['text/html']).text() : null
     }),
   }})
   await repo.tx(async tx => {
@@ -82,6 +85,36 @@ describe('copyBlockIdsToClipboard', () => {
 
     await expect(copyBlockIdsToClipboard(['b'], repo)).rejects.toThrow('NotAllowedError')
     expect(getArmedCut()?.rootIds).toEqual(['a'])
+  })
+})
+
+describe('the clipboard item a copy writes', () => {
+  const addMultiLineBlock = () => repo.tx(
+    tx => tx.create({id: 'multi', workspaceId: WS, parentId: 'page', orderKey: 'a2', content: 'one\ntwo'}),
+    {scope: ChangeScope.BlockDefault},
+  )
+
+  it('is text/plain alone for an outline the text reproduces', async () => {
+    await copyBlockIdsToClipboard(['page'], repo)
+
+    expect(clipboardText).toBe('- Page\n  - A\n  - B')
+    expect(clipboardHtml).toBeNull()
+  })
+
+  it('adds the html when the text would not reproduce it, leaving the text as it was', async () => {
+    await addMultiLineBlock()
+    await copyBlockIdsToClipboard(['page'], repo)
+
+    expect(clipboardText).toBe('- Page\n  - A\n  - B\n  - one\n    two')
+    expect(clipboardHtml).toContain('km-outline')
+  })
+
+  it('is the same for a cut, so a paste elsewhere still rebuilds it', async () => {
+    await addMultiLineBlock()
+    await cutBlockIdsToClipboard(['multi'], repo)
+
+    expect(clipboardText).toBe('one\ntwo')
+    expect(clipboardHtml).toContain('km-outline')
   })
 })
 

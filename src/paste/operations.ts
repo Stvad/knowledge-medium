@@ -7,9 +7,11 @@ import { captureOccurrenceEdge, deleteBlock, moveBlocksInTx, revealChildren, typ
 import { listingSurfaceOf, type ListingSurface } from '@/data/childrenView'
 import { drawnChildrenOf, visibleChildrenOf } from '@/data/visibleChildren'
 import { pluralize } from '@/utils/pluralize.js'
+import { normalizeLineEndings } from '@/utils/string.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
 import {
+  bulletContent,
   parseMarkdownToBlocks,
   parsedBlocksFromOutline,
   type OutlineNode,
@@ -20,7 +22,7 @@ import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPla
 import { FacetRuntime } from '@/facets/facet.js'
 import { nestedWriteLocation } from '@/utils/drawnWalk'
 import { captureMediaVerb } from './captureMediaVerb.js'
-import { isBlankContent, shellPasteRequest } from './clipboard.js'
+import { isBlankContent, readAsyncClipboard, shellPasteRequest } from './clipboard.js'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
 
 type PastePosition = 'before' | 'after'
@@ -98,8 +100,6 @@ export interface SingleBlockPastePlan {
   cursor: number
 }
 
-const normalizeEditorLineEndings = (text: string): string => text.replace(/\r\n?/g, '\n')
-
 /** Plan a verbatim paste into the current block: replace the selected
  *  range with the pasted text, keeping its newlines. CRLF/CR are
  *  normalized to LF to match CodeMirror's own line-ending normalization,
@@ -108,7 +108,7 @@ export const planSingleBlockPaste = (
   pastedText: string,
   selection: { from: number; to: number },
 ): SingleBlockPastePlan => {
-  const insert = normalizeEditorLineEndings(pastedText)
+  const insert = normalizeLineEndings(pastedText)
   return {
     insert,
     from: selection.from,
@@ -127,10 +127,7 @@ const editorContentForFirstPastedLine = (
   const line = pastedText.split('\n').find(item => item.trim().length > 0)
   if (line === undefined) return fallback
 
-  const bullet = line.trim().match(/^[-*+]\s+(.*)$/)
-  if (bullet) return bullet[1]
-
-  return line.replace(/\r$/, '')
+  return bulletContent(line.trim()) ?? line.replace(/\r$/, '')
 }
 
 const insertionForFirstChild = (
@@ -515,11 +512,11 @@ export async function pasteEditModeMultilineText(
   const rootBlocks: Block[] = []
   let focusBlock = pasteTarget
   let focusOffset = plan.focusOffsetInTarget
-  const expectedContent = normalizeEditorLineEndings(plan.sourceContent)
+  const expectedContent = normalizeLineEndings(plan.sourceContent)
 
   await repo.tx(async tx => {
     const target = await currentPasteTarget(tx, pasteTarget.id, surface)
-    if (!target || normalizeEditorLineEndings(target.content) !== expectedContent) return
+    if (!target || normalizeLineEndings(target.content) !== expectedContent) return
     if (acceptEditorEdit && !acceptEditorEdit()) return
 
     // `visible`: the slot right after the edited line is its first-child slot
@@ -805,18 +802,14 @@ export async function resolvePasteWithMediaCapture(
  *  paste exactly as they do to the DOM block-shell paste; keeping all
  *  clipboard paste behind this one funnel stops a new call site from
  *  silently bypassing the seam. Falls back to the raw outline paste only
- *  when no runtime is installed yet (very early boot / minimal harness).
- *
- *  The clipboard API read is text-only, so `PasteRequest.html` is undefined
- *  on this surface — a format-aware override keyed on `text/html` (e.g.
- *  CSV→table from a spreadsheet copy) fires for DOM paste but not here. */
+ *  when no runtime is installed yet (very early boot / minimal harness). */
 export async function pasteFromClipboard(
   pasteTarget: Block,
   repo: Repo,
   options: PasteOptions = {},
 ): Promise<Block[]> {
-  const text = await navigator.clipboard.readText()
-  if (!text) return []
+  const {text, html} = await readAsyncClipboard()
+  if (!text && !html) return []
   const cutPaste = await pasteArmedCut(text, pasteTarget, repo, options)
   if (cutPaste) return cutPaste.kind === 'moved' ? cutPaste.blocks : []
 
@@ -825,9 +818,8 @@ export async function pasteFromClipboard(
 
   // The decision is a pure, synchronous policy (`runSync`); the clipboard text
   // is already in hand, so there's nothing to await before deciding.
-  const decision = pasteDecisionVerb.runSync(runtime, shellPasteRequest({text}, pasteTarget))
-  // This path is text-only (navigator.clipboard.readText carries no files), so a
-  // `media` decision can't arise — fall back to the text paste if one does.
+  const decision = pasteDecisionVerb.runSync(runtime, shellPasteRequest({text, html}, pasteTarget))
+  // This path reads no files, so a `media` decision can't arise — fall back to the text paste if one does.
   if (decision.kind === 'media') return pasteMultilineText(text, pasteTarget, repo, options)
   return pasteResolvedDecision({decision, text: decision.text ?? text}, pasteTarget, repo, options)
 }
