@@ -22,7 +22,7 @@ import { showError, showInfo, showSuccess } from '@/utils/toast.js'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import type { BlockRenderer } from '@/types.js'
-import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
+import { keyAtEnd, keysBetween, originalSiblingKeys } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
@@ -456,6 +456,7 @@ interface BlockDef {
 
 interface MessageNode extends BlockDef {
   originalPath: number[]
+  originalSiblingCount: number
   children?: MessageNode[]
 }
 
@@ -603,6 +604,7 @@ const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, p
     const next: MessageNode = {
       ...block,
       originalPath: blockPath,
+      originalSiblingCount: blocks.length,
       properties: mergeProperties(block.properties, promotion.promoted),
       children: promotedChildren.length ? promotedChildren : undefined,
     }
@@ -672,19 +674,11 @@ const createBlockTree = async (
   workspaceId: string,
   parentId: string,
   blockDefinitions: MessageNode[],
+  orderKeys: string[],
   eventId: string,
   rootProperties?: Record<string, unknown>,
 ): Promise<void> => {
-  if (!blockDefinitions.length) return
-
-  const existingChildren = await tx.childrenOf(parentId, workspaceId)
-  const orderKeys = keysBetween(
-    existingChildren.at(-1)?.orderKey ?? null,
-    null,
-    blockDefinitions.length,
-  )
-
-  for (const [index, block] of blockDefinitions.entries()) {
+  for (const block of blockDefinitions) {
     const isMessageRoot = block.originalPath.length === 1
     const merged = mergeProperties(isMessageRoot ? rootProperties : undefined, block.properties)
     // The message root is marked as a `matrix-message` block so its event
@@ -699,13 +693,14 @@ const createBlockTree = async (
       id: messageNodeId(workspaceId, eventId, block.originalPath),
       workspaceId,
       parentId,
-      orderKey: orderKeys[index],
+      orderKey: orderKeys[block.originalPath.at(-1)!],
       content: block.content,
       properties,
     })
 
-    if (Array.isArray(block.children) && block.children.length) {
-      await createBlockTree(tx, workspaceId, id, block.children, eventId)
+    if (block.children?.length) {
+      const childKeys = originalSiblingKeys(block.children[0].originalSiblingCount)
+      await createBlockTree(tx, workspaceId, id, block.children, childKeys, eventId)
     }
   }
 }
@@ -796,6 +791,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       workspaceId,
       tagBlockId,
       messageTree,
+      keysBetween(messageChildren.at(-1)?.orderKey ?? null, null, messageTree.length),
       eventId,
       {
         [eventIdProp.name]: eventId,
