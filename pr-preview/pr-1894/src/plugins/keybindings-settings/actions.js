@@ -1,0 +1,1 @@
+export{JP as openKeybindingsSettingsAction}from"../../../chunks/app-Dfzfvh6n.js";

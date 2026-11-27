@@ -1,0 +1,1 @@
+export{p8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-Dfzfvh6n.js";

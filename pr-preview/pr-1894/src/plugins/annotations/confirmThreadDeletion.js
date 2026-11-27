@@ -1,0 +1,1 @@
+export{sg as confirmThreadDeletion}from"../../../chunks/app-Dfzfvh6n.js";

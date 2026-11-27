@@ -1,0 +1,1 @@
+export{spt as deriveWorkspaceIdNamespace}from"../../../chunks/app-Dfzfvh6n.js";
