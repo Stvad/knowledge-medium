@@ -147,7 +147,12 @@ const parkWaiter = <K, W extends ParkedWaiter>(
   timeoutMs: number,
   onTimeout: () => void,
 ): void => {
+  const onClose = () => {
+    removeWaiter(map, key, waiter)
+    clearTimeout(waiter.timeout)
+  }
   waiter.timeout = setTimeout(() => {
+    request.off('close', onClose)
     removeWaiter(map, key, waiter)
     try {
       onTimeout()
@@ -155,10 +160,7 @@ const parkWaiter = <K, W extends ParkedWaiter>(
       /* socket closed in the same tick */
     }
   }, timeoutMs)
-  request.on('close', () => {
-    removeWaiter(map, key, waiter)
-    clearTimeout(waiter.timeout)
-  })
+  request.once('close', onClose)
   let set = map.get(key)
   if (!set) {
     set = new Set<W>()
@@ -724,7 +726,7 @@ const readCommandStatus = (
   id: CommandId,
   request: http.IncomingMessage,
   response: http.ServerResponse,
-  waitMs: number,
+  deadline: number,
 ): void => {
   const command = commands.get(id)
   if (!command) {
@@ -739,17 +741,18 @@ const readCommandStatus = (
     }
   }
 
-  if (waitMs === 0 || command.completedAt !== null) {
+  const remainingMs = deadline - performance.now()
+  if (remainingMs <= 0 || command.completedAt !== null) {
     sendCommandStatus(response, command)
     return
   }
 
-  // A parked GET may be the last request on an idle relay. Wake at the next
-  // relevant expiry and return the same snapshot a fresh GET would see.
-  const timeoutMs = Math.min(waitMs, commandExpiresAt(command) - now())
+  // A timer may wake before wall-clock expiry, or the command's expiry may
+  // have moved. Recheck both deadlines on wake.
+  const timeoutMs = Math.ceil(Math.min(remainingMs, commandExpiresAt(command) - now()))
   parkWaiter(resultWaiters, id, request, {response}, timeoutMs, () => {
     cleanup()
-    readCommandStatus(id, request, response, 0)
+    readCommandStatus(id, request, response, deadline)
   })
 }
 
@@ -956,7 +959,8 @@ const handleRequest = async (
 
     const commandMatch = requestUrl.pathname.match(/^\/runtime\/commands\/([^/]+)$/)
     if (request.method === 'GET' && commandMatch) {
-      readCommandStatus(commandMatch[1], request, response, parseTimeoutMs(requestUrl, 0))
+      const deadline = performance.now() + parseTimeoutMs(requestUrl, 0)
+      readCommandStatus(commandMatch[1], request, response, deadline)
       return
     }
 
