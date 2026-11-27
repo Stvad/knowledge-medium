@@ -38,6 +38,13 @@ beforeAll(() => {
     git(join(template, repo), 'config', 'user.name', 'test')
     git(join(template, repo), 'config', 'user.email', 'test@example.invalid')
   }
+  // A commit, and receive-pack in the origin, start a detached `git maintenance
+  // run --auto` that can still be touching objects/ while beforeEach copies the
+  // template or afterAll removes it.
+  for (const repo of ['origin.git', 'publisher', 'work']) {
+    git(join(template, repo), 'config', 'maintenance.auto', 'false')
+    git(join(template, repo), 'config', 'gc.auto', '0')
+  }
   commitFiles(join(template, 'publisher'), {
     'index.html': 'production',
     '.nojekyll': '',

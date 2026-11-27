@@ -12,6 +12,9 @@ let origin: string
 let fixtureUrl: string
 let page: Page
 let fixture: Awaited<ReturnType<typeof seedMarginFixture>>
+/** Full document loads of `page` after its fixture was ready. Hash routes
+ *  don't count; a dev-server dependency re-optimization reload does. */
+let reloadsSinceReady = 0
 
 beforeAll(async () => {
   cacheDir = await mkdtemp(resolve('node_modules/.vite-margin-browser-'))
@@ -32,10 +35,21 @@ beforeAll(async () => {
     // Apply each native wheel delta in one step for the geometry assertions.
     args: ['--disable-smooth-scrolling'],
   })
-})
+  // The cache dir starts empty, so the first boot also optimizes dependencies
+  // and transforms the whole app. Pay that here, not inside the first test,
+  // with waits sized for it.
+  await openFixture(COLD_BOOT_WAIT_MS)
+  await page.close()
+}, 300_000)
 
-beforeEach(async () => {
+beforeEach(() => openFixture())
+
+/** A cold boot's per-step wait: two to six times a warm boot's on CI. */
+const COLD_BOOT_WAIT_MS = 60_000
+
+async function openFixture(waitMs = 10_000) {
   if (!browser) throw new Error('Chromium did not start')
+  reloadsSinceReady = 0
   page = await browser.newPage({viewport: {width: 1440, height: 780}})
   const pageErrors: string[] = []
   page.on('pageerror', error => pageErrors.push(error.message))
@@ -45,6 +59,9 @@ beforeEach(async () => {
   await page.addInitScript(() => {
     localStorage.setItem('ftm.localOnly', 'true')
     localStorage.setItem('ftm.user', JSON.stringify({id: 'margin-fixture', name: 'Fixture Reviewer'}))
+    addEventListener('pointermove', event => {
+      Object.assign(window, {__marginTestPointer: {x: event.clientX, y: event.clientY}})
+    }, true)
   })
   await page.goto(origin, {waitUntil: 'commit', timeout: 15_000})
   try {
@@ -58,12 +75,15 @@ beforeEach(async () => {
   fixture = await page.evaluate<Awaited<ReturnType<typeof seedMarginFixture>>>(
     `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture())`,
   )
-  await card(fixture.first).waitFor({timeout: 10_000})
-  await margin().and(page.locator('[aria-busy="false"]')).waitFor({timeout: 10_000})
-})
+  await card(fixture.first).waitFor({timeout: waitMs})
+  await margin().and(page.locator('[aria-busy="false"]')).waitFor({timeout: waitMs})
+  page.on('load', () => { reloadsSinceReady++ })
+}
 
 afterEach(async () => {
+  const reloads = reloadsSinceReady
   await page?.close()
+  if (reloads > 0) throw new Error(`The page reloaded ${reloads} time(s) during the test, so its geometry is not the fixture's`)
 })
 
 afterAll(async () => {
@@ -86,24 +106,47 @@ const box = async (locator: Locator) => {
 const renderFrames = () => page.evaluate(() => new Promise<void>(resolve =>
   requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 
+/** Returns once the card sits `fromTop` below the port's top AND the margin
+ *  has stopped re-placing it: two consecutive samples agree. */
 const positionCard = async (locator: Locator, fromTop: number) => {
+  let previous: number | null = null
   await expect.poll(async () => {
     const [port, current] = await Promise.all([box(outline()), box(locator)])
     const delta = current.y - port.y - fromTop
     if (Math.abs(delta) >= 3) {
       await outline().evaluate((element, delta) => { element.scrollTop += delta }, delta)
+      previous = null
+      return `${Math.round(delta)} px from its place`
     }
-    return Math.abs(delta)
-  }, {timeout: 5_000}).toBeLessThan(3)
+    const settled = previous === current.y
+    const moved = `still moving (${previous} → ${current.y})`
+    previous = current.y
+    return settled ? 'settled' : moved
+  }, {timeout: 5_000}).toBe('settled')
 }
+
+/** Every element that can scroll under the pointer, innermost first, with its
+ *  offset: where a wheel went when it did not reach the outline. */
+const scrollersUnderPointer = () => page.evaluate(() => {
+  const {x, y} = (window as {__marginTestPointer?: {x: number, y: number}}).__marginTestPointer ?? {x: -1, y: -1}
+  const scrollers: string[] = []
+  for (let el = document.elementFromPoint(x, y); el; el = el.parentElement) {
+    if (!/auto|scroll/.test(getComputedStyle(el).overflowY) || el.scrollHeight <= el.clientHeight) continue
+    const name = el.getAttributeNames().find(attribute => attribute.startsWith('data-')) ?? el.tagName
+    scrollers.push(`${name} at ${el.scrollTop} of ${el.scrollHeight - el.clientHeight}`)
+  }
+  return `(${x}, ${y}): ${scrollers.join(' < ') || 'none'}`
+})
 
 const wheelOutline = async (delta: number) => {
   const before = await scrollTop()
+  const scrollersBefore = await scrollersUnderPointer()
   await page.mouse.wheel(0, delta)
   await expect.poll(async () => Math.abs(await scrollTop() - before - delta), {timeout: 3_000})
     .toBeLessThanOrEqual(2)
     .catch(async error => {
-      throw new Error(`Wheel ${delta} px moved the outline by ${(await scrollTop()) - before} px`, {cause: error})
+      throw new Error(`Wheel ${delta} px moved the outline by ${(await scrollTop()) - before} px. ` +
+        `Scrollers under the pointer before ${scrollersBefore}; after ${await scrollersUnderPointer()}`, {cause: error})
     })
 }
 
