@@ -1,1 +1,1 @@
-export{tc as TABLE_SURFACE,nc as gridDrawing,rc as gridOfHost,ic as isGridMounted,ac as registerGrid,oc as tableRenderScopeId}from"../../../chunks/app-CqABzAT6.js";
+export{$Z as TABLE_SURFACE,eQ as gridDrawing,tQ as gridInScope,nQ as gridOfHost,rQ as isGridMounted,iQ as notesInScope,aQ as registerGrid,oQ as tableNotesScopeId,sQ as tableRenderScopeId}from"../../../chunks/app-DB79IriR.js";

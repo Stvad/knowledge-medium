@@ -1,0 +1,1 @@
+export{pU as BlockReadText}from"../../../chunks/app-DB79IriR.js";
