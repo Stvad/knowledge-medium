@@ -1,1 +1,1 @@
-export{xG as AddPropertyForm}from"../../../chunks/app-Hjo-u15d.js";
+export{xG as AddPropertyForm}from"../../../chunks/app-8Z8bRG5f.js";
