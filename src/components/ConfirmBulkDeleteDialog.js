@@ -1,1 +1,1 @@
-export{UB as ConfirmBulkDeleteDialog}from"../../chunks/app-DppXURij.js";
+export{UB as ConfirmBulkDeleteDialog}from"../../chunks/app-ByOIzUI-.js";
