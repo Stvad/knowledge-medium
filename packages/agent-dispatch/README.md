@@ -41,6 +41,10 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.9.12
+
+A queued channel mention with `agent:cancel` set now parks with `agent:status=error` and `agent:error=cancelled` before delivery. Upgrade `@knowledge-medium/agent-dispatch` and restart the daemon.
+
 ## Upgrade to 0.9.11
 
 Publish `@knowledge-medium/agent-cli` 0.14.5 before publishing `@knowledge-medium/agent-dispatch` 0.9.11. Row tasks need the updated CLI for workspace-scoped reads and block creation timestamps. Install both releases and restart the dispatch daemon. Reload the app for exact reads of imported block IDs that look like references. If dispatch pairs with a headless host, update that host's checkout to a revision containing the bridge changes, refresh its dependencies and builds with `node scripts/ensure-deps.mjs`, and restart the headless host. Enabling `rowTasks` takes a fresh baseline even if the watcher already has a batch cursor.
