@@ -1,1 +1,0 @@
-export{DI as BlockEmbed}from"../../../chunks/app-Cl_R_xo6.js";

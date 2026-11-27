@@ -1,1 +1,0 @@
-export{BR as resolveAppRuntime,VR as resolveAppRuntimeSync}from"../../chunks/app-Cl_R_xo6.js";

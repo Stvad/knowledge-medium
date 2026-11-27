@@ -1,1 +1,0 @@
-export{fv as extensionApiCatalog,pv as extensionApiRuntimeExports}from"../../chunks/app-Cl_R_xo6.js";

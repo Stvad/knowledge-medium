@@ -1,1 +1,0 @@
-export{yn as AnnotatedFrame,bn as gesturesPlacement}from"../../../chunks/app-Cl_R_xo6.js";

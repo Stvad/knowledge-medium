@@ -1,1 +1,0 @@
-export{TR as gestureBindingDescriptor,ER as matchesGestureEvent}from"../../chunks/app-Cl_R_xo6.js";

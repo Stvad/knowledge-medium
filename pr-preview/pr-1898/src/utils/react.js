@@ -1,1 +1,0 @@
-export{AV as useIsMobile,jV as usePointerCoarse}from"../../chunks/app-Cl_R_xo6.js";

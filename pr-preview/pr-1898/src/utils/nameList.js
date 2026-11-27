@@ -1,1 +1,0 @@
-export{Vnt as NAMES_IN_A_SENTENCE,Hnt as describeNames,Unt as firstFew}from"../../chunks/app-Cl_R_xo6.js";

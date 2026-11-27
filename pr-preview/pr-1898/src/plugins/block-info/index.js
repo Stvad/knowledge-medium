@@ -1,1 +1,0 @@
-export{_x as blockInfoPlugin}from"../../../chunks/app-Cl_R_xo6.js";

@@ -1,1 +1,0 @@
-export{cd as appVersion}from"../chunks/app-Cl_R_xo6.js";

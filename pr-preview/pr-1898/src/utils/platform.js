@@ -1,1 +1,0 @@
-export{vJ as isIOS,yJ as isMacPlatform}from"../../chunks/app-Cl_R_xo6.js";

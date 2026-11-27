@@ -1,1 +1,0 @@
-export{PF as CommandPaletteHeaderItem}from"../../../chunks/app-Cl_R_xo6.js";

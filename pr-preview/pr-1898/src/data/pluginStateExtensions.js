@@ -1,1 +1,0 @@
-export{R3 as pluginPrefsExtension,z3 as pluginUIStateExtension}from"../../chunks/app-Cl_R_xo6.js";
