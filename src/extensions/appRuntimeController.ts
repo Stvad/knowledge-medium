@@ -24,6 +24,7 @@ export interface AppRuntimeContext extends FacetResolveContext {
   safeMode: boolean
 }
 
+type EffectContext = Pick<AppRuntimeContext, 'repo' | 'workspaceId' | 'safeMode'>
 type ReportBatch = Pick<BatchableKeyedStore<unknown>, 'beginBatch' | 'commitBatch' | 'abandonBatch'>
 /** Hands the runtime to the host before Repo installation. Reconcile after installation. */
 type RuntimeListener = (runtime: FacetRuntime) => void
@@ -45,7 +46,7 @@ export class AppRuntimeController {
   private readonly effects = new EffectReconciler()
 
   /** On a warm reload keep the merged runtime and its registries live while resolving. */
-  publishBaseIfCold(runtime: FacetRuntime, context: AppRuntimeContext, onRuntime?: RuntimeListener): void {
+  publishBaseIfCold(runtime: FacetRuntime, context: EffectContext, onRuntime?: RuntimeListener): void {
     const {repo, workspaceId, safeMode} = context
     if (!this.effects.isColdFor(repo, workspaceId, safeMode)) return
     this.publish(repo, runtime, onRuntime)
@@ -104,7 +105,8 @@ export class AppRuntimeController {
   /** Reconcile after the host adopts the published runtime. Eligibility can change on the same runtime. */
   reconcile(
     runtime: FacetRuntime,
-    {repo, workspaceId, safeMode}: AppRuntimeContext,
+    {repo, workspaceId, safeMode}: EffectContext,
+    // The headless host filters eligible effects by contribution provenance.
     filter?: (contribution: FacetContribution<AppEffect>) => boolean,
   ): void {
     if (!workspaceId) {
@@ -118,6 +120,7 @@ export class AppRuntimeController {
     this.effects.reconcile(repo, runtime, workspaceId, safeMode, effects)
   }
 
+  /** The host must abort any in-flight resolution before disposing effects. */
   dispose(): void {
     this.effects.dispose()
   }

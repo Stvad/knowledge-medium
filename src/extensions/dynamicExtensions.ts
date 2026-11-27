@@ -317,6 +317,7 @@ const validateAndPrefix = (
 
 const extensionContributionSource = (blockId: string): string => `block:${blockId}`
 
+/** Matches only the complete block ID in `block:<id>` or `block:<id>/…`. */
 export const isExtensionContribution = (source: unknown, blockId: string): boolean => {
   if (typeof source !== 'string') return false
   const prefix = extensionContributionSource(blockId)

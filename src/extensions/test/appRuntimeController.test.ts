@@ -20,6 +20,22 @@ import type {BlockData} from '@/types.js'
 
 const labels = defineFacet<string>({id: 'test.runtime-controller.labels'})
 
+const deferred = () => {
+  let release!: () => void
+  const promise = new Promise<void>(resolve => { release = resolve })
+  return {promise, release}
+}
+
+const approveBlock = async (persistent: InMemoryCompiledModuleCache, block: BlockData) => {
+  await persistent.write(block.id, {
+    sourceHash: await hashExtensionSource(block.content),
+    approvedSource: block.content,
+    compiled: block.content,
+    compilerVersion: COMPILER_VERSION,
+    approvedAt: 0,
+  })
+}
+
 const makeHost = (blocks: BlockData[] = []) => {
   const errorStore = new ExtensionLoadErrorStore()
   const approvalStore = new ExtensionApprovalStatusStore()
@@ -39,13 +55,7 @@ describe('AppRuntimeController', () => {
     const host = makeHost([approved, pending])
     const {context, errorStore, approvalStore, setFacetRuntime} = host
     const persistent = new InMemoryCompiledModuleCache()
-    await persistent.write(approved.id, {
-      sourceHash: await hashExtensionSource(approved.content),
-      approvedSource: approved.content,
-      compiled: approved.content,
-      compilerVersion: COMPILER_VERSION,
-      approvedAt: 0,
-    })
+    await approveBlock(persistent, approved)
     const disabled = systemToggle({id: 'system:disabled', name: 'Disabled'})
     const overrides = new Map([[approved.id, true], [pending.id, true], [disabled.id, false]])
     const order: string[] = []
@@ -209,6 +219,158 @@ describe('AppRuntimeController', () => {
     expect(host.errorStore.getSnapshot().get('active')).toBe(failure)
     host.approvalStore.commitBatch()
     expect(host.approvalStore.getSnapshot().get('active')?.kind).toBe('needs-approval')
+  })
+
+  it('keeps a superseded compile error out of the current batch and the host callback', async () => {
+    const block = makeBlockData({id: 'broken', workspaceId: 'ws', content: 'fixture'})
+    const host = makeHost([block])
+    const controller = new AppRuntimeController()
+    const persistent = new InMemoryCompiledModuleCache()
+    await approveBlock(persistent, block)
+    const oldSignal = new AbortController()
+    const finishCompile = deferred()
+    const finishNew = deferred()
+    const failure = new Error('Compilation failed')
+    const onLoadError = vi.fn()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const compile = vi.fn(async () => {
+      await finishCompile.promise
+      throw failure
+    })
+    const restoreCompile = __setCompileImplForTest(compile)
+    const newBeforePublish = vi.fn(() => finishNew.promise)
+    const options = {...host, baseExtensions: [], cache: createCompileCache(), persistent, onLoadError}
+    const oldLoad = controller.resolve({
+      ...options, overrides: new Map([[block.id, true]]), signal: oldSignal.signal,
+    })
+
+    try {
+      await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(1))
+      oldSignal.abort()
+      const newLoad = controller.resolve({
+        ...options,
+        overrides: new Map(),
+        signal: new AbortController().signal,
+        beforePublish: newBeforePublish,
+      })
+      await vi.waitFor(() => expect(newBeforePublish).toHaveBeenCalledTimes(1))
+
+      finishCompile.release()
+      expect(await oldLoad).toBeUndefined()
+      expect(log).toHaveBeenCalledWith(`Failed to load extension block ${block.id}`, failure)
+      finishNew.release()
+      expect(await newLoad).toBeDefined()
+
+      expect([...host.errorStore.getSnapshot()]).toEqual([])
+      expect(onLoadError).not.toHaveBeenCalled()
+    } finally {
+      finishCompile.release()
+      finishNew.release()
+      await oldLoad
+      restoreCompile()
+      log.mockRestore()
+    }
+  })
+
+  it('publishes the new reports when a superseded resolution rejects', async () => {
+    const block = makeBlockData({id: 'pending', workspaceId: 'ws'})
+    const host = makeHost([block])
+    const controller = new AppRuntimeController()
+    const oldSignal = new AbortController()
+    const finishOld = deferred()
+    const finishNew = deferred()
+    const failure = new Error('Old host readiness rejected')
+    const currentReport = new Error('Current load error')
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const options = {...host, baseExtensions: [], persistent: new InMemoryCompiledModuleCache()}
+    const oldBeforePublish = vi.fn(async () => {
+      await finishOld.promise
+      throw failure
+    })
+    const newBeforePublish = vi.fn(() => {
+      host.errorStore.reportError('current', currentReport)
+      return finishNew.promise
+    })
+    const oldLoad = controller.resolve({
+      ...options,
+      overrides: new Map(),
+      signal: oldSignal.signal,
+      beforePublish: oldBeforePublish,
+    })
+
+    try {
+      await vi.waitFor(() => expect(oldBeforePublish).toHaveBeenCalledTimes(1))
+      oldSignal.abort()
+      const newLoad = controller.resolve({
+        ...options,
+        overrides: new Map([[block.id, true]]),
+        signal: new AbortController().signal,
+        beforePublish: newBeforePublish,
+      })
+      await vi.waitFor(() => expect(newBeforePublish).toHaveBeenCalledTimes(1))
+      expect(host.errorStore.getSnapshot().size).toBe(0)
+      expect(host.approvalStore.getSnapshot().size).toBe(0)
+
+      finishOld.release()
+      expect(await oldLoad).toBeUndefined()
+      expect(log).toHaveBeenCalledWith('Failed to resolve app runtime', failure)
+      finishNew.release()
+      expect(await newLoad).toBeDefined()
+
+      expect([...host.errorStore.getSnapshot()]).toEqual([['current', currentReport]])
+      expect(host.approvalStore.getSnapshot().get(block.id)?.kind).toBe('needs-approval')
+    } finally {
+      finishOld.release()
+      finishNew.release()
+      await oldLoad
+      log.mockRestore()
+    }
+  })
+
+  it('leaves reporters live after resolving without a workspace', async () => {
+    const host = makeHost()
+    const extension = vi.fn(() => null)
+    const runtime = await new AppRuntimeController().resolve({
+      ...host,
+      context: {...host.context, workspaceId: null},
+      baseExtensions: [extension],
+      overrides: new Map(),
+      signal: new AbortController().signal,
+    })
+    expect(runtime).toBeUndefined()
+    expect(extension).not.toHaveBeenCalled()
+    expect(host.setFacetRuntime).not.toHaveBeenCalled()
+
+    const failure = new Error('Later error')
+    const approval = {kind: 'needs-approval', name: 'Later approval', liveHash: 'hash'} as const
+    host.errorStore.reportError('later', failure)
+    host.approvalStore.report('later', approval)
+    expect(host.errorStore.getSnapshot().get('later')).toBe(failure)
+    expect(host.approvalStore.getSnapshot().get('later')).toEqual(approval)
+  })
+
+  it('stops running effects when the workspace is cleared', () => {
+    const {context} = makeHost()
+    const controller = new AppRuntimeController()
+    const cleanup = vi.fn()
+    const start = vi.fn(() => cleanup)
+    const runtime = resolveAppRuntimeSync([appEffectsFacet.of({id: 'running', start})], {
+      overrides: new Map(), context,
+    })
+
+    try {
+      controller.reconcile(runtime, context)
+      expect(start).toHaveBeenCalledTimes(1)
+
+      controller.reconcile(runtime, {...context, workspaceId: null})
+      expect(cleanup).toHaveBeenCalledTimes(1)
+      expect(start).toHaveBeenCalledTimes(1)
+
+      controller.reconcile(runtime, context)
+      expect(start).toHaveBeenCalledTimes(2)
+    } finally {
+      controller.dispose()
+    }
   })
 
   it('publishes the base on a cold context and holds the merged runtime on a warm reload', async () => {
