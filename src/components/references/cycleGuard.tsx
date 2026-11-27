@@ -17,3 +17,10 @@ export const BlockRefAncestorsProvider = ({
 
   return <BlockRefAncestorsContext value={value}>{children}</BlockRefAncestorsContext>
 }
+
+const NO_ANCESTORS: ReadonlySet<string> = new Set()
+
+/** Starts a fresh ref chain, for a surface the user opens by hand (a link
+ *  preview) rather than one the content renders on its own. */
+export const BlockRefAncestorsRoot = ({children}: {children: ReactNode}) =>
+  <BlockRefAncestorsContext value={NO_ANCESTORS}>{children}</BlockRefAncestorsContext>

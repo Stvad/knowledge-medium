@@ -140,6 +140,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'ShortcutSurfaceContext',
     ],
   },
+  {
+    category: 'block-interaction',
+    importPath: '@/extensions/blockLinkDecorators.js',
+    description: 'Link decorators — wrap the anchor of every block reference and page link.',
+    exports: ['blockLinkDecoratorsFacet'],
+    types: ['BlockLinkAnchorProps', 'BlockLinkDecorator', 'BlockLinkDecoratorProps', 'BlockLinkTarget'],
+  },
 
   // --- Markdown -------------------------------------------------------------
   {

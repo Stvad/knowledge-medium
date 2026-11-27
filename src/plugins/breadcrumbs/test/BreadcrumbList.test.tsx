@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import type { MouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import { BreadcrumbList } from '../BreadcrumbList.tsx'
 
-const {innerLinkClick} = vi.hoisted(() => ({
+const {innerLinkClick, cardClick} = vi.hoisted(() => ({
   innerLinkClick: vi.fn(),
+  cardClick: vi.fn(),
 }))
 
 vi.mock('@/components/BlockComponent.tsx', () => ({
@@ -21,6 +23,10 @@ vi.mock('@/components/BlockComponent.tsx', () => ({
       }}
     >
       Linked child
+      {blockId === 'with-card' && createPortal(
+        <button data-testid="portalled-card" onClick={cardClick}>Card</button>,
+        document.body,
+      )}
     </a>
   ),
 }))
@@ -28,9 +34,21 @@ vi.mock('@/components/BlockComponent.tsx', () => ({
 afterEach(() => {
   cleanup()
   innerLinkClick.mockClear()
+  cardClick.mockClear()
 })
 
 describe('BreadcrumbList', () => {
+  it('leaves clicks in a card portalled from its content (a link preview) to the card', () => {
+    const parent = {id: 'with-card'} as Block
+    const onSelect = vi.fn()
+    render(<BreadcrumbList parents={[parent]} workspaceId="workspace" overrides={{}} onSelect={onSelect}/>)
+
+    fireEvent.click(screen.getByTestId('portalled-card'))
+
+    expect(cardClick).toHaveBeenCalledOnce()
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
   it('lets breadcrumb clicks win over links rendered inside the preview', () => {
     const parent = {id: 'parent-block'} as Block
     const onSelect = vi.fn()
