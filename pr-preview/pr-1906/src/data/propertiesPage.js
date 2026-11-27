@@ -1,1 +1,1 @@
-export{wft as getOrCreatePropertiesPage,Tft as propertiesPageBlockId,Eft as propertiesPageSpec}from"../../chunks/app-CTG49wdq.js";
+export{wft as getOrCreatePropertiesPage,Tft as propertiesPageBlockId,Eft as propertiesPageSpec}from"../../chunks/app-BppOdq28.js";

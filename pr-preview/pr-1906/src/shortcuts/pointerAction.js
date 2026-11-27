@@ -1,1 +1,1 @@
-export{DR as dispatchPointerAction,OR as setPointerActionDispatcher}from"../../chunks/app-CTG49wdq.js";
+export{DR as dispatchPointerAction,OR as setPointerActionDispatcher}from"../../chunks/app-BppOdq28.js";

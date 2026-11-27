@@ -1,1 +1,1 @@
-export{kft as DerivedIdNamespaceUnavailableError,Aft as derivedIdNamespaceInTx,jft as resolveDerivedIdNamespace}from"../../chunks/app-CTG49wdq.js";
+export{kft as DerivedIdNamespaceUnavailableError,Aft as derivedIdNamespaceInTx,jft as resolveDerivedIdNamespace}from"../../chunks/app-BppOdq28.js";

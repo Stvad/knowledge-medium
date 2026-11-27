@@ -1,1 +1,1 @@
-export{x_ as ProfilePicture}from"../../../chunks/app-CTG49wdq.js";
+export{x_ as ProfilePicture}from"../../../chunks/app-BppOdq28.js";

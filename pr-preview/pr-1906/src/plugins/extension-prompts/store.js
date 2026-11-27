@@ -1,1 +1,1 @@
-export{qL as extensionPromptStore,JL as pendingExtensionPrompts}from"../../../chunks/app-CTG49wdq.js";
+export{qL as extensionPromptStore,JL as pendingExtensionPrompts}from"../../../chunks/app-BppOdq28.js";

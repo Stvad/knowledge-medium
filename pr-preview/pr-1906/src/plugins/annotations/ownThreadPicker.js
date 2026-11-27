@@ -1,1 +1,1 @@
-export{ch as moveCommentToOwnThread}from"../../../chunks/app-CTG49wdq.js";
+export{ch as moveCommentToOwnThread}from"../../../chunks/app-BppOdq28.js";
