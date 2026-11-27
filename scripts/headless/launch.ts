@@ -6,7 +6,7 @@ import {DEVICE_STORAGE_FILENAME, readConfig} from './config.ts'
 const [action, ...args] = process.argv.slice(2)
 const [file, ...extra] = action === 'storage' ? args.slice(1) : args
 const releaseStaleQueue = action === 'run' && extra.length === 1 && extra[0] === '--release-stale-queue'
-const setStorage = action === 'storage' && args[0] === 'set' && extra.length === 1 && Boolean(extra[0])
+const setStorage = action === 'storage' && args[0] === 'set' && extra.length === 1
 if (!file || !(((action === 'login' || action === 'run') && extra.length === 0) || releaseStaleQueue || setStorage)) {
   throw new Error([
     'Usage:',

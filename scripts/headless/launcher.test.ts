@@ -1,20 +1,23 @@
 import {execFile} from 'node:child_process'
-import {mkdtemp, rm, writeFile} from 'node:fs/promises'
+import {mkdtemp, readdir, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {promisify} from 'node:util'
 import {createBridgeClient} from '@knowledge-medium/agent-cli/client'
 import {expect, it, vi} from 'vitest'
 import {startBridge} from '../agent-eval/hosting'
+import {PID_FILENAME} from './config'
 
 const run = promisify(execFile)
 
+// The isolated bridge, Vite graph and database boot took 20 s in a loaded run.
 it('serves health and reads over the bridge from a production vite-node host without a document', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'headless-launcher-'))
   let bridge: Awaited<ReturnType<typeof startBridge>> | undefined
   let host: ReturnType<typeof run> | undefined
   try {
     const config = join(dir, 'config.json')
+    const stateDir = join(dir, 'device')
     await writeFile(config, JSON.stringify({workspaceId: 'fixture', profile: 'test', mode: 'plaintext', stateDir: 'device'}))
     bridge = await startBridge(dir)
     const token = 'fixture-bridge-token'
@@ -34,8 +37,9 @@ it('serves health and reads over the bridge from a production vite-node host wit
         VITE_POWERSYNC_URL: 'https://sync.invalid',
       },
       timeout: 45_000,
+      killSignal: 'SIGKILL',
     })
-    const client = createBridgeClient({bridgeUrl: bridge.url, token, timeoutMs: 5_000})
+    const client = createBridgeClient({bridgeUrl: bridge.url, token, workspaceId: 'fixture', timeoutMs: 5_000})
     await Promise.race([
       vi.waitFor(async () => expect(await client.runCommand({type: 'health'})).toMatchObject({
         host: {closedReason: null, timeZone: 'Pacific/Honolulu'},
@@ -45,10 +49,12 @@ it('serves health and reads over the bridge from a production vite-node host wit
     expect(await client.runCommand({type: 'sql', sql: 'SELECT 1 AS n'})).toEqual([{n: 1}])
     expect(await client.runCommand({type: 'runtime-summary'})).toMatchObject({activeWorkspaceId: 'fixture'})
     expect(await client.runCommand({type: 'describe-runtime', brief: true})).toMatchObject({activeWorkspaceId: 'fixture'})
+    expect(await readdir(stateDir)).toContain(PID_FILENAME)
     host.child.kill('SIGTERM')
     await host
+    expect(await readdir(stateDir)).not.toContain(PID_FILENAME)
   } finally {
-    host?.child.kill('SIGTERM')
+    host?.child.kill('SIGKILL')
     await host?.catch(() => {})
     bridge?.stop()
     await rm(dir, {recursive: true, force: true})

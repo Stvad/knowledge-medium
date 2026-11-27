@@ -11,7 +11,7 @@ let dir: string
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'headless-lock-')) })
 afterEach(async () => { await rm(dir, {recursive: true, force: true}) })
 
-// Each case starts a Node process and loads the launcher (318–334 ms in isolation).
+// Each case starts a Node process and loads Vite (1.2–5.4 s in a loaded run).
 it.each(['run', 'login', 'storage set'])('%s on a held state directory exits before opening storage', async action => {
   const stateDir = join(dir, 'device')
   const config = join(dir, 'config.json')
