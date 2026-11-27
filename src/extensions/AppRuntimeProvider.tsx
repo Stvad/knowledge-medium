@@ -143,6 +143,7 @@ export function AppRuntimeProvider({
 
     void (async () => {
       try {
+        const utilitiesCss = ensureExtensionUtilitiesCss()
         const nextRuntime = await resolveAppRuntime([
           baseExtensions,
           dynamicExtensionsExtension({
@@ -171,15 +172,10 @@ export function AppRuntimeProvider({
           }),
         ], {overrides, safeMode, context: runtimeContext})
 
-        // Dynamic extensions render with the deferred Tailwind safelist
-        // (`extension-utilities.css`), which their compile kicked off; wait
-        // for it so their first paint is styled. Bounded: a stalled
-        // stylesheet must not hold the runtime hostage. A workspace with no
-        // dynamic extensions starts the load here instead and waits once;
-        // the apply changes nothing visible there.
+        // A stalled extension stylesheet must not hold the runtime hostage.
         let waitTimer: ReturnType<typeof setTimeout> | undefined
         await Promise.race([
-          ensureExtensionUtilitiesCss(),
+          utilitiesCss,
           new Promise(resolve => { waitTimer = setTimeout(resolve, SAFELIST_WAIT_MS) }),
         ])
         clearTimeout(waitTimer)

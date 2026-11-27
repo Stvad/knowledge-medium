@@ -1,6 +1,6 @@
 {
   "name": "@knowledge-medium/agent-cli",
-  "version": "0.14.4",
+  "version": "0.15.0",
   "description": "CLI, local HTTP bridge, and graph MCP server for driving the Knowledge Medium app from local agents.",
   "keywords": [
     "cli",
@@ -40,6 +40,8 @@
     "./server": "./dist/server.js",
     "./client": "./dist/client.js",
     "./config": "./dist/config.js",
+    "./extensionImportSyntax": "./dist/extensionImportSyntax.js",
+    "./freezeExtensionImports": "./dist/freezeExtensionImports.js",
     "./graph": "./dist/graph.js",
     "./mcpShared": "./dist/mcpShared.js",
     "./mcpServer": "./dist/mcpServer.js",
@@ -61,7 +63,10 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
+    "@babel/parser": "^8.1.0",
+    "@babel/types": "^8.1.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@scure/base": "^2.4.0",
     "cac": "^7.1.0",
     "zod": "^4.6.7"
   }

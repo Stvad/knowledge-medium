@@ -56,10 +56,12 @@ const toastSignature = (prompt: PendingExtensionPrompt): string =>
 const promptMessage = (prompt: PendingExtensionPrompt): string =>
   prompt.kind === 'needs-approval'
     ? `“${prompt.name}” isn't enabled on this device`
-    : `“${prompt.name}” has an update available`
+    : prompt.kind === 'imports-unpinned'
+      ? `“${prompt.name}” loads imports from a live URL`
+      : `“${prompt.name}” has an update available`
 
 const primaryLabel = (prompt: PendingExtensionPrompt): string =>
-  prompt.kind === 'needs-approval' ? 'Enable' : 'Update'
+  prompt.kind === 'needs-approval' ? 'Enable' : prompt.kind === 'imports-unpinned' ? 'Pin imports' : 'Update'
 
 const showPromptToast = (repo: Repo, prompt: PendingExtensionPrompt): void => {
   showInfo(promptMessage(prompt), {
@@ -76,7 +78,7 @@ const showPromptToast = (repo: Repo, prompt: PendingExtensionPrompt): void => {
         // put as the retry affordance (the error was already surfaced by
         // approveExtensionHere).
         event?.preventDefault()
-        void approveExtensionHere(repo, prompt.blockId, prompt.name).then((ok) => {
+        void approveExtensionHere(repo, prompt.blockId, prompt).then((ok) => {
           if (!ok) return
           // A fresh approval supersedes any earlier dismissal so a future
           // update can nudge again (and localStorage stays tidy).

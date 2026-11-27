@@ -71,6 +71,7 @@ import {
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
+import { normalizeExtensionSource } from '@/extensions/normalizeExtensionSource.js'
 import {
   definitionSeedsFacet,
   queriesFacet,
@@ -1291,7 +1292,7 @@ const installRuntimeExtension = async (
   input: InstallExtensionInput,
   context: AgentRuntimeContext,
 ): Promise<InstallExtensionResult> => {
-  const source = input.source.trimEnd()
+  const source = normalizeExtensionSource(input.source)
   if (!source) throw new Error('install-extension requires non-empty source')
 
   // description=null means "leave existing description untouched on update,

@@ -300,7 +300,7 @@ describe('ExtensionsSettings', () => {
 
   it('renders an "Enable here" affordance for a user extension that needs approval here', async () => {
     const store = new ExtensionApprovalStatusStore()
-    store.report('block-uuid-1', {kind: 'needs-approval', name: 'Custom Editor', liveHash: 'h'})
+    store.report('block-uuid-1', {kind: 'needs-approval', name: 'Custom Editor', liveSource: 'SRC', liveHash: 'h'})
     const onApprove = vi.fn()
 
     render(
@@ -326,7 +326,7 @@ describe('ExtensionsSettings', () => {
     store.report('block-uuid-1', {
       kind: 'update-available',
       name: 'Custom Editor',
-      liveHash: 'h2',
+      liveSource: 'SRC', liveHash: 'h2',
       approvedHash: 'h1',
     })
 

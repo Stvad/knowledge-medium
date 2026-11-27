@@ -1,3 +1,4 @@
+import * as compiler from '@/extensions/transpileExtension.js'
 // File-scoped IndexedDB polyfill — sets global `indexedDB`/`IDBKeyRange`
 // for this test file only (vitest isolates modules per file), so the
 // real IndexedDbCompiledModuleCache path runs in Node. Our records are
@@ -12,8 +13,7 @@ import {
   type CompiledRecord,
 } from '@/extensions/compiledModuleCache'
 import {
-  __setInstantiateImplForTest,
-  __setTranspileImplForTest,
+  setExtensionCompilePlatform,
   approveExtension,
   COMPILER_VERSION,
   createCompileCache,
@@ -100,14 +100,14 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // Stub the pipeline so no real Babel / blob-URL import runs: transpile
     // tags the source, instantiate exposes which compiled string it built
     // from (and counts, so we can assert approve never instantiates).
-    restoreTranspile = __setTranspileImplForTest(async (content) => {
+    restoreTranspile = vi.spyOn(compiler, 'transpileExtension').mockImplementation(async (content) => {
       transpileCount += 1
-      return `transpiled:${content}`
-    })
-    restoreInstantiate = __setInstantiateImplForTest(async (compiled) => {
+      return {compiled: `transpiled:${content}`, importsUnpinned: false, pinnedImports: new Map()}
+    }).mockRestore
+    restoreInstantiate = setExtensionCompilePlatform({allowUnpinnedLive: true, instantiate: async ({compiled}) => {
       instantiateCount += 1
       return {default: compiled}
-    })
+    }})
   })
 
   afterEach(() => {
@@ -137,9 +137,9 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // The runtime error must surface later via the loader's errorReporter,
     // not abort the approve/enable action (#67 review).
     restoreInstantiate()
-    restoreInstantiate = __setInstantiateImplForTest(async () => {
+    restoreInstantiate = setExtensionCompilePlatform({allowUnpinnedLive: true, instantiate: async () => {
       throw new Error('module threw at import-eval')
-    })
+    }})
     const persistent = new InMemoryCompiledModuleCache()
 
     const result = await approveExtension('block-1', 'SRC', persistent) // does NOT throw

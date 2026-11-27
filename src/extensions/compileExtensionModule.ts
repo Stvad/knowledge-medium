@@ -1,10 +1,12 @@
 import { hex } from '@scure/base'
+import {extensionModuleParser, sourcePinnedImports} from '@knowledge-medium/agent-cli/extensionImportSyntax'
 import {
   getCompiledModuleCache,
   type CompiledModuleCache,
   type CompiledRecord,
 } from '@/extensions/compiledModuleCache.js'
-import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
+import {transpileExtension} from './transpileExtension.js'
+export {EXTENSION_BABEL_PRESETS} from './transpileExtension.js'
 
 // Bump when the Babel major, preset list or transform options change so older
 // cache entries (in-memory OR persisted) don't deliver wrong-shaped
@@ -17,22 +19,8 @@ import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.
 // '3': JSX uses the automatic runtime (`react/jsx-runtime` via the page import
 // map) instead of the `React` global.
 // '4': Babel 8. Uninitialized class fields are kept, not deleted.
-export const COMPILER_VERSION = '4'
-
-/** Babel presets the extension loader transpiles with; tests that mirror the
- *  loader import this rather than restate it. The AUTOMATIC JSX runtime keeps
- *  an extension's JSX on the host's React: it imports its factory from
- *  `react/jsx-runtime`, which the page import map resolves to the module the
- *  app itself uses. The classic runtime would emit `React.createElement` and
- *  depend on whichever `React` global happens to be in scope.
- *
- *  `onlyRemoveTypeImports: false` erases an import whose bindings are used
- *  only as types even when it is not written `import type`. Stored extensions
- *  rely on that, and a kept import of a type-only export fails to link. */
-export const EXTENSION_BABEL_PRESETS: Array<[string, object]> = [
-  ['react', {runtime: 'automatic'}],
-  ['typescript', {onlyRemoveTypeImports: false}],
-]
+// '5': validate compiled imports and link pinned modules from approved bytes.
+export const COMPILER_VERSION = '5'
 
 export type ExtensionModule = Record<string, unknown>
 
@@ -42,6 +30,7 @@ export interface CompileResult {
    *  compiler-version salt). For an approved load this is the APPROVED
    *  source hash (the pin), not the live block content's hash. */
   contentHash: string
+  importsUnpinned?: boolean
 }
 
 /**
@@ -59,7 +48,7 @@ export interface CompileCache {
   // A live module belongs to one extension block: its declaration handles may
   // be bound to that block's durable seed identities. This still dedupes
   // concurrent compiles of the same block content.
-  byBlockAndHash: Map<string, Map<string, Promise<ExtensionModule>>>
+  byBlockAndHash: Map<string, Map<string, Promise<CompileResult>>>
 }
 
 export const createCompileCache = (): CompileCache => ({
@@ -70,52 +59,26 @@ export const createCompileCache = (): CompileCache => ({
 // remain cached until their owning block is evicted or the page tears down.
 const defaultCache = createCompileCache()
 
-// ──────────────────────────────────────────────────────────────────────
-// Injectable pipeline seams (test-only overrides)
-//
-// The compile pipeline is two steps so the persistent cache can store
-// the transpiled string and rebuild a module from it without Babel:
-//   transpile(source) -> JS string   (the expensive, Babel-loading half)
-//   instantiate(JS)   -> module       (blob-URL ESM import)
-//
-// `compileImpl` is a *full* override (source -> module) that bypasses
-// persistence + Babel entirely — kept for the many existing tests that
-// just want to hand back a module. When set, the persistent cache is not
-// touched.
-// ──────────────────────────────────────────────────────────────────────
-
 export type CompileImpl = (content: string) => Promise<ExtensionModule>
-// `blockId` is threaded so the transpiled output can carry a stable,
-// per-block `//# sourceURL` (readable name in DevTools / stack traces).
-// Optional so existing 1-arg test overrides stay assignable.
-export type TranspileImpl = (content: string, blockId?: string) => Promise<string>
-export type InstantiateImpl = (compiled: string) => Promise<ExtensionModule>
+export interface ExtensionCompilePlatform {
+  instantiate: (record: CompiledRecord, blockId: string) => Promise<ExtensionModule>
+  allowUnpinnedLive: boolean
+}
 
 let compileImplOverride: CompileImpl | null = null
-let transpileImpl: TranspileImpl = defaultTranspileViaBabel
-let instantiateImpl: InstantiateImpl = defaultInstantiateViaBlob
+let platform: ExtensionCompilePlatform = {instantiate: defaultInstantiateViaBlob, allowUnpinnedLive: true}
+
+export function setExtensionCompilePlatform(next: ExtensionCompilePlatform): () => void {
+  const previous = platform
+  platform = next
+  return () => { platform = previous }
+}
 
 export function __setCompileImplForTest(impl: CompileImpl): () => void {
   const previous = compileImplOverride
   compileImplOverride = impl
   return () => {
     compileImplOverride = previous
-  }
-}
-
-export function __setTranspileImplForTest(impl: TranspileImpl): () => void {
-  const previous = transpileImpl
-  transpileImpl = impl
-  return () => {
-    transpileImpl = previous
-  }
-}
-
-export function __setInstantiateImplForTest(impl: InstantiateImpl): () => void {
-  const previous = instantiateImpl
-  instantiateImpl = impl
-  return () => {
-    instantiateImpl = previous
   }
 }
 
@@ -133,63 +96,40 @@ export async function hashExtensionSource(content: string): Promise<string> {
   return hex.encode(new Uint8Array(digest))
 }
 
-/** Transpile TS/JSX source to JS. Babel is loaded with a dynamic
- *  `import()` so the large `@babel/standalone` leaves the eager
- *  startup preload set (#167) — it's fetched/evaluated only here, on a
- *  genuine compile-cache miss.
- *
- *  Two debuggability additions (COMPILER_VERSION 2):
- *   - `sourceMaps: 'inline'` + `sourceFileName` embeds a base64 source map
- *     (with the original TSX in `sourcesContent`) so DevTools maps stack
- *     frames / breakpoints back to the author's source, not the transpiled
- *     JS.
- *   - a trailing `//# sourceURL` names the in-memory script. The blob URL is
- *     revoked the instant the import resolves, so without this a throw shows
- *     `blob:<uuid>` with no name; the sourceURL survives revocation and, when
- *     `blockId` is known, identifies *which* extension a frame came from.
- *  Note: live modules are cached per block as well as source hash so the
- *  sourceURL consistently identifies the owning extension block. */
-async function defaultTranspileViaBabel(content: string, blockId?: string): Promise<string> {
-  const Babel = await import('@babel/standalone')
-  // SECURITY: block ids are NOT trusted input — `tx.create` accepts a
-  // caller-supplied id and ids also arrive via sync/import, all stored as
-  // plain text. A raw id with a line terminator (\n, \r, U+2028, U+2029) would
-  // break out of the `//# sourceURL` line comment appended below and inject
-  // module-level JS that runs at instantiate — code that was never in the
-  // approved `content`/`sourceHash`, defeating the #67 trust gate. Restrict the
-  // id to a safe charset before it touches emitted JS. The sourceURL is a
-  // cosmetic DevTools label, so aggressive sanitization costs nothing
-  // (legitimate nanoid/uuid ids are already within this set).
-  const safeId = (blockId ?? 'extension-block').replace(/[^A-Za-z0-9._-]/g, '_')
-  const sourceName = `${safeId}.tsx`
-  const transpiled = Babel.transform(content, {
-    filename: sourceName,
-    sourceFileName: sourceName,
-    sourceMaps: 'inline',
-    presets: EXTENSION_BABEL_PRESETS,
-  })?.code
-  if (!transpiled) throw new Error('Transpiled extension code is empty')
-  return `${transpiled}\n//# sourceURL=km-extension://${sourceName}`
-}
-
 /** Build an ESM module from already-transpiled JS via a blob URL. This
  *  is the only step that touches the network/loader, and the only step
  *  that runs on a persistent-cache hit (no Babel). */
-async function defaultInstantiateViaBlob(compiled: string): Promise<ExtensionModule> {
-  const blob = new Blob([compiled], {type: 'text/javascript'})
-  const blobUrl = URL.createObjectURL(blob)
+async function defaultInstantiateViaBlob(record: CompiledRecord): Promise<ExtensionModule> {
+  const urls = new Map<string, string>()
   try {
-    return (await import(/* @vite-ignore */ blobUrl)) as ExtensionModule
+    let compiled = record.compiled
+    if (compiled.includes('km-vendored:')) {
+      const {linkVendoredImports} = await import('./extensionImportPolicy.js')
+      const parse = await extensionModuleParser()
+      compiled = linkVendoredImports(parse, compiled, integrity => {
+        const previous = urls.get(integrity)
+        if (previous) return previous
+        const bytes = record.vendored?.[integrity]
+        if (!bytes) throw new Error(`Missing approved import ${integrity}`)
+        const url = URL.createObjectURL(new Blob([bytes], {type: 'text/javascript'}))
+        urls.set(integrity, url)
+        return url
+      })
+    }
+    const entry = URL.createObjectURL(new Blob([compiled], {type: 'text/javascript'}))
+    try {
+      return await import(/* @vite-ignore */ entry) as ExtensionModule
+    } finally {
+      URL.revokeObjectURL(entry)
+    }
   } finally {
-    // Revoke as soon as the module's resolved — the JS engine has the
-    // module recorded against this URL and won't fetch it again.
-    URL.revokeObjectURL(blobUrl)
+    for (const url of urls.values()) URL.revokeObjectURL(url)
   }
 }
 
 /**
  * Resolve a module through the block-scoped in-memory cache
- * cache, building it via `factory` only on a miss. `hashKey` is the
+ * by building it via `factory` only on a miss. `hashKey` is the
  * content hash that participates in the cache key — for an approved load it's
  * the APPROVED source hash (the pin). A re-resolve of an unchanged pin returns
  * the same reference (React doesn't remount), while a different block gets a
@@ -202,12 +142,8 @@ function resolveCachedModule(
   cache: CompileCache,
   hashKey: string,
   blockId: string,
-  factory: () => Promise<ExtensionModule>,
-): Promise<ExtensionModule> {
-  // Start the Tailwind safelist load on every resolution, cache hit included;
-  // the runtime apply awaits it before extensions render.
-  void ensureExtensionUtilitiesCss()
-
+  factory: () => Promise<CompileResult>,
+): Promise<CompileResult> {
   let modulesForBlock = cache.byBlockAndHash.get(blockId)
   if (!modulesForBlock) {
     modulesForBlock = new Map()
@@ -347,35 +283,50 @@ export async function approveExtension(
   blockId: string,
   source: string,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
+  frozen?: CompiledRecord['vendored'],
 ): Promise<{contentHash: string}> {
   const sourceHash = await hashExtensionSource(source)
-
-  // Idempotent: unchanged source already approved under the current compiler
-  // → the pin is current, nothing to do (and no Babel). `readApproval`
-  // rejects legacy Phase-1 rows, so an upgraded profile still re-approves.
   const existing = await readApproval(blockId, persistent)
-  if (existing?.sourceHash === sourceHash && existing.compilerVersion === COMPILER_VERSION) {
+  if (existing?.sourceHash === sourceHash && existing.compilerVersion === COMPILER_VERSION
+    && [...(await pinnedImports(source)).values()].every(integrity => existing.vendored?.[integrity])) {
     return {contentHash: sourceHash}
   }
-
-  // `compiled` is the pinned output. Under a full compile override (tests)
-  // there's no real transpile; store the source as a placeholder the
-  // override-aware load path ignores. A transpile failure (bad syntax)
-  // propagates — there's nothing to pin.
-  const compiled = compileImplOverride ? source : await transpileImpl(source, blockId)
-
-  // Throwing write (NOT persistApproval's swallow): a failed persist must
-  // fail the approve so the caller doesn't proceed to set intent. Written
-  // per-block directly (approval is per-block), never via the content-keyed
-  // in-memory cache.
-  await persistent.write(blockId, {
-    sourceHash,
-    approvedSource: source,
-    compiled,
-    compilerVersion: COMPILER_VERSION,
-    approvedAt: Date.now(),
-  })
+  const record = await prepareRecord(blockId, source, sourceHash, frozen)
+  await persistent.write(blockId, record)
   return {contentHash: sourceHash}
+}
+
+async function pinnedImports(source: string) {
+  if (compileImplOverride) return new Map<string, string>()
+  const parse = await extensionModuleParser()
+  return sourcePinnedImports(parse(source, {sourceType: 'module', plugins: ['typescript', 'jsx']}))
+}
+
+async function prepareRecord(
+  blockId: string, source: string, sourceHash: string,
+  frozen?: CompiledRecord['vendored'],
+): Promise<CompiledRecord> {
+  const {pinnedImports: pins, ...output} = compileImplOverride ? {compiled: source, pinnedImports: new Map<string, string>()}
+    : await transpileExtension(source, blockId, platform.allowUnpinnedLive)
+  const record: CompiledRecord = {
+    ...output, sourceHash, approvedSource: source, compilerVersion: COMPILER_VERSION, approvedAt: Date.now(),
+  }
+  for (const [url, integrity] of pins) {
+    const {freezeExtensionImport, verifyFrozenExtensionImport} = await import('@knowledge-medium/agent-cli/freezeExtensionImports')
+    const stored = frozen?.[integrity]
+    const {bytes} = stored ? await verifyFrozenExtensionImport(url, stored, integrity)
+      : await freezeExtensionImport(url, integrity)
+    record.vendored ??= {}
+    record.vendored[integrity] = bytes
+  }
+  return record
+}
+
+async function instantiateRecord(blockId: string, record: CompiledRecord): Promise<CompileResult> {
+  if (record.importsUnpinned && !platform.allowUnpinnedLive) throw new Error('Unpinned HTTPS import')
+  const module = compileImplOverride ? await compileImplOverride(record.approvedSource)
+    : await platform.instantiate(record, blockId)
+  return {module, contentHash: record.sourceHash, importsUnpinned: record.importsUnpinned}
 }
 
 /**
@@ -398,23 +349,14 @@ export async function loadApprovedExtension(
   cache: CompileCache = defaultCache,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
 ): Promise<CompileResult> {
-  const module = await resolveCachedModule(cache, approval.sourceHash, blockId, async () => {
-    if (compileImplOverride) return compileImplOverride(approval.approvedSource)
-    if (approval.compilerVersion !== COMPILER_VERSION) {
-      const compiled = await transpileImpl(approval.approvedSource, blockId)
-      // Deliberate (#67): this is the ONLY write on the load path, and it
-      // re-pins the SAME approved `sourceHash` (only the compiled output +
-      // compilerVersion change). Loading must never establish trust for a
-      // new/changed source — that is exclusively `approveExtension`'s job.
-      // Do not "optimize" by persisting live content here.
-      // Accepted: a blind write, so an approve or revoke landing mid-recompile
-      // is overwritten with this older pin. Costs a re-approval, never trust.
-      await persistApproval(persistent, blockId, {...approval, compiled, compilerVersion: COMPILER_VERSION})
-      return instantiateImpl(compiled)
-    }
-    return instantiateImpl(approval.compiled)
+  return resolveCachedModule(cache, approval.sourceHash, blockId, async () => {
+    if (approval.compilerVersion === COMPILER_VERSION || compileImplOverride) return instantiateRecord(blockId, approval)
+    const fresh = await prepareRecord(blockId, approval.approvedSource, approval.sourceHash,
+      approval.vendored)
+    fresh.approvedAt = approval.approvedAt
+    await persistApproval(persistent, blockId, fresh)
+    return instantiateRecord(blockId, fresh)
   })
-  return {module, contentHash: approval.sourceHash}
 }
 
 /**
@@ -448,14 +390,15 @@ export async function compileForVerification(
   cache: CompileCache = defaultCache,
 ): Promise<CompileResult> {
   const contentHash = await hashExtensionSource(content)
-  const module = await resolveCachedModule(cache, contentHash, blockId, () =>
-    compileImplOverride
-      ? compileImplOverride(content)
-      : transpileImpl(content, blockId)
-          .catch(error => { throw new ExtensionTranspileError(blockId, error) })
-          .then(instantiateImpl),
-  )
-  return {module, contentHash}
+  return resolveCachedModule(cache, contentHash, blockId, async () => {
+    let record: CompiledRecord
+    try {
+      record = await prepareRecord(blockId, content, contentHash)
+    } catch (error) {
+      throw new ExtensionTranspileError(blockId, error)
+    }
+    return instantiateRecord(blockId, record)
+  })
 }
 
 /**

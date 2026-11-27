@@ -6,6 +6,8 @@ import {
 import {
   __setCompileImplForTest,
   createCompileCache,
+  approveExtension,
+  setExtensionCompilePlatform,
   hashExtensionSource,
   type CompileCache,
   type ExtensionModule,
@@ -896,6 +898,29 @@ describe('dynamicExtensionsExtension — gate 2 (device-local trust / #67)', () 
         liveHash: await hashExtensionSource('src-new'),
         approvedHash: await hashExtensionSource('src-old'),
       })
+    } finally {
+      restore()
+    }
+  })
+
+  it.each([
+    {remote: true, drift: false, expected: ['imports-unpinned']},
+    {remote: true, drift: true, expected: ['update-available']},
+    {remote: false, drift: false, expected: []},
+  ])('keeps the approved code running and reports the action for the shown revision ($remote, $drift)', async ({remote, drift, expected}) => {
+    const source = (remote ? "import 'https://cdn.example/module.mjs'; " : '') + 'export default []'
+    const block = blockData({id: 'live-import', content: drift ? source + '\n' : source})
+    const approvalStatusReporter = vi.fn()
+    const instantiate = vi.fn(async () => ({default: labelsFacet.of('running')}))
+    const restore = setExtensionCompilePlatform({instantiate, allowUnpinnedLive: true})
+    try {
+      await approveExtension(block.id, source, persistent)
+      const runtime = await resolveFacetRuntime(loadExtensions([block], {
+        overrides: enableBlocks([block]), approvalStatusReporter,
+      }))
+      expect(runtime.read(labelsFacet)).toEqual(['running'])
+      expect(approvalStatusReporter.mock.calls.map(([, status]) => status.kind))
+        .toEqual(expected)
     } finally {
       restore()
     }

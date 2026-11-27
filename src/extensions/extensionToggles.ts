@@ -60,15 +60,22 @@ export function extensionName(block: BlockData): string | undefined {
   return blockStringProperty(block, extensionNameProp)
 }
 
+const definitionSources = new WeakMap<Togglable, string>()
+
+/** The definition revision from which the settings row was built. */
+export const shownExtensionSource = (handle: Togglable) => definitionSources.get(handle)
+
 /** Build a user-extension togglable from a block: decode the display
  *  metadata, then delegate to the kernel's `userToggle` (which locks
  *  `essential`/`kind` and forces `defaultEnabled: false`). */
 export function userExtensionToggle(block: BlockData): Togglable {
-  return userToggle({
+  const handle = userToggle({
     id: block.id,
     name: extensionDisplayName(block),
     description: blockStringProperty(block, extensionDescriptionProp),
   })
+  definitionSources.set(handle, block.content)
+  return handle
 }
 
 /** Disabled-shell variant. Same decode + factory: all metadata is

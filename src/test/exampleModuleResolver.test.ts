@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest'
-import {importedSpecifiers} from '@/test/exampleModuleResolver'
+import {importedSpecifiers} from '@knowledge-medium/agent-cli/extensionImportSyntax'
+import {evaluateExampleModule, fixtureHygieneProblems, parseFixture} from '@/test/exampleModuleResolver'
 
 describe('importedSpecifiers', () => {
   it('finds every import form a fixture can use', () => {
@@ -14,7 +15,7 @@ describe('importedSpecifiers', () => {
       `const g = import(name)`,
     ].join('\n')
 
-    expect(importedSpecifiers(source, 'fixture.ts')).toEqual([
+    expect(importedSpecifiers(parseFixture(source, 'fixture.ts'), true)).toEqual([
       '@/static.js',
       '@/reexport.js',
       '@/star.js',
@@ -22,7 +23,30 @@ describe('importedSpecifiers', () => {
       '@/require.js',
       '@/dynamic-template.js',
       '@/dynamic.js',
-      '<computed>',
+      undefined,
     ])
+  })
+})
+
+describe('evaluateExampleModule', () => {
+  it('preloads side-effect imports and skips source text that only quotes an import', async () => {
+    const fixture = await evaluateExampleModule(`
+      import '@/extensions/core.js'
+      // import {anything} from 'made-up-package'
+      export default { extensions: [] }
+    `, 'fixture.tsx')
+    expect(fixture).toEqual({extensions: []})
+  })
+})
+
+describe('fixtureHygieneProblems', () => {
+  it('uses the production entry set for CommonJS references', () => {
+    expect(fixtureHygieneProblems({
+      'fixture.ts': `
+        const allowed = require('@/extensions/core.js')
+        import missing = require('@/test/setup.js')
+        const computed = require(name)
+      `,
+    }).badSpecifiers).toEqual(['fixture.ts: @/test/setup.js', 'fixture.ts: <computed>'])
   })
 })

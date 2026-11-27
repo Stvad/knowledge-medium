@@ -25,7 +25,7 @@
  * The IndexedDB glue (cached connection, commit-durable `tx`) lives in the
  * shared {@link IdbKeyedStore}. Unlike `sync/keys/keyStore.ts` — which holds a
  * non-cloneable `CryptoKey` and therefore can't run under Node's
- * `structuredClone` — our records are plain JSON, so the IndexedDB path
+ * `structuredClone` — our records are structured-cloneable, so the IndexedDB path
  * is exercised directly in tests via `fake-indexeddb`.
  */
 
@@ -47,6 +47,8 @@ export interface CompiledRecord {
   /** Transpiled JS string (Babel output) of `approvedSource`, ready for
    *  blob-URL import. This is what actually runs — the pinned output. */
   compiled: string
+  vendored?: Record<string, Uint8Array<ArrayBuffer>>
+  importsUnpinned?: boolean
   /** The `COMPILER_VERSION` the `compiled` string was produced under. A
    *  bump invalidates the cached output (forces a recompile from
    *  `approvedSource`) while leaving `sourceHash` — and therefore the

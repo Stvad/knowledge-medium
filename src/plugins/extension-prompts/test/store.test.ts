@@ -8,6 +8,7 @@ import {
 const needsApproval = (name: string, liveHash: string): ExtensionApprovalStatus => ({
   kind: 'needs-approval',
   name,
+  liveSource: 'SRC',
   liveHash,
 })
 
@@ -17,6 +18,7 @@ const updateAvailable = (
 ): ExtensionApprovalStatus => ({
   kind: 'update-available',
   name,
+  liveSource: 'SRC',
   liveHash,
   approvedHash: 'approved',
 })
@@ -35,7 +37,7 @@ describe('pendingExtensionPrompts', () => {
     expect(pending.find((p) => p.blockId === 'matrix')).toMatchObject({
       name: 'Matrix',
       kind: 'needs-approval',
-      liveHash: 'hm',
+      liveSource: 'SRC', liveHash: 'hm',
     })
   })
 
@@ -73,14 +75,14 @@ describe('pendingExtensionPrompts', () => {
 describe('extensionPromptStore', () => {
   it('keeps a stable snapshot ref when re-published with equal content', () => {
     extensionPromptStore.set([
-      {blockId: 'a', name: 'A', kind: 'needs-approval', liveHash: 'h', dismissed: false},
+      {blockId: 'a', name: 'A', kind: 'needs-approval', liveSource: 'SRC', liveHash: 'h', dismissed: false},
     ])
     const first = extensionPromptStore.getSnapshot()
 
     // Same content, fresh array — must be deduped so useSyncExternalStore
     // consumers (the status chip) don't churn.
     extensionPromptStore.set([
-      {blockId: 'a', name: 'A', kind: 'needs-approval', liveHash: 'h', dismissed: false},
+      {blockId: 'a', name: 'A', kind: 'needs-approval', liveSource: 'SRC', liveHash: 'h', dismissed: false},
     ])
     expect(extensionPromptStore.getSnapshot()).toBe(first)
 
@@ -89,7 +91,7 @@ describe('extensionPromptStore', () => {
     let notified = 0
     const unsub = extensionPromptStore.subscribe(() => notified++)
     extensionPromptStore.set([
-      {blockId: 'a', name: 'A', kind: 'needs-approval', liveHash: 'h', dismissed: true},
+      {blockId: 'a', name: 'A', kind: 'needs-approval', liveSource: 'SRC', liveHash: 'h', dismissed: true},
     ])
     expect(extensionPromptStore.getSnapshot()).not.toBe(first)
     expect(notified).toBe(1)

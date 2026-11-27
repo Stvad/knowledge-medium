@@ -51,8 +51,10 @@ export interface ExtensionLoadErrorReporter {
  *  carried on the status so a surface that only has the blockId (the global
  *  toast) can name the extension without re-walking the toggle tree. */
 export type ExtensionApprovalStatus =
-  | {kind: 'needs-approval'; name: string; liveHash: string}
-  | {kind: 'update-available'; name: string; liveHash: string; approvedHash: string}
+  {name: string; liveSource: string; liveHash: string} & (
+    | {kind: 'needs-approval' | 'imports-unpinned'}
+    | {kind: 'update-available'; approvedHash: string}
+  )
 
 export interface ExtensionApprovalStatusReporter {
   (blockId: string, status: ExtensionApprovalStatus): void
@@ -167,6 +169,7 @@ export const dynamicExtensionsExtension = (
       approvalStatusReporter?.(block.id, {
         kind: 'needs-approval',
         name: extensionDisplayName(block),
+        liveSource: block.content,
         liveHash: await hashExtensionSource(block.content),
       })
       return null
@@ -176,6 +179,7 @@ export const dynamicExtensionsExtension = (
       approvalStatusReporter?.(block.id, {
         kind: 'update-available',
         name: extensionDisplayName(block),
+        liveSource: block.content,
         liveHash,
         approvedHash: approval.sourceHash,
       })
@@ -183,7 +187,16 @@ export const dynamicExtensionsExtension = (
     // Run the PINNED approved output — never the (possibly drifted) live
     // content. This is the #67 guarantee: a synced source change can't
     // execute here until it's explicitly re-approved on this device.
-    return (await loadApprovedExtension(block.id, approval, cache, persistent)).module
+    const loaded = await loadApprovedExtension(block.id, approval, cache, persistent)
+    if (loaded.importsUnpinned && liveHash === approval.sourceHash) {
+      approvalStatusReporter?.(block.id, {
+        kind: 'imports-unpinned',
+        name: extensionDisplayName(block),
+        liveSource: block.content,
+        liveHash,
+      })
+    }
+    return loaded.module
   }
 
   let extensionBlocks: BlockData[]

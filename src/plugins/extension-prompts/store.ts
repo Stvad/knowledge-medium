@@ -19,13 +19,14 @@
  *     stays discoverable without nagging.
  */
 import {CallbackSet} from '@/utils/callbackSet.js'
-import type {ExtensionApprovalStatusMap} from '@/extensions/extensionApprovalStatus.js'
+import type {ExtensionApprovalStatus, ExtensionApprovalStatusMap} from '@/extensions/extensionApprovalStatus.js'
 import type {DismissalMap} from './dismissals.js'
 
 export interface PendingExtensionPrompt {
   blockId: string
   name: string
-  kind: 'needs-approval' | 'update-available'
+  kind: ExtensionApprovalStatus['kind']
+  liveSource: string
   /** The live source hash this prompt is about — the key a dismissal pins
    *  to, so a later source change re-surfaces the prompt. */
   liveHash: string
@@ -53,6 +54,7 @@ export const pendingExtensionPrompts = (
       name: status.name,
       kind: status.kind,
       liveHash: status.liveHash,
+      liveSource: status.liveSource,
       dismissed: dismissals[blockId] === status.liveHash,
     })
   }
