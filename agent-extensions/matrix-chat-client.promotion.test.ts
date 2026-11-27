@@ -59,13 +59,13 @@ import { propertyFieldContent } from '@/data/propertyChildren.js'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.js'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
-import { pluginBlockId } from '@/extensions/pluginIds.js'
 
 import matrixContributions, {
   autoStartProp,
   homeserverProp,
   matrixChatPrefsType,
   matrixIngestEffect,
+  messageNodeId,
   roomIdProp,
 } from './matrix-chat-client.tsx'
 
@@ -74,7 +74,6 @@ const HOMESERVER = 'https://matrix.test'
 const ROOM = '!room:matrix.test'
 const TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
 const NEXT_BATCH_KEY = `knowledge-medium:matrix-messages:state:v1:${HOMESERVER}:${ROOM}`
-const MATRIX_BLOCK_NAMESPACE = '9839e327-a96a-4974-acb1-128fc44878b8'
 const SHARED_EVENT_ID = '$evt-shared'
 
 /** The app shell owns mounts and effects; a repo-level runtime takes neither.
@@ -165,7 +164,7 @@ type MessageRow = {
   id: string
   parent_id: string | null
   content: string
-  order_key: string
+  orderKey: string
   properties_json: string
   is_field_form: number | null
 }
@@ -177,13 +176,10 @@ const messageRows = (rootId: string): Promise<MessageRow[]> => sharedDb.db.getAl
      SELECT b.id FROM blocks b JOIN message ON b.parent_id = message.id
       WHERE b.deleted = 0
    )
-   SELECT id, parent_id, content, order_key, properties_json, is_field_form
+   SELECT id, parent_id, content, order_key AS orderKey, properties_json, is_field_form
      FROM blocks JOIN message USING (id)`,
   [rootId],
 )
-
-const eventNodeId = (path: string): string =>
-  pluginBlockId(WS, MATRIX_BLOCK_NAMESPACE, `event:${SHARED_EVENT_ID}:${path}`)
 
 const savedCursor = (): string | null => {
   const raw = window.localStorage.getItem(NEXT_BATCH_KEY)
@@ -320,6 +316,7 @@ describe('matrix ingest into a child-backed workspace', () => {
   }, 30_000)
 
   it('merges conflicting-schema replicas without shifting attribute or nested message rows', async () => {
+    const rootId = messageNodeId(WS, SHARED_EVENT_ID, [0])
     const makeReplica = async (presetId: 'number' | 'string') => {
       const repo = await setup()
       const schema = await repo.userSchemas.addSchema({name: 'matrix:count', presetId})
@@ -338,7 +335,6 @@ describe('matrix ingest into a child-backed workspace', () => {
       // Give the writers different jitter so preserving order cannot depend
       // on a favorable draw from either one.
       const random = vi.spyOn(Math, 'random').mockReturnValue(presetId === 'string' ? 0.1 : 0.9)
-      const rootId = eventNodeId('0')
       try {
         stopIngest = matrixIngestEffect.start({repo})
         await vi.waitFor(async () => {
@@ -361,11 +357,10 @@ describe('matrix ingest into a child-backed workspace', () => {
     const {rows: promotingRows, countFieldContent} = await makeReplica('string')
     await resetReplica()
     const {rows: decliningRows} = await makeReplica('number')
-    const rootId = eventNodeId('0')
-    const countId = eventNodeId('0.0')
-    const ordinaryId = eventNodeId('0.1')
-    const nestedCountId = eventNodeId('0.1.0')
-    const nestedOrdinaryId = eventNodeId('0.1.1')
+    const countId = messageNodeId(WS, SHARED_EVENT_ID, [0, 0])
+    const ordinaryId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1])
+    const nestedCountId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1, 0])
+    const nestedOrdinaryId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1, 1])
     const promotedCounts = [[rootId, 'many'], [ordinaryId, 'nested many']] as const
     for (const [parentId, value] of promotedCounts) {
       expect(JSON.parse(promotingRows.get(parentId)!.properties_json)['matrix:count']).toBe(value)
@@ -402,7 +397,7 @@ describe('matrix ingest into a child-backed workspace', () => {
 
       const children = (parentId: string): MessageRow[] =>
         [...merged.values()].filter(row => row.parent_id === parentId).sort((a, b) =>
-          siblingPrecedes({id: a.id, orderKey: a.order_key}, {id: b.id, orderKey: b.order_key}) ? -1 : 1)
+          a.id === b.id ? 0 : siblingPrecedes(a, b) ? -1 : 1)
 
       const contents = (parentId: string): string[] => children(parentId)
         .map(row => row.is_field_form === 1 ? 'property field' : row.content)
@@ -437,7 +432,7 @@ describe('matrix ingest into a child-backed workspace', () => {
     }
 
     for (const id of [ordinaryId, nestedOrdinaryId]) {
-      expect(promotingRows.get(id)?.order_key).toBe(decliningRows.get(id)?.order_key)
+      expect(promotingRows.get(id)?.orderKey).toBe(decliningRows.get(id)?.orderKey)
     }
   }, 30_000)
 })

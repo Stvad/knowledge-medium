@@ -455,7 +455,9 @@ interface BlockDef {
 }
 
 interface MessageNode extends BlockDef {
-  originalPath: number[]
+  /** Local schemas can drop different bullets during promotion. IDs and sibling
+   *  order use the pre-promotion path so every writer agrees on surviving nodes. */
+  parsedPath: number[]
   originalSiblingCount: number
   children?: MessageNode[]
 }
@@ -603,7 +605,7 @@ const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, p
     const promotedChildren = withPromotedMatrixProperties(children, walk, blockPath)
     const next: MessageNode = {
       ...block,
-      originalPath: blockPath,
+      parsedPath: blockPath,
       originalSiblingCount: blocks.length,
       properties: mergeProperties(block.properties, promotion.promoted),
       children: promotedChildren.length ? promotedChildren : undefined,
@@ -662,11 +664,8 @@ const createBlocksFromEvent = (
 // ---------------------------------------------------------------------------
 // write the message into today's daily note
 
-// Deterministic id for a node of a message tree, keyed by the matrix event id
-// and the node's index path before promotion. `[0]` is the message root
-// (the single elected-first block under the day's tag block); `[0, 1]` is its
-// second child, and so on. Same event + same path → same id on every device.
-const messageNodeId = (workspaceId: string, eventId: string, path: number[]): string =>
+/** Uses MessageNode.parsedPath: `[0]` is the message root, `[0, 1]` its second child as written. */
+export const messageNodeId = (workspaceId: string, eventId: string, path: number[]): string =>
   pluginBlockId(workspaceId, MATRIX_NS, `event:${eventId}:${path.join('.')}`)
 
 const createBlockTree = async (
@@ -679,7 +678,7 @@ const createBlockTree = async (
   rootProperties?: Record<string, unknown>,
 ): Promise<void> => {
   for (const block of blockDefinitions) {
-    const isMessageRoot = block.originalPath.length === 1
+    const isMessageRoot = block.parsedPath.length === 1
     const merged = mergeProperties(isMessageRoot ? rootProperties : undefined, block.properties)
     // The message root is marked as a `matrix-message` block so its event
     // metadata renders under that type in the property panel. addBlockType…
@@ -690,10 +689,10 @@ const createBlockTree = async (
       : merged
 
     const id = await tx.create({
-      id: messageNodeId(workspaceId, eventId, block.originalPath),
+      id: messageNodeId(workspaceId, eventId, block.parsedPath),
       workspaceId,
       parentId,
-      orderKey: orderKeys[block.originalPath.at(-1)!],
+      orderKey: orderKeys[block.parsedPath.at(-1)!],
       content: block.content,
       properties,
     })
