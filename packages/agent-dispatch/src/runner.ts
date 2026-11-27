@@ -59,6 +59,7 @@ export interface CommonRunOptions {
 export interface AgentRunOptions extends CommonRunOptions {
   claudeBin: string
   allowedTools: string[]
+  allowedPlugins?: readonly string[]
   effort?: ClaudeEffort
   mcpConfig?: {path: string, serverNames: readonly string[]}
   /** Run sandboxed in this workspace (workspace.ts), in `cwd`, a folder under its root. */
@@ -193,6 +194,7 @@ const claudeToolSet = (options: AgentRunOptions) => {
     requested,
     acceptedBuiltIns: new Set([...requested, ...reported]),
     serverNames: options.mcpConfig?.serverNames ?? [],
+    allowedPlugins: new Set(options.allowedPlugins),
   }
 }
 
@@ -239,7 +241,7 @@ export const buildClaudeArgs = (options: AgentRunOptions, tools = claudeToolSet(
 
 const startupHookEvents: ReadonlySet<unknown> = new Set(['hook_started', 'hook_progress', 'hook_response'])
 
-type ClaudeToolSet = Pick<ReturnType<typeof claudeToolSet>, 'acceptedBuiltIns' | 'serverNames'>
+type ClaudeToolSet = Pick<ReturnType<typeof claudeToolSet>, 'acceptedBuiltIns' | 'serverNames' | 'allowedPlugins'>
 
 const unexpectedTool = (name: unknown, intended: ClaudeToolSet): string | null => {
   if (typeof name !== 'string') return 'malformed tool name'
@@ -265,7 +267,7 @@ export const unexpectedClaudeInventory = (init: Record<string, unknown>, intende
   else for (const plugin of init.plugins) {
     const source = isRecord(plugin) ? plugin.source : undefined
     if (typeof source !== 'string') extras.push('missing or malformed plugin source')
-    else if (!source.endsWith('@builtin')) extras.push(`plugin ${source}`)
+    else if (!source.endsWith('@builtin') && !intended.allowedPlugins.has(source)) extras.push(`plugin ${source} (not in runner.allowedPlugins)`)
   }
   return extras
 }

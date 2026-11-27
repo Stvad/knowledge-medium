@@ -113,6 +113,13 @@ const claudeRunnerSchema = z.strictObject({
    *  defaultAllowedTools. Empty by default, so mention tasks add no Bash
    *  and are graph-only when defaultAllowedTools is empty. */
   allowedTools: claudeToolRulesSchema.default([]),
+  /** Non-builtin plugins this watcher's runs may load, as the
+   *  `name@marketplace` source Claude reports (the `enabledPlugins` key in
+   *  runner.cwd's settings). Their tools and MCP servers still need
+   *  allowedTools / the dispatch MCP config like any other. */
+  allowedPlugins: z.array(z.string().trim().regex(/^[^@\s]+@[^@\s]+$/, {
+    message: 'Expected a plugin id as name@marketplace, such as code-guard@team-plugins.',
+  })).default([]),
   workspace: workspaceSchema.optional(),
 })
 
@@ -145,6 +152,9 @@ const runnerSchema = z.preprocess(
 ).superRefine((runner, ctx) => {
   if (runner.executor === 'claude' && runner.workspace && runner.cwd !== undefined) {
     ctx.addIssue({code: 'custom', path: ['cwd'], message: 'cwd cannot be set with workspace: the run works in its thread folder'})
+  }
+  if (runner.executor === 'claude' && runner.workspace && runner.allowedPlugins.length > 0) {
+    ctx.addIssue({code: 'custom', path: ['allowedPlugins'], message: 'allowedPlugins cannot be set with workspace: a plugin\'s hooks and MCP servers run outside its sandbox'})
   }
   if (runner.executor !== 'codex') return
   if (runner.networkAccess && runner.sandbox !== 'workspace-write') {
