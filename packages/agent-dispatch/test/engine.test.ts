@@ -170,7 +170,7 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
     state: memoryState(),
     runTask: vi.fn(async () => okRun()),
     deliverToChannel: vi.fn(async () => {}),
-    mcpConfigPathFor: () => '/tmp/mcp.json',
+    mcpConfigFor: () => ({path: 'dispatch.json', serverNames: ['km']}),
     log: () => {},
     now: () => NOW,
     delay: async () => {}, // no-op so deliverReply retries don't slow tests
@@ -187,23 +187,24 @@ describe('workspace watchers', () => {
     }],
   })
   const runOf = (runTask: ReturnType<typeof vi.fn>) =>
-    runTask.mock.calls[0][0] as {cwd: string, workspace?: unknown, mcpConfigPath?: string, newSessionId?: string}
+    runTask.mock.calls[0][0] as {cwd: string, workspace?: unknown, mcpConfig?: unknown, newSessionId?: string}
 
   it('runs a new thread in a folder named for the session it starts, sandboxed, with the watcher\'s km server', async () => {
     const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] chart this'}}})
     const runTask = vi.fn(async () => okRun())
     const config = workspaceConfig()
-    const mcpConfigPathFor = vi.fn(() => '/tmp/mcp-mentions.json')
-    const engine = engineWith({graph, runTask, config, mcpConfigPathFor})
+    const mentionsMcp = {path: '/tmp/mcp-mentions.json', serverNames: ['km']}
+    const mcpConfigFor = vi.fn(() => mentionsMcp)
+    const engine = engineWith({graph, runTask, config, mcpConfigFor})
     await engine.tick()
     await engine.drain()
 
     const run = runOf(runTask)
     expect(run.newSessionId).toMatch(/^[0-9a-f-]{36}$/)
     expect(run).toMatchObject({
-      cwd: `${root}/threads/${run.newSessionId}`, workspace: {root, allowedDomains: ['pypi.org']}, mcpConfigPath: '/tmp/mcp-mentions.json',
+      cwd: `${root}/threads/${run.newSessionId}`, workspace: {root, allowedDomains: ['pypi.org']}, mcpConfig: mentionsMcp,
     })
-    expect(mcpConfigPathFor).toHaveBeenCalledWith(config.watchers[0])
+    expect(mcpConfigFor).toHaveBeenCalledWith(config.watchers[0])
   })
 
   it('runs a follow-up in its session\'s folder, however deep the thread', async () => {

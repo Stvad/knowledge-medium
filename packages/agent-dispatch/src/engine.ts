@@ -39,9 +39,10 @@ export interface EngineDeps {
   /** EXPERIMENTAL: push an event into the ambient channel session
    *  (delivery: 'channel' watchers). Throws if unreachable. */
   deliverToChannel: (event: ChannelEvent) => Promise<void>
-  /** The generated --mcp-config for a watcher's runs (a workspace watcher's server
-   *  reads media files from its workspace); null disables graph tools for runs. */
-  mcpConfigPathFor: (watcher: Watcher) => string | null
+  /** The generated --mcp-config for a watcher's runs, with the server names allowed in
+   *  Claude events (a workspace watcher's server reads media files from its workspace);
+   *  null disables graph tools for runs. */
+  mcpConfigFor: (watcher: Watcher) => NonNullable<AgentRunOptions['mcpConfig']> | null
   log: (message: string) => void
   now?: () => number
   /** Sleep between terminal reply-reconcile retries — injected so tests run
@@ -124,7 +125,7 @@ const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null
 }
 
 export const createEngine = (deps: EngineDeps) => {
-  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfigPathFor, log} = deps
+  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfigFor, log} = deps
   const now = deps.now ?? Date.now
   const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
@@ -221,7 +222,7 @@ export const createEngine = (deps: EngineDeps) => {
     } = {},
   ): AgentRunOptions => {
     const {runner} = watcher
-    const mcpConfigPath = mcpConfigPathFor(watcher)
+    const mcpConfig = mcpConfigFor(watcher)
     const workspace = watcherWorkspace(watcher)
     return {
       claudeBin: config.claudeBin,
@@ -232,12 +233,12 @@ export const createEngine = (deps: EngineDeps) => {
       workspace,
       allowedTools: runner.executor === 'claude'
         ? [...new Set([
-          ...(mcpConfigPath ? DISPATCH_MCP_ALLOWED_TOOLS : []),
+          ...(mcpConfig ? DISPATCH_MCP_ALLOWED_TOOLS : []),
           ...config.defaultAllowedTools,
           ...runner.allowedTools,
         ])]
         : [],
-      mcpConfigPath: mcpConfigPath ?? undefined,
+      mcpConfig: mcpConfig ?? undefined,
       model: runner.model,
       effort: runner.executor === 'claude' ? runner.effort : undefined,
       resumeSessionId,

@@ -73,6 +73,27 @@ const runnerBase = {
 
 const claudeEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'])
 
+function isSingleClaudeToolRule(rule: string): boolean {
+  const argumentStart = rule.indexOf('(')
+  const toolName = argumentStart === -1 ? rule : rule.slice(0, argumentStart)
+  if (!/^[^\s,()]+$/.test(toolName)) return false
+  if (argumentStart === -1) return true
+
+  let depth = 0
+  for (let index = argumentStart; index < rule.length; index++) {
+    if (rule[index] === '(') depth++
+    if (rule[index] === ')') {
+      depth--
+      if (depth === 0) return index === rule.length - 1
+    }
+  }
+  return false
+}
+
+const claudeToolRulesSchema = z.array(z.string().trim().refine(isSingleClaudeToolRule, {
+  message: 'Expected one Claude tool rule per entry, such as Read or Bash(git *).',
+}))
+
 /** A persistent folder the run works in (workspace.ts): its Bash, file tools and
  *  `add_media` paths reach this folder and nothing else of the user's. It is always
  *  `<defaultWorkspacesDir>/<watcher name>`: a root chosen elsewhere could hold files
@@ -86,12 +107,12 @@ const workspaceSchema = z.strictObject({
 const claudeRunnerSchema = z.strictObject({
   executor: z.literal('claude'),
   ...runnerBase,
-  /** `claude --effort`. Unset, a run takes the effort its model has in the
-   *  user's Claude Code settings. */
+  /** `claude --effort`. If unset, Claude uses its default or a project/local setting. */
   effort: claudeEffortSchema.optional(),
-  /** EXTRA --allowedTools entries beyond the km MCP graph tools.
-   *  Empty by default: mention tasks get graph access only, no Bash. */
-  allowedTools: z.array(z.string()).default([]),
+  /** EXTRA --allowedTools entries beyond the km MCP graph tools and
+   *  defaultAllowedTools. Empty by default, so mention tasks add no Bash
+   *  and are graph-only when defaultAllowedTools is empty. */
+  allowedTools: claudeToolRulesSchema.default([]),
   workspace: workspaceSchema.optional(),
 })
 
@@ -310,15 +331,15 @@ const rawConfigSchema = z.strictObject({
   /** Path/name of the codex CLI, for watchers with `runner.executor: 'codex'`. */
   codexBin: z.string().default('codex'),
   /** Which account a run's tokens bill to. 'subscription' (default,
-   *  safe): scrub every API-key/token/provider-reroute env var from the
+   *  safe): scrub known API-key/token/provider-reroute env vars from the
    *  child so an ambient key can't SILENTLY redirect an unattended
-   *  daemon onto usage-based billing — the CLI's plan login (OAuth) then
-   *  wins. 'api': deliberately opt IN to usage-based billing/credits —
+   *  daemon onto usage-based billing, leaving the CLI free to use its plan
+   *  login (OAuth). 'api': deliberately opt IN to usage-based billing/credits —
    *  the scrub is skipped and the CLI uses whatever credential the env
    *  or login provides. Making it a config field (not an env accident)
-   *  is the point: possible on purpose, hard by accident. NB: a key
-   *  stored via `claude`/`codex` login (auth.json / apiKeyHelper) lives
-   *  outside the env and CANNOT be scrubbed — see the startup log. */
+   *  is the point: possible on purpose, hard by accident. Stored Claude/Codex
+   *  credentials and Claude settings (including apiKeyHelper) can still
+   *  select usage-based billing — see the startup log. */
   billing: z.enum(['subscription', 'api']).default('subscription'),
   /** Tools EVERY spawned Claude run may use, beyond the km MCP graph
    *  tools; per-watcher `runner.allowedTools` adds on top. Defaults to
@@ -331,7 +352,7 @@ const rawConfigSchema = z.strictObject({
    *  tools — including exfiltrating note content through crafted fetch
    *  URLs. Accepted default here; set `defaultAllowedTools: []` to run
    *  Claude graph-only. */
-  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch', 'Agent']),
+  defaultAllowedTools: claudeToolRulesSchema.default(['WebSearch', 'WebFetch', 'Agent']),
   maxConcurrent: z.number().int().positive().default(4),
   /** Global spend circuit-breaker: at most this many run launches
    *  (spawns or channel deliveries) per rolling hour, across all

@@ -136,6 +136,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:contributors/property/attribution-editors', 'attribution:editors', 'refList', 'refList'],
   ['system:contributors/property/contributor-for', 'contributor:for', 'optional-ref', 'ref'],
   ['system:contributors/property/contributor-kind', 'contributor:kind', 'strict-enum', 'enum'],
+  ['system:contributors/property/contributor-picture', 'contributor:picture', 'optional-ref', 'ref'],
   ['system:contributors/property/contributor-role', 'contributor:role', 'optional-string', 'string'],
   ['system:daily-notes/property/date', 'daily-note:date', 'date', 'date'],
   ['system:extensions-settings/property/overrides', 'extensions:overrides', 'extensions:overrides', 'extensions:overrides'],

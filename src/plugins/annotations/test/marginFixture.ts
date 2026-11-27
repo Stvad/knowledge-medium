@@ -1,6 +1,12 @@
 import {ChangeScope} from '@/data/api'
 import {keysBetween} from '@/data/orderKey'
 import {topLevelBlockIdProp} from '@/data/properties'
+import {userPageBlockId} from '@/data/stateBlocks'
+import {captureMediaFromFiles} from '@/plugins/attachments/assetUpload'
+import {createContributor, ensureHumanContributor} from '@/plugins/contributors/profiles'
+import {attributionCreatorsProp, contributorPictureProp} from '@/plugins/contributors/schema'
+import {applyTheme} from '@/plugins/theme-toggle/theme'
+import {DEFAULT_THEME_ID_DARK, DEFAULT_THEME_ID_LIGHT} from '@/themeBootDefaults'
 import {buildLayout} from '@/utils/routing'
 import {captureAnchor} from '../anchor'
 import {annotationMarginOpenProp} from '../marginSchema'
@@ -94,4 +100,47 @@ export async function seedMarginFixture({outlineId, rows}: Awaited<ReturnType<ty
 
   await panel.set(annotationMarginOpenProp, true)
   return {first, displaced, closed: {...closed, reply, deepReplyText: DEEP_REPLY_TEXT}, tall, reveal, sparse, last, rowCount: ROW_COUNT}
+}
+
+export async function seedAuthorStamps(parentId: string) {
+  const repo = window.__omniliner?.repo
+  const workspaceId = repo?.activeWorkspaceId
+  if (!repo || !workspaceId) throw new Error('The local workspace has no repository')
+
+  const peerId = await repo.tx(tx => ensureHumanContributor(
+    tx, workspaceId, {id: 'fixture-peer', name: 'Peer Reviewer'}, repo.snapshotTypeRegistries(),
+  ), {scope: ChangeScope.BlockDefault, description: 'seed peer contributor'})
+  const agent = await createContributor(repo, workspaceId, {name: 'Review Bot', kind: 'automation'})
+  const peerReply = await repo.mutate.createChild({parentId, content: 'Feedback from a peer.'})
+  await repo.block(peerReply).set(attributionCreatorsProp, [peerId])
+  await repo.withTxContext({contributorId: agent.id, contributorSource: 'agent'}).mutate.createChild({
+    parentId: peerReply, content: 'A follow-up from automation.',
+  })
+  return {peerId, agentId: agent.id, selfId: userPageBlockId(workspaceId, repo.user.id)}
+}
+
+export async function setFixtureAuthorPicture(profileId: string, present: boolean) {
+  const repo = window.__omniliner?.repo
+  const workspaceId = repo?.activeWorkspaceId
+  if (!repo || !workspaceId) throw new Error('The local workspace has no repository')
+
+  let assetId: string | undefined
+  if (present) {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 8
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('The fixture could not draw the profile picture')
+    context.fillStyle = '#6495ed'
+    context.fillRect(0, 0, 8, 8)
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve))
+    if (!blob) throw new Error('The fixture could not encode the profile picture')
+    const [captured] = await captureMediaFromFiles(repo, workspaceId, [new File([blob], 'profile.png', {type: blob.type})])
+    if (!captured?.ok) throw new Error(`Could not capture the profile picture: ${captured?.reason}`)
+    assetId = captured.assetBlockId
+  }
+  await repo.block(profileId).set(contributorPictureProp, assetId)
+}
+
+export function applyFixtureTheme(dark: boolean) {
+  applyTheme(dark ? DEFAULT_THEME_ID_DARK : DEFAULT_THEME_ID_LIGHT)
 }
