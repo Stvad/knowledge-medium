@@ -1,1 +1,1 @@
-export{xz as LazyBlockComponent}from"../../chunks/app-BE60Yu1F.js";
+export{xz as LazyBlockComponent}from"../../chunks/app-CY2u5ZWT.js";

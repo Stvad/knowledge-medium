@@ -1,1 +1,1 @@
-export{l1 as matchBareAt,u1 as matchMentionTrigger,d1 as matchPlaceTrigger}from"../../chunks/app-BE60Yu1F.js";
+export{l1 as matchBareAt,u1 as matchMentionTrigger,d1 as matchPlaceTrigger}from"../../chunks/app-CY2u5ZWT.js";

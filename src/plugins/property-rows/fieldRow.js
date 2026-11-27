@@ -1,1 +1,1 @@
-export{bN as drawsPropertyRows,xN as fieldRowDefinition,SN as isSingleValueProperty,CN as resolveFieldDefinition,wN as useFieldRowDefinition,TN as useIsChildOf,EN as usePropertyDefinitions}from"../../../chunks/app-BE60Yu1F.js";
+export{bN as drawsPropertyRows,xN as fieldRowDefinition,SN as isSingleValueProperty,CN as resolveFieldDefinition,wN as useFieldRowDefinition,TN as useIsChildOf,EN as usePropertyDefinitions}from"../../../chunks/app-CY2u5ZWT.js";

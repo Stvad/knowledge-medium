@@ -1,1 +1,1 @@
-export{ZC as richPasteDecisionContribution}from"../../../chunks/app-BE60Yu1F.js";
+export{ZC as richPasteDecisionContribution}from"../../../chunks/app-CY2u5ZWT.js";

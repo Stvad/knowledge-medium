@@ -1,1 +1,1 @@
-export{Int as agree,Lnt as pluralize}from"../../chunks/app-BE60Yu1F.js";
+export{Int as agree,Lnt as pluralize}from"../../chunks/app-CY2u5ZWT.js";
