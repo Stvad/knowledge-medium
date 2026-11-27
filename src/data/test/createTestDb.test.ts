@@ -168,8 +168,12 @@ describe('the template build lock', () => {
     expect(existsSync(lockDir)).toBe(false)
   })
 
-  it('steals an ownerless lock once it is older than any real build', async () => {
-    lock()
+  // A live pid on an old lock is a reused one: no build lasts that long.
+  it.each([
+    ['ownerless', () => undefined],
+    ['with a live pid', () => String(process.pid)],
+  ])('steals a lock older than any real build, %s', async (_case, owner) => {
+    lock(owner())
     const longAgo = new Date(Date.now() - 10 * 60_000)
     utimesSync(lockDir, longAgo, longAgo)
     await expect(waitForTemplateReadyOrLockRelease(templateDir, lockDir)).resolves.toBe(false)
@@ -178,6 +182,8 @@ describe('the template build lock', () => {
 
   it.each([
     ['a live builder', () => String(process.pid)],
+    // pid 1 refuses a signal from a non-root user (EPERM), which is still alive.
+    ['a builder this process may not signal', () => '1'],
     ['a builder that has not written its pid yet', () => undefined],
   ])('waits on %s until its template is ready', async (_case, owner) => {
     lock(owner())

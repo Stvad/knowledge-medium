@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PowerSyncDatabase } from '@powersync/node'
 import Database from 'better-sqlite3'
+import { pidAlive } from '../../../scripts/pid-alive.mjs'
 import {
   createClientPowerSyncSchema,
   initializeClientDatabase,
@@ -111,9 +112,9 @@ let templateDbDirPromise: Promise<string> | null = null
 const TEMPLATE_READY_FILE = '.ready'
 /** Inside the build lock: the pid of the process building the template. */
 const LOCK_OWNER_FILE = 'pid'
-/** A lock with no readable owner is a builder between its mkdir and its pid
- *  write, or one killed in that instant. Far above any real build. */
-const OWNERLESS_LOCK_STALE_MS = 5 * 60_000
+/** Far above any real build (a waiter gives up after 15 s), so a lock this old
+ *  is abandoned whatever its pid says: the pid may have been reused. */
+const LOCK_STALE_MS = 5 * 60_000
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms))
@@ -171,25 +172,14 @@ const getTemplateFingerprint = (): string => {
   return hash.digest('hex').slice(0, 20)
 }
 
-const pidAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-/** Whether the builder holding `lockDir` is gone: killed mid-build (a gate
- *  SIGTERMs vitest when lint fails), so its `finally` never released it. */
+/** Whether the builder holding `lockDir` is gone: killed before its `finally`
+ *  released the lock. A lock with no readable pid yet is a builder between its
+ *  mkdir and its pid write. */
 const lockAbandoned = (lockDir: string): boolean => {
-  let pid = NaN
   try {
-    pid = Number(readFileSync(join(lockDir, LOCK_OWNER_FILE), 'utf8'))
-  } catch { /* no owner written yet */ }
-  if (Number.isInteger(pid) && pid > 0) return !pidAlive(pid)
-  try {
-    return Date.now() - statSync(lockDir).mtimeMs > OWNERLESS_LOCK_STALE_MS
+    if (Date.now() - statSync(lockDir).mtimeMs > LOCK_STALE_MS) return true
+    const pid = Number(readFileSync(join(lockDir, LOCK_OWNER_FILE), 'utf8'))
+    return Number.isInteger(pid) && pid > 0 && !pidAlive(pid)
   } catch {
     return false
   }
@@ -197,8 +187,8 @@ const lockAbandoned = (lockDir: string): boolean => {
 
 /** True once the template is ready; false when the lock is free to take,
  *  including one this call stole from a builder that is gone. Two waiters can
- *  both steal it and both build, and the later rename then fails that run
- *  once: accepted over a protocol to prevent a race this rare. */
+ *  both steal it and both build; the one that renames second keeps the first's
+ *  template (see `buildTemplateDbDir`). */
 export const waitForTemplateReadyOrLockRelease = async (
   templateDir: string,
   lockDir: string,
@@ -219,43 +209,61 @@ export const waitForTemplateReadyOrLockRelease = async (
   return true
 }
 
-const ensureTemplateDbDir = async (): Promise<string> => {
-  templateDbDirPromise ??= (async () => {
-    const cacheDir = join(tmpdir(), 'ps-test-template-cache')
-    mkdirSync(cacheDir, {recursive: true})
-    const templateDir = join(cacheDir, getTemplateFingerprint())
-    const readyFile = join(templateDir, TEMPLATE_READY_FILE)
-    if (existsSync(readyFile)) return templateDir
+const buildTemplateDbDir = async (): Promise<string> => {
+  const cacheDir = join(tmpdir(), 'ps-test-template-cache')
+  mkdirSync(cacheDir, {recursive: true})
+  const templateDir = join(cacheDir, getTemplateFingerprint())
+  const readyFile = join(templateDir, TEMPLATE_READY_FILE)
+  if (existsSync(readyFile)) return templateDir
 
-    const lockDir = `${templateDir}.lock`
-    for (;;) {
-      try {
-        mkdirSync(lockDir)
-        writeFileSync(join(lockDir, LOCK_OWNER_FILE), String(process.pid))
-        break
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        if (await waitForTemplateReadyOrLockRelease(templateDir, lockDir)) return templateDir
-      }
-    }
-
-    const dbDir = mkdtempSync(join(cacheDir, 'building-'))
-    let db: PowerSyncDatabase | null = null
+  const lockDir = `${templateDir}.lock`
+  for (;;) {
     try {
-      rmSync(templateDir, {recursive: true, force: true})
-      db = await initializeTestDb(dbDir)
-      await db.close()
-      writeFileSync(join(dbDir, TEMPLATE_READY_FILE), '')
-      renameSync(dbDir, templateDir)
-      return templateDir
+      mkdirSync(lockDir)
+      writeFileSync(join(lockDir, LOCK_OWNER_FILE), String(process.pid))
+      break
     } catch (error) {
-      if (db) await db.close().catch(() => {})
-      rmSync(dbDir, {recursive: true, force: true})
-      throw error
-    } finally {
-      rmSync(lockDir, {recursive: true, force: true})
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (await waitForTemplateReadyOrLockRelease(templateDir, lockDir)) return templateDir
     }
-  })()
+  }
+
+  let dbDir: string | null = null
+  let db: PowerSyncDatabase | null = null
+  try {
+    // Another builder finished between the check above and this lock, or as
+    // this one stole its lock: deleting that template would pull it out from
+    // under every process copying it.
+    if (existsSync(readyFile)) return templateDir
+    dbDir = mkdtempSync(join(cacheDir, 'building-'))
+    rmSync(templateDir, {recursive: true, force: true})
+    db = await initializeTestDb(dbDir)
+    await db.close()
+    writeFileSync(join(dbDir, TEMPLATE_READY_FILE), '')
+    try {
+      renameSync(dbDir, templateDir)
+    } catch (error) {
+      if (!existsSync(readyFile)) throw error
+      rmSync(dbDir, {recursive: true, force: true})
+    }
+    return templateDir
+  } catch (error) {
+    if (db) await db.close().catch(() => {})
+    if (dbDir) rmSync(dbDir, {recursive: true, force: true})
+    throw error
+  } finally {
+    rmSync(lockDir, {recursive: true, force: true})
+  }
+}
+
+/** A failed build is not cached: the shared vitest project keeps this module
+ *  across files in one worker, and a cached rejection would fail every later
+ *  file there. */
+const ensureTemplateDbDir = (): Promise<string> => {
+  templateDbDirPromise ??= buildTemplateDbDir().catch((error: unknown) => {
+    templateDbDirPromise = null
+    throw error
+  })
   return templateDbDirPromise
 }
 
