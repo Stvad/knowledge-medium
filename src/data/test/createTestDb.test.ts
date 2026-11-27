@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, existsSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createTestDb, type TestDb, waitForTemplateReadyOrLockRelease } from './createTestDb'
+import { createTestDb, type TestDb, tryTakeTemplateLock, waitForTemplateReadyOrLockRelease } from './createTestDb'
 import { BLOCKS_TABLE_COLUMN_NAMES } from '@/data/blockSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
@@ -168,6 +168,14 @@ describe('the template build lock', () => {
     expect(existsSync(lockDir)).toBe(false)
   })
 
+  it('takes a free lock with its own pid inside, and refuses a held one', () => {
+    lock(String(process.pid))
+    rmSync(lockDir, {recursive: true})
+    expect(tryTakeTemplateLock(lockDir)).toBe(true)
+    expect(readFileSync(join(lockDir, 'pid'), 'utf8')).toBe(String(process.pid))
+    expect(tryTakeTemplateLock(lockDir)).toBe(false)
+  })
+
   // A live pid on an old lock is a reused one: no build lasts that long.
   it.each([
     ['ownerless', () => undefined],
@@ -184,7 +192,7 @@ describe('the template build lock', () => {
     ['a live builder', () => String(process.pid)],
     // pid 1 refuses a signal from a non-root user (EPERM), which is still alive.
     ['a builder this process may not signal', () => '1'],
-    ['a builder that has not written its pid yet', () => undefined],
+    ['a lock whose pid cannot be read', () => undefined],
   ])('waits on %s until its template is ready', async (_case, owner) => {
     lock(owner())
     const waiting = waitForTemplateReadyOrLockRelease(templateDir, lockDir)

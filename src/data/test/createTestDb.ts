@@ -173,8 +173,7 @@ const getTemplateFingerprint = (): string => {
 }
 
 /** Whether the builder holding `lockDir` is gone: killed before its `finally`
- *  released the lock. A lock with no readable pid yet is a builder between its
- *  mkdir and its pid write. */
+ *  released the lock. */
 const lockAbandoned = (lockDir: string): boolean => {
   try {
     if (Date.now() - statSync(lockDir).mtimeMs > LOCK_STALE_MS) return true
@@ -182,6 +181,24 @@ const lockAbandoned = (lockDir: string): boolean => {
     return Number.isInteger(pid) && pid > 0 && !pidAlive(pid)
   } catch {
     return false
+  }
+}
+
+/** Take `lockDir` with its owner already inside: staged aside, then renamed
+ *  into place, which fails while another lock holds the name. So a lock never
+ *  exists without its pid, and one stolen from under a new owner costs a
+ *  duplicate build rather than a failed pid write. */
+export const tryTakeTemplateLock = (lockDir: string): boolean => {
+  const staged = mkdtempSync(`${lockDir}-`)
+  writeFileSync(join(staged, LOCK_OWNER_FILE), String(process.pid))
+  try {
+    renameSync(staged, lockDir)
+    return true
+  } catch (error) {
+    rmSync(staged, {recursive: true, force: true})
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOTEMPTY' || code === 'EEXIST') return false
+    throw error
   }
 }
 
@@ -217,15 +234,8 @@ const buildTemplateDbDir = async (): Promise<string> => {
   if (existsSync(readyFile)) return templateDir
 
   const lockDir = `${templateDir}.lock`
-  for (;;) {
-    try {
-      mkdirSync(lockDir)
-      writeFileSync(join(lockDir, LOCK_OWNER_FILE), String(process.pid))
-      break
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      if (await waitForTemplateReadyOrLockRelease(templateDir, lockDir)) return templateDir
-    }
+  while (!tryTakeTemplateLock(lockDir)) {
+    if (await waitForTemplateReadyOrLockRelease(templateDir, lockDir)) return templateDir
   }
 
   let dbDir: string | null = null
