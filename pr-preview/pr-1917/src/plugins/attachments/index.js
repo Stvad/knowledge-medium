@@ -1,1 +1,1 @@
-export{nw as attachmentsPlugin}from"../../../chunks/app-Zs_RNzkM.js";
+export{nw as attachmentsPlugin}from"../../../chunks/app-cHKmPhme.js";

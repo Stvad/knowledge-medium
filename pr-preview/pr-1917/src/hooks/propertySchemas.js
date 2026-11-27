@@ -1,1 +1,1 @@
-export{FY as usePropertySchemas}from"../../chunks/app-Zs_RNzkM.js";
+export{FY as usePropertySchemas}from"../../chunks/app-cHKmPhme.js";
