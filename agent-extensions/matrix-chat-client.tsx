@@ -12,7 +12,7 @@ import {
 } from '@/plugins/diagnostics/facet.js'
 import {
   ChangeScope, seedType, seedProperty, definePropertyEditorOverride,
-  type PropertyEditorProps,
+  type PropertyEditorProps, type Tx,
 } from '@/data/api/index.js'
 import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { getPluginPrefsBlock, pluginPrefsBlockId } from '@/data/stateBlocks.js'
@@ -62,7 +62,8 @@ const MATRIX_NS = '9839e327-a96a-4974-acb1-128fc44878b8'
 const TOKEN_PREFIX = 'knowledge-medium:matrix:token:v2:'
 // Pre-binding storage is read only by setup and the legacy config migration.
 const LEGACY_TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
-const LEGACY_BATCH_PREFIX = 'knowledge-medium:matrix-messages:state:v1'
+const LEGACY_BATCH_PREFIX = 'knowledge-medium:matrix-messages:state:v1:'
+const legacyNextBatchKey = ({baseUrl, roomId}: Pick<MatrixDestination, 'baseUrl' | 'roomId'>) => LEGACY_BATCH_PREFIX + baseUrl + ':' + roomId
 // one-time migration marker (per workspace) — see migrateEventNamespace.
 const MIGRATION_FLAG_PREFIX = 'knowledge-medium:matrix:migrated:event-ns:v1'
 // pre-refactor config blob (homeserver/room/autoStart/token in one localStorage
@@ -244,14 +245,13 @@ const storageKeys = (prefix: string): string[] => {
 
 const legacyCheckpoint = ({baseUrl, roomId}: MatrixDestination): string | null => {
   const storage = window.localStorage
-  const prefix = LEGACY_BATCH_PREFIX + ':'
-  const current = storage.getItem(prefix + baseUrl + ':' + roomId)
+  const current = storage.getItem(legacyNextBatchKey({baseUrl, roomId}))
   if (decodeNextBatch(current)) return current
 
   // The v1 key retains the server spelling (including its path). Split at
   // the Matrix room ID so an origin match cannot also match a room suffix.
-  for (const key of storageKeys(prefix)) {
-    const pair = key.slice(prefix.length)
+  for (const key of storageKeys(LEGACY_BATCH_PREFIX)) {
+    const pair = key.slice(LEGACY_BATCH_PREFIX.length)
     const separator = pair.indexOf(':!')
     if (separator < 0 || pair.slice(separator + 1) !== roomId) continue
     if (httpsUrl(pair.slice(0, separator))?.origin !== baseUrl) continue
@@ -405,6 +405,7 @@ const decodeNextBatch = (raw: string | null): string | null => {
 
 const loadNextBatch = (config: MatrixConfig) => decodeNextBatch(window.localStorage.getItem(nextBatchKey(config)))
 
+// Preserve the v1 {nextBatch, savedAt} shape so setup can copy a checkpoint verbatim.
 const saveNextBatch = (config: MatrixConfig, nextBatch: string) =>
   window.localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch, savedAt: Date.now()}))
 
@@ -735,13 +736,22 @@ const createBlocksFromEvent = (
 const messageNodeId = (workspaceId: string, eventId: string, path: number[]): string =>
   pluginBlockId(workspaceId, MATRIX_NS, `event:${eventId}:${path.join('.')}`)
 
+type TreeWriter = Pick<Tx, 'childrenOf' | 'create'>
+
+const checkedTreeWriter = (tx: Tx, verifyWorkspace: () => void): TreeWriter => ({
+  childrenOf: tx.childrenOf.bind(tx),
+  create: (...args) => {
+    verifyWorkspace()
+    return tx.create(...args)
+  },
+})
+
 const createBlockTree = async (
-  tx: any,
+  tx: TreeWriter,
   workspaceId: string,
   parentId: string,
   blockDefinitions: BlockDef[],
   eventId: string,
-  verifyWorkspace: () => void,
   rootProperties?: Record<string, unknown>,
   path: number[] = [],
 ): Promise<void> => {
@@ -766,7 +776,6 @@ const createBlockTree = async (
       ? addBlockTypeToProperties(merged ?? {}, MATRIX_MESSAGE_TYPE)
       : merged
 
-    verifyWorkspace()
     const id = await tx.create({
       id: messageNodeId(workspaceId, eventId, nodePath),
       workspaceId,
@@ -777,7 +786,7 @@ const createBlockTree = async (
     })
 
     if (Array.isArray(block.children) && block.children.length) {
-      await createBlockTree(tx, workspaceId, id, block.children, eventId, verifyWorkspace, undefined, nodePath)
+      await createBlockTree(tx, workspaceId, id, block.children, eventId, undefined, nodePath)
     }
   }
 }
@@ -852,12 +861,11 @@ const appendMatrixMessage = async (
     if (messageChildren.some((child: any) => child.properties?.[eventIdProp.name] === eventId)) return
 
     await createBlockTree(
-      tx,
+      checkedTreeWriter(tx, verifyWorkspace),
       workspaceId,
       tagBlockId,
       messageTree,
       eventId,
-      verifyWorkspace,
       {
         [eventIdProp.name]: eventId,
         [eventRoomProp.name]: config.roomId,
@@ -994,12 +1002,12 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
   clearMatrixDiagnostic()
 
   const stopped = new Error('Matrix poll stopped')
+  const isCurrent = () => !signal.aborted && repo.activeWorkspaceId === config.workspaceId
   const verifyWorkspace = () => {
-    if (signal.aborted || repo.activeWorkspaceId !== config.workspaceId) throw stopped
+    if (!isCurrent()) throw stopped
   }
-  while (!signal.aborted) {
+  while (isCurrent()) {
     try {
-      verifyWorkspace()
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
       const events = nextBatch ? roomEventsFromSync(syncBody, config.roomId) : []
 
@@ -1019,7 +1027,7 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
         clearMatrixDiagnostic()
       }
     } catch (error) {
-      if (error === stopped || signal.aborted || repo.activeWorkspaceId !== config.workspaceId) return
+      if (error === stopped || !isCurrent()) return
       const message = error instanceof Error ? error.message : String(error)
       degraded = true
       if (isRetryableError(error)) {
@@ -1071,16 +1079,13 @@ export const matrixIngestEffect = {
       }
 
       const prefs: Block = repo.block(pluginPrefsBlockId(workspaceId, repo.user.id, matrixChatPrefsType.id))
-      let previousKey: string | null | undefined
-      let previousToken: string | null = null
+      let previousFingerprint: string | undefined
       const refresh = () => {
         if (started !== generation) return
         const config = prefs.peek() ? loadConfig(prefs) : null
-        const key = config?.autoStart ? tokenKey(config) : config ? '' : null
-        const token = config?.accessToken ?? null
-        if (previousKey === key && previousToken === token) return
-        previousKey = key
-        previousToken = token
+        const fingerprint = JSON.stringify(config)
+        if (fingerprint === previousFingerprint) return
+        previousFingerprint = fingerprint
         currentAbort?.abort()
         if (!config) {
           setMatrixDiagnostic(unconfiguredMatrixDiagnostic)
@@ -1107,7 +1112,7 @@ export const matrixIngestEffect = {
       }
 
       const onStorage = (event: StorageEvent) => {
-        if (event.key === previousKey || event.key === null) refresh()
+        if (event.key === null || event.key.startsWith(TOKEN_PREFIX)) refresh()
       }
       window.addEventListener('storage', onStorage)
       const unsubscribeBlock = prefs.subscribe(refresh)
