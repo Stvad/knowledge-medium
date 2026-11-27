@@ -1,0 +1,1 @@
+export{BS as EmbedComponent,VS as referenceTargetOf}from"../../../../chunks/app-D0yP_31M.js";

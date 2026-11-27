@@ -1,0 +1,1 @@
+export{LS as Wikilink}from"../../../../../chunks/app-D0yP_31M.js";

@@ -1,0 +1,1 @@
+export{Gb as DATA_MODEL_GUIDE,Kb as dataModelGuide}from"../../../chunks/app-D0yP_31M.js";

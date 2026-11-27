@@ -1,0 +1,1 @@
+export{BL as editorAutocompleteExtension}from"../../chunks/app-D0yP_31M.js";
