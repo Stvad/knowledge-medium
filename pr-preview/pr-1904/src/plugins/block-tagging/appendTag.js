@@ -1,0 +1,1 @@
+export{Qf as appendTagToBlocks,$f as appendTagToContent}from"../../../chunks/app-CqY1NI6_.js";

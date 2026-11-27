@@ -1,0 +1,1 @@
+export{JJ as BackgroundSubtreeContext,YJ as BackgroundSubtreeProvider,XJ as useIsBackgroundSubtree}from"../../chunks/app-CqY1NI6_.js";
