@@ -22,8 +22,9 @@ import {
   isLocalBridgeUrl,
   loadContributorSelection,
 } from '@knowledge-medium/agent-cli/config'
-import { loadConfig, type DaemonConfig } from './config.js'
-import { instanceFiles, type InstanceFiles } from './instance.js'
+import { loadConfig, watcherWorkspace, type DaemonConfig } from './config.js'
+import { instanceFiles, workspaceMcpConfigFile, type InstanceFiles } from './instance.js'
+import { cloudProviderSwitch } from './workspace.js'
 import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
@@ -85,6 +86,14 @@ const main = async () => {
     config = await loadConfig(args.config)
     if (config.configuredWatcherCount === 0) {
       throw new Error('No watchers configured — nothing to do. Add watchers to the config file.')
+    }
+    const workspaceWatcher = config.watchers.find(watcher => watcherWorkspace(watcher))
+    if (workspaceWatcher && process.platform !== 'darwin') {
+      throw new Error(`watcher "${workspaceWatcher.name}": runner.workspace is supported on macOS only, where its sandbox is verified`)
+    }
+    const providerSwitch = config.billing === 'api' ? cloudProviderSwitch(process.env) : null
+    if (workspaceWatcher && providerSwitch) {
+      throw new Error(`watcher "${workspaceWatcher.name}": runner.workspace bills the API through an Anthropic key only, not ${providerSwitch}; its provider credentials are not passed to the run`)
     }
     if (config.watchers.length > 0) {
       const selection = await loadContributorSelection(config.profile, config.workspaceId)
@@ -206,6 +215,16 @@ const main = async () => {
   const mcpServerDef = buildMcpServerDef(config, contributorId)
   const mcpConfig = await writeMcpConfig(mcpServerDef, files.mcpConfig)
   log(`mcp config: ${mcpConfig.path}`)
+  // A workspace watcher's server reads media files under its own root, so it gets its own config.
+  const workspaceMcpConfigs = new Map<string, Awaited<ReturnType<typeof writeMcpConfig>>>()
+  for (const watcher of config.watchers) {
+    const root = watcherWorkspace(watcher)?.root
+    if (root === undefined) continue
+    workspaceMcpConfigs.set(watcher.name, await writeMcpConfig(
+      buildMcpServerDef(config, contributorId, root), workspaceMcpConfigFile(files, watcher.name),
+    ))
+    log(`[${watcher.name}] workspace: ${root}`)
+  }
 
   const channelSecret = config.watchers.some(watcher => watcher.delivery === 'channel')
     ? await loadOrCreateChannelSecret()
@@ -251,7 +270,7 @@ const main = async () => {
         throw new Error(`channel listener replied ${response.status} — is the ambient session running? (claude --dangerously-load-development-channels server:km, ${CHANNEL_PORT_ENV}=${config.channelPort})`)
       }
     },
-    mcpConfig,
+    mcpConfigFor: watcher => workspaceMcpConfigs.get(watcher.name) ?? mcpConfig,
     log,
   })
 

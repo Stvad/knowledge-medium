@@ -4,11 +4,12 @@
  * decisions live in watchers.ts and every side effect sits behind an
  * injected dependency, so the whole flow is testable with in-memory fakes.
  */
+import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
-import { PROPS } from './config.js'
+import { PROPS, watcherWorkspace } from './config.js'
 import type { Graph, MemoryScope, ReplyWriter } from './graph.js'
 import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
@@ -18,8 +19,9 @@ import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt 
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
 import { MEMORY_DIFF_LIMIT } from './graph.js'
-// Dispatch's km server (`./mcp.ts`) must never set `localMediaFiles`: this list pre-approves its add_media.
-import { KM_MCP_ALLOWED_TOOLS_WITHOUT_LOCAL_FILES as DISPATCH_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
+// Pre-approves add_media: dispatch's km server (`./mcp.ts`) reads local files only under the run's own workspace.
+import { KM_MCP_ALLOWED_TOOLS_WITH_ADD_MEDIA as DISPATCH_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
+import { workspaceThreadDir } from './workspace.js'
 
 export interface ChannelEvent {
   content: string
@@ -37,8 +39,10 @@ export interface EngineDeps {
   /** EXPERIMENTAL: push an event into the ambient channel session
    *  (delivery: 'channel' watchers). Throws if unreachable. */
   deliverToChannel: (event: ChannelEvent) => Promise<void>
-  /** Generated --mcp-config path and the server names allowed in Claude events. Null disables graph tools. */
-  mcpConfig: NonNullable<AgentRunOptions['mcpConfig']> | null
+  /** The generated --mcp-config for a watcher's runs, with the server names allowed in
+   *  Claude events (a workspace watcher's server reads media files from its workspace);
+   *  null disables graph tools for runs. */
+  mcpConfigFor: (watcher: Watcher) => NonNullable<AgentRunOptions['mcpConfig']> | null
   log: (message: string) => void
   now?: () => number
   /** Sleep between terminal reply-reconcile retries — injected so tests run
@@ -121,7 +125,7 @@ const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null
 }
 
 export const createEngine = (deps: EngineDeps) => {
-  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfig, log} = deps
+  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfigFor, log} = deps
   const now = deps.now ?? Date.now
   const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
@@ -210,15 +214,23 @@ export const createEngine = (deps: EngineDeps) => {
     running.set(key, promise)
   }
 
+  /** `threadId` places a workspace run in its thread's folder; without one it works in the root. */
   const runOptionsFor = (
-    watcher: Watcher, prompt: string, resumeSessionId?: string, onEvent?: (event: RunEvent) => void,
-    signal?: AbortSignal,
+    watcher: Watcher, prompt: string,
+    {resumeSessionId, newSessionId, onEvent, signal, threadId}: {
+      resumeSessionId?: string, newSessionId?: string, onEvent?: (event: RunEvent) => void, signal?: AbortSignal, threadId?: string
+    } = {},
   ): AgentRunOptions => {
     const {runner} = watcher
+    const mcpConfig = mcpConfigFor(watcher)
+    const workspace = watcherWorkspace(watcher)
     return {
       claudeBin: config.claudeBin,
       prompt,
-      cwd: runner.cwd ?? os.homedir(),
+      cwd: workspace
+        ? (threadId !== undefined ? workspaceThreadDir(workspace.root, threadId) : workspace.root)
+        : runner.cwd ?? os.homedir(),
+      workspace,
       allowedTools: runner.executor === 'claude'
         ? [...new Set([
           ...(mcpConfig ? DISPATCH_MCP_ALLOWED_TOOLS : []),
@@ -231,6 +243,7 @@ export const createEngine = (deps: EngineDeps) => {
       model: runner.model,
       effort: runner.executor === 'claude' ? runner.effort : undefined,
       resumeSessionId,
+      newSessionId,
       timeoutMs: runner.timeoutMs,
       onEvent,
       executor: runner.executor,
@@ -323,6 +336,9 @@ export const createEngine = (deps: EngineDeps) => {
     const session = watcher.resume
       ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
       : null
+    // A workspace thread's folder is named for its session, so a new one starts under a known id.
+    const newSessionId = !session && watcherWorkspace(watcher) ? randomUUID() : undefined
+    const threadId = session ?? newSessionId
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) {
       refundLaunch(launchStamp)
@@ -512,7 +528,7 @@ export const createEngine = (deps: EngineDeps) => {
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
         sessionId
-          ? resumeOptionsForRun(runOptionsFor(watcher, prompt, sessionId, undefined, abortController.signal))
+          ? resumeOptionsForRun(runOptionsFor(watcher, prompt, {resumeSessionId: sessionId, signal: abortController.signal, threadId}))
           : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
@@ -570,7 +586,9 @@ export const createEngine = (deps: EngineDeps) => {
         }
       }
 
-      const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
+      const runOptions = runOptionsFor(watcher, prompt, {
+        resumeSessionId: session ?? undefined, newSessionId, onEvent, signal: abortController.signal, threadId,
+      })
       let result: AgentRunResult
       try {
         result = await runTask(runOptions)
@@ -818,12 +836,12 @@ export const createEngine = (deps: EngineDeps) => {
       // session id to — logging it as it streams is the only record, and
       // the only way to inspect a run while it is live.
       let loggedSession: string | null = null
-      const result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
+      const result = await runTask(runOptionsFor(watcher, prompt, {onEvent: event => {
         if (event.kind === 'session' && !loggedSession) {
           loggedSession = event.sessionId
           log(`[${watcher.name}] session ${event.sessionId}`)
         }
-      }))
+      }}))
       const session = result.sessionId ?? loggedSession
       if (result.ok) {
         log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}${usageNote(result)}: ${truncate(result.resultText.trim(), 200)}`)

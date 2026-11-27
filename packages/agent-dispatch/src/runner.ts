@@ -9,10 +9,14 @@
  * skips the scrub (see config.ts + AgentRunOptions.billing).
  *
  * Each live run checks Claude's startup inventory and the tools named
- * in streamed and finalized tool requests.
+ * in streamed and finalized tool requests. A watcher can confine Bash and
+ * the file tools to a workspace folder (workspace.ts).
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
-import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
+import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox, RunWorkspace } from './config.js'
+import {
+  prepareWorkspaceRun, WORKSPACE_APPROVED_TOOLS, WORKSPACE_TOOLS, workspaceEnv, workspaceSettings, workspaceSystemPrompt,
+} from './workspace.js'
 
 export const THINKING_ACTIVITY = 'Thinking'
 
@@ -58,6 +62,10 @@ export interface AgentRunOptions extends CommonRunOptions {
   allowedPlugins?: readonly string[]
   effort?: ClaudeEffort
   mcpConfig?: {path: string, serverNames: readonly string[]}
+  /** Run sandboxed in this workspace (workspace.ts), in `cwd`, a folder under its root. */
+  workspace?: RunWorkspace
+  /** Start a new session under this id (`--session-id`): a workspace thread's folder is named for it. */
+  newSessionId?: string
   /** Which CLI the engine should dispatch this run to (daemon.ts's
    *  runTask wiring); the engine itself stays executor-agnostic — this
    *  field just rides along with the rest of the run options. */
@@ -149,6 +157,10 @@ export const BILLING_ENV_DENYLIST = [
   'CLAUDE_CODE_USE_FOUNDRY',
 ] as const
 
+/** Every credential Claude Code may take from its environment: the billing ones and a
+ *  subscription sign-in (`claude setup-token`). They reach Claude Code and never Bash. */
+const CLAUDE_CREDENTIAL_ENV = [...BILLING_ENV_DENYLIST, 'CLAUDE_CODE_OAUTH_TOKEN'] as const
+
 export const scrubEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
   const scrubbed = {...env}
   for (const key of BILLING_ENV_DENYLIST) delete scrubbed[key]
@@ -164,12 +176,19 @@ export const envForBilling = (
   scrub: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv = scrubEnv,
 ): NodeJS.ProcessEnv => (billing === 'api' ? {...env} : scrub(env))
 
+/** The tool a permission rule names: `Bash(git *)` is a Bash rule. */
+const ruleTool = (rule: string): string => rule.trim().split('(', 1)[0]
+
+/** One rule, nothing Claude Code would split into more: it splits --allowedTools on commas and spaces. */
+const SINGLE_RULE = /^[A-Za-z_][\w-]*(\([^()]*\))?$/
+
 const reportedToolNames = new Map([['Agent', 'Task'], ['KillShell', 'TaskStop']])
 
-/** Init and tool-use events can use different names for the same requested tool. */
+/** The built-ins offered (`--tools`): those the allow list names, and a workspace's.
+ *  Init and tool-use events can use different names for the same requested tool. */
 const claudeToolSet = (options: AgentRunOptions) => {
-  const requested = [...new Set(options.allowedTools.map(rule => rule.trim().split('(', 1)[0])
-    .filter(name => !name.startsWith('mcp__')))]
+  const rules = [...options.allowedTools, ...(options.workspace ? WORKSPACE_TOOLS : [])]
+  const requested = [...new Set(rules.map(ruleTool).filter(name => !name.startsWith('mcp__')))]
   const reported = requested.map(name => reportedToolNames.get(name) ?? name)
   return {
     requested,
@@ -192,16 +211,30 @@ export const buildClaudeArgs = (options: AgentRunOptions, tools = claudeToolSet(
     '--setting-sources', 'project,local', '--strict-mcp-config',
   ]
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
+  if (options.newSessionId) args.push('--session-id', options.newSessionId)
   if (options.model) args.push('--model', options.model)
   if (options.effort) args.push('--effort', options.effort)
   if (options.mcpConfig) args.push('--mcp-config', options.mcpConfig.path)
+  const {workspace} = options
+  if (workspace) {
+    args.push(
+      '--restricted',
+      '--add-dir', workspace.root,
+      '--settings', JSON.stringify(workspaceSettings(workspace, CLAUDE_CREDENTIAL_ENV)),
+      '--append-system-prompt', workspaceSystemPrompt(workspace, options.cwd ?? workspace.root),
+    )
+  }
   // Settings scope and --tools reduce what Claude loads. Its init inventory
   // is checked independently because plugins can register additional tools.
   // Skill also needs slash commands enabled.
   if (!tools.requested.includes('Skill')) args.push('--disable-slash-commands')
   args.push('--tools', tools.requested.join(','))
-  if (options.allowedTools.length > 0) {
-    args.push('--allowedTools', options.allowedTools.join(','))
+  // A workspace's grants ride in its settings document instead (workspace.ts).
+  const allowedTools = workspace
+    ? options.allowedTools.filter(rule => SINGLE_RULE.test(rule) && !WORKSPACE_APPROVED_TOOLS.includes(ruleTool(rule)))
+    : options.allowedTools
+  if (allowedTools.length > 0) {
+    args.push('--allowedTools', allowedTools.join(','))
   }
   return args
 }
@@ -287,7 +320,12 @@ export interface ParsedClaudeResult {
  *  Never throws: unparseable/unknown lines and events are silently
  *  skipped, and `onEvent` dispatch is wrapped so a broken consumer can't
  *  kill the run. */
-export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void, intended?: ClaudeToolSet) => {
+export const createStreamJsonParser = (
+  onEvent?: (event: RunEvent) => void,
+  intended?: ClaudeToolSet,
+  /** The `system/init` line, as it arrives. */
+  onInit?: (line: Record<string, unknown>) => void,
+) => {
   let initPassed = false
   let refusal: string | null = null
   let buffer = ''
@@ -322,6 +360,7 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void, inte
     const type = line.type
 
     if (type === 'system' && line.subtype === 'init') {
+      onInit?.(line)
       const sessionId = line.session_id
       if (typeof sessionId === 'string') {
         initSessionId = sessionId
@@ -468,21 +507,29 @@ export const runClaude = async (
 ): Promise<AgentRunResult> => {
   const tools = claudeToolSet(options)
   const args = buildClaudeArgs(options, tools)
-  const parser = createStreamJsonParser(options.onEvent, tools)
   const env = envForBilling(options.env ?? process.env, options.billing)
   // Convenience for daemons launched inside a desktop session. The init
   // check also covers plugin sources that this process does not know about.
   delete env.CLAUDE_CODE_PLUGIN_DIRS
+  const {workspace} = options
+  const workspaceCwd = workspace && await prepareWorkspaceRun(workspace, options.cwd)
+  // A folder swapped for a link between that check and the spawn: Claude Code reports
+  // where it really started before its first request, so stop it there.
+  const stray = new AbortController()
+  const parser = createStreamJsonParser(options.onEvent, tools, workspaceCwd === undefined ? undefined : init => {
+    if (init.cwd !== workspaceCwd) stray.abort('workspace: the run did not start in its thread folder; stopped it')
+  })
 
   const {exitCode, timedOut, stderr} = await runJsonlProcess({
     bin: options.claudeBin,
     args,
     prompt: options.prompt,
-    cwd: options.cwd,
-    env,
+    cwd: workspaceCwd ?? options.cwd,
+    // The billing scrub has already run, so only the credentials it kept are passed on.
+    env: workspace ? workspaceEnv(env, workspace.root, CLAUDE_CREDENTIAL_ENV) : env,
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
-    signal: options.signal,
+    signal: options.signal ? AbortSignal.any([options.signal, stray.signal]) : stray.signal,
     spawnImpl,
   })
 
@@ -494,6 +541,7 @@ export const runClaude = async (
       stderr: `Check plugins and settings in runner.cwd (including the default home directory), managed settings, and tool names in this Claude CLI version. ${refusal}`,
     }
   }
+  // No stray-cwd clause: that run is killed at its init line, before its first request, so it cannot end ok.
   const ok = !timedOut && exitCode === 0 && parsed !== null && !parsed.isError
 
   return {
@@ -502,7 +550,7 @@ export const runClaude = async (
     sessionId: parser.sessionId(),
     exitCode,
     timedOut,
-    stderr,
+    stderr: stray.signal.aborted ? `${String(stray.signal.reason)}\n${stderr}` : stderr,
     raw: parsed?.raw ?? null,
     usage: claudeUsageFrom(parsed?.raw ?? null),
   }

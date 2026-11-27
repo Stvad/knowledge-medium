@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 import path from 'node:path'
-import {instanceFiles, instanceName} from '../src/instance'
+import {instanceFiles, instanceName, workspaceMcpConfigFile} from '../src/instance'
 
 describe('daemon instance', () => {
   it('keeps the original per-machine names when the config names no instance', () => {
@@ -19,6 +19,12 @@ describe('daemon instance', () => {
     expect(new Set(paths).size).toBe(paths.length)
     const names = instances.map(instanceName)
     expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('puts a workspace watcher\'s MCP config beside its instance\'s own', () => {
+    expect(workspaceMcpConfigFile(instanceFiles(undefined, '/cfg'), 'notes')).toBe('/cfg/agent-dispatch-mcp-notes.json')
+    expect(workspaceMcpConfigFile(instanceFiles('host', '/cfg'), 'notes')).toBe('/cfg/agent-dispatch-host/mcp-notes.json')
+    expect(workspaceMcpConfigFile(instanceFiles(undefined, '/cfg'), 'a/b')).toBe('/cfg/agent-dispatch-mcp-a%2Fb.json')
   })
 
   it('keeps a named instance\'s files out of the directory its config sits in', () => {

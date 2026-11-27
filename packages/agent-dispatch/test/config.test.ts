@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import {configSchema, MAX_RUN_TIMEOUT_MS, parseConfig} from '../src/config'
+import {configSchema, defaultWorkspacesDir, MAX_RUN_TIMEOUT_MS, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
   const configWithToolRule = (rule: string) => ({
@@ -331,6 +331,67 @@ describe('parseConfig', () => {
         runner: {executor: 'claude'},
       }],
     }).watchers[0]).toMatchObject({delivery: 'channel', runner: {executor: 'claude'}})
+  })
+
+  describe('runner.workspace', () => {
+    const withRunner = (runner: Record<string, unknown>, extra: Record<string, unknown> = {}) => parseConfig({
+      workspaceId: 'ws-test',
+      watchers: [{kind: 'backlinks', name: 'notes-agent', target: 'claude', runner: {executor: 'claude', ...runner}, ...extra}],
+    })
+
+    it('roots a workspace in a per-watcher folder under the default directory', () => {
+      const {runner} = withRunner({workspace: {}}).watchers[0]
+      const base = path.join(os.homedir(), 'Library', 'Application Support', 'km-agent-dispatch', 'workspaces')
+      expect(runner).toMatchObject({workspace: {root: path.join(base, 'notes-agent'), allowedDomains: []}})
+    })
+
+    it('gives a named instance\'s watchers workspaces of their own', () => {
+      const config = parseConfig({
+        workspaceId: 'ws-test', instance: 'host',
+        watchers: [{kind: 'backlinks', name: 'notes-agent', target: 'claude', runner: {executor: 'claude', workspace: {}}}],
+      })
+      expect(config.watchers[0].runner).toMatchObject({workspace: {root: path.join(defaultWorkspacesDir('host'), 'notes-agent')}})
+      expect(defaultWorkspacesDir('host')).not.toBe(defaultWorkspacesDir(undefined))
+    })
+
+    it('keeps the hosts Bash may reach', () => {
+      expect(withRunner({workspace: {allowedDomains: ['pypi.org']}}).watchers[0].runner)
+        .toMatchObject({workspace: {allowedDomains: ['pypi.org']}})
+    })
+
+    it('takes no root of its own: a folder chosen elsewhere could hold files later runs trust', () => {
+      expect(() => withRunner({workspace: {root: '/tmp/ws'}})).toThrow()
+    })
+
+    it('refuses a cwd beside it: the run works in its thread folder', () => {
+      expect(() => withRunner({workspace: {}, cwd: '/tmp'})).toThrow(/cwd/)
+    })
+
+    it('refuses allowedPlugins beside it: a plugin would run outside the sandbox', () => {
+      expect(() => withRunner({workspace: {}, allowedPlugins: ['code-guard@team-plugins']})).toThrow(/allowedPlugins/)
+      expect(withRunner({workspace: {}, allowedPlugins: []}).watchers[0].runner).toMatchObject({allowedPlugins: []})
+    })
+
+    it('refuses a watcher name that is not one folder name', () => {
+      expect(() => parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [{kind: 'backlinks', name: '../escape', target: 'claude', runner: {executor: 'claude', workspace: {}}}],
+      })).toThrow(/folder/)
+    })
+
+    it('refuses watcher names that differ only in case: the disk folds them into one folder', () => {
+      expect(() => parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [
+          {kind: 'backlinks', name: 'Research', target: 'a', runner: {executor: 'claude', workspace: {}}},
+          {kind: 'backlinks', name: 'research', target: 'b'},
+        ],
+      })).toThrow(/duplicate watcher name/)
+    })
+
+    it('refuses channel delivery: the ambient session is not a spawned run', () => {
+      expect(() => withRunner({workspace: {}}, {delivery: 'channel'})).toThrow(/channel/)
+    })
   })
 
   it('accepts an explicit opt-in to usage-based billing', () => {

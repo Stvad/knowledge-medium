@@ -37,12 +37,12 @@ export type KmMcpToolName = (typeof KM_MCP_TOOL_NAMES)[number]
 const toolId = (name: KmMcpToolName) => `mcp__${MCP_SERVER_NAME}__${name}`
 
 /** Fully-qualified tool ids as they appear to `claude --allowedTools`. `add_media` is left
- *  out: on a server with `localMediaFiles` it uploads any local file the model names. */
+ *  out: on a server with `localMediaFiles: true` it uploads any local file the model names. */
 export const KM_MCP_ALLOWED_TOOLS = KM_MCP_TOOL_NAMES.filter(name => name !== 'add_media').map(toolId)
 
-/** Every tool, for a server WITHOUT `localMediaFiles`, whose `add_media` stores only
- *  bytes the model passes in. */
-export const KM_MCP_ALLOWED_TOOLS_WITHOUT_LOCAL_FILES = KM_MCP_TOOL_NAMES.map(toolId)
+/** Every tool, `add_media` included: only for a server whose `localMediaFiles` is off, or
+ *  a root holding nothing the run could not already read. */
+export const KM_MCP_ALLOWED_TOOLS_WITH_ADD_MEDIA = KM_MCP_TOOL_NAMES.map(toolId)
 
 /** Canonical strict guard lives in protocol.ts so the bridge server's
  * read-only token scope, app watch-events registration, and MCP server

@@ -24,6 +24,11 @@ export interface InstanceFiles {
   state: string
 }
 
+/** A workspace watcher's own `--mcp-config` (its server reads media under its root),
+ *  named beside the instance's `mcpConfig`. */
+export const workspaceMcpConfigFile = ({mcpConfig}: InstanceFiles, watcherName: string): string =>
+  path.join(path.dirname(mcpConfig), `${path.basename(mcpConfig, '.json')}-${encodeURIComponent(watcherName)}.json`)
+
 export const instanceFiles = (instance: string | undefined, dir = agentRuntimeConfigDir()): InstanceFiles => {
   if (instance === undefined) {
     return {

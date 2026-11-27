@@ -78,7 +78,7 @@ const engineFor = (runTask: (options: AgentRunOptions) => Promise<AgentRunResult
     state: memoryState(),
     runTask,
     deliverToChannel: async () => {},
-    mcpConfig: null,
+    mcpConfigFor: () => null,
     log: () => {},
     delay: async () => {},
   })

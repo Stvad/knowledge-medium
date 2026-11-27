@@ -13,6 +13,7 @@ import { agentRuntimeConfigDir, isErrnoException } from '@knowledge-medium/agent
 import { normalizeProfileName } from '@knowledge-medium/agent-cli/client'
 import { WATCH_EVENTS_MAX_SETTLE_MS, WATCH_EVENTS_MAX_TABLES } from '@knowledge-medium/agent-cli/protocol'
 import { isReadOnlySql } from '@knowledge-medium/agent-cli/mcpShared'
+import { instanceName } from './instance.js'
 
 /** Block-property namespace the daemon owns. Kept short and stable —
  *  these live on user blocks and act as the durable task state. */
@@ -93,6 +94,16 @@ const claudeToolRulesSchema = z.array(z.string().trim().refine(isSingleClaudeToo
   message: 'Expected one Claude tool rule per entry, such as Read or Bash(git *).',
 }))
 
+/** A persistent folder the run works in (workspace.ts): its Bash, file tools and
+ *  `add_media` paths reach this folder and nothing else of the user's. It is always
+ *  `<defaultWorkspacesDir>/<watcher name>`: a root chosen elsewhere could hold files
+ *  later runs trust, and no list of those is complete. */
+const workspaceSchema = z.strictObject({
+  /** Hosts the run's Bash may connect to; none by default. WebFetch is a
+   *  separate tool, governed by the allowed tools, not by this list. */
+  allowedDomains: z.array(z.string().min(1)).default([]),
+})
+
 const claudeRunnerSchema = z.strictObject({
   executor: z.literal('claude'),
   ...runnerBase,
@@ -109,6 +120,7 @@ const claudeRunnerSchema = z.strictObject({
   allowedPlugins: z.array(z.string().trim().regex(/^[^@\s]+@[^@\s]+$/, {
     message: 'Expected a plugin id as name@marketplace, such as code-guard@team-plugins.',
   })).default([]),
+  workspace: workspaceSchema.optional(),
 })
 
 const codexSandboxSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access'])
@@ -138,6 +150,12 @@ const runnerSchema = z.preprocess(
   value => value === undefined ? {executor: 'claude'} : value,
   z.discriminatedUnion('executor', [claudeRunnerSchema, codexRunnerSchema]),
 ).superRefine((runner, ctx) => {
+  if (runner.executor === 'claude' && runner.workspace && runner.cwd !== undefined) {
+    ctx.addIssue({code: 'custom', path: ['cwd'], message: 'cwd cannot be set with workspace: the run works in its thread folder'})
+  }
+  if (runner.executor === 'claude' && runner.workspace && runner.allowedPlugins.length > 0) {
+    ctx.addIssue({code: 'custom', path: ['allowedPlugins'], message: 'allowedPlugins cannot be set with workspace: a plugin\'s hooks and MCP servers run outside its sandbox'})
+  }
   if (runner.executor !== 'codex') return
   if (runner.networkAccess && runner.sandbox !== 'workspace-write') {
     ctx.addIssue({
@@ -266,7 +284,17 @@ type RawBacklinksWatcher = z.infer<typeof backlinksWatcherSchema>
 type RawQueryWatcher = z.infer<typeof queryWatcherSchema>
 type RawWatcher = z.infer<typeof rawWatcherSchema>
 
-type ActiveWatcher<T extends {disabled: boolean}> = Omit<T, 'disabled'>
+/** A workspace with its root resolved: absolute, defaulted per watcher. */
+export interface RunWorkspace {
+  root: string
+  allowedDomains: string[]
+}
+
+type ActiveRunner =
+  | (Omit<Extract<Runner, {executor: 'claude'}>, 'workspace'> & {workspace?: RunWorkspace})
+  | Exclude<Runner, {executor: 'claude'}>
+
+type ActiveWatcher<T extends {disabled: boolean}> = Omit<T, 'disabled' | 'runner'> & {runner: ActiveRunner}
 
 export type BacklinksWatcher = ActiveWatcher<RawBacklinksWatcher>
 export type QueryWatcher = ActiveWatcher<RawQueryWatcher>
@@ -369,11 +397,33 @@ const rawConfigSchema = z.strictObject({
         message: 'delivery="channel" requires runner.executor="claude"; Codex has no channel transport',
       })
     }
+    const workspace = watcher.runner.executor === 'claude' ? watcher.runner.workspace : undefined
+    if (!workspace) return
+    const at = ['watchers', index, 'runner', 'workspace']
+    if (watcher.delivery === 'channel') {
+      ctx.addIssue({code: 'custom', path: at, message: 'workspace needs delivery="spawn": the channel session is not a run the daemon starts'})
+    }
+    if (!FOLDER_NAME.test(watcher.name)) {
+      ctx.addIssue({
+        code: 'custom', path: at,
+        message: `a workspace is a folder named for its watcher, and "${watcher.name}" is not a folder name: rename the watcher`,
+      })
+    }
   })
 })
 
 export const defaultConfigPath = () =>
   path.join(agentRuntimeConfigDir(), 'agent-dispatch.json')
+
+/** Where an instance's watchers keep their workspaces (instance.ts names instances),
+ *  apart from the config directory, which holds the bridge tokens. macOS only (daemon.ts). */
+export const defaultWorkspacesDir = (instance: string | undefined) => path.join(
+  os.homedir(), 'Library', 'Application Support', 'km-agent-dispatch',
+  ...(instance === undefined ? [] : [instanceName(instance)]), 'workspaces',
+)
+
+/** One path component, never `.` or `..`. */
+const FOLDER_NAME = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/
 
 const expandHome = (value: string) =>
   value === '~' || value.startsWith('~/')
@@ -381,27 +431,29 @@ const expandHome = (value: string) =>
     : value
 
 const duplicateWatcherName = (watchers: RawWatcher[]): string | null => {
+  // Folded: a workspace watcher's folder and MCP config file are named for it, on a case-insensitive disk.
   const seen = new Set<string>()
   for (const watcher of watchers) {
-    if (seen.has(watcher.name)) return watcher.name
-    seen.add(watcher.name)
+    if (seen.has(watcher.name.toLowerCase())) return watcher.name
+    seen.add(watcher.name.toLowerCase())
   }
   return null
 }
 
-const toActiveWatcher = (rawWatcher: RawWatcher): Watcher => {
+const toActiveWatcher = (rawWatcher: RawWatcher, instance: string | undefined): Watcher => {
   const {disabled, ...watcher} = rawWatcher
   void disabled
   const runner = watcher.runner
+  const cwd = runner.cwd ? expandHome(runner.cwd) : runner.cwd
   return {
     ...watcher,
-    runner: {
-      ...runner,
-      cwd: runner.cwd ? expandHome(runner.cwd) : runner.cwd,
-      ...(runner.executor === 'codex'
-        ? {addDirs: runner.addDirs.map(expandHome)}
-        : {}),
-    },
+    runner: runner.executor === 'codex'
+      ? {...runner, cwd, addDirs: runner.addDirs.map(expandHome)}
+      : {
+          ...runner,
+          cwd,
+          workspace: runner.workspace && {...runner.workspace, root: path.join(defaultWorkspacesDir(instance), watcher.name)},
+        },
   }
 }
 
@@ -415,11 +467,15 @@ export const configSchema = rawConfigSchema.transform(config => {
      *  only active watchers in `watchers`. */
     configuredWatcherCount: config.watchers.length,
     statePath: config.statePath ? expandHome(config.statePath) : config.statePath,
-    watchers: activeWatchers.map(toActiveWatcher),
+    watchers: activeWatchers.map(watcher => toActiveWatcher(watcher, config.instance)),
   }
 })
 
 export type DaemonConfig = z.infer<typeof configSchema>
+
+/** The watcher's workspace; only a claude runner has one. */
+export const watcherWorkspace = (watcher: Watcher): RunWorkspace | undefined =>
+  watcher.runner.executor === 'claude' ? watcher.runner.workspace : undefined
 
 export const parseConfig = (raw: unknown): DaemonConfig =>
   configSchema.parse(raw)
