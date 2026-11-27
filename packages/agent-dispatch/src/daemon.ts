@@ -58,8 +58,7 @@ let files: InstanceFiles | null = null
  *  `alwaysLoad` puts its tools in the first prompt instead of behind
  *  claude's tool search: every run uses them, so deferring them only
  *  costs each run a lookup turn. */
-const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null, configPath: string): Promise<void> => {
-  const serverDef = buildMcpServerDef(config, contributorId)
+const writeMcpConfig = async (serverDef: ReturnType<typeof buildMcpServerDef>, configPath: string) => {
   const mcpConfig = {
     mcpServers: {
       [serverDef.name]: {
@@ -73,6 +72,7 @@ const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null
 
   await fs.mkdir(path.dirname(configPath), {recursive: true})
   await fs.writeFile(configPath, `${JSON.stringify(mcpConfig, null, 2)}\n`)
+  return {path: configPath, serverNames: Object.keys(mcpConfig.mcpServers)}
 }
 
 const main = async () => {
@@ -203,10 +203,9 @@ const main = async () => {
     }
   }
 
-  const mcpConfigPath = files.mcpConfig
-  await writeMcpConfig(config, contributorId, mcpConfigPath)
-  log(`mcp config: ${mcpConfigPath}`)
   const mcpServerDef = buildMcpServerDef(config, contributorId)
+  const mcpConfig = await writeMcpConfig(mcpServerDef, files.mcpConfig)
+  log(`mcp config: ${mcpConfig.path}`)
 
   const channelSecret = config.watchers.some(watcher => watcher.delivery === 'channel')
     ? await loadOrCreateChannelSecret()
@@ -252,7 +251,7 @@ const main = async () => {
         throw new Error(`channel listener replied ${response.status} — is the ambient session running? (claude --dangerously-load-development-channels server:km, ${CHANNEL_PORT_ENV}=${config.channelPort})`)
       }
     },
-    mcpConfigPath,
+    mcpConfig,
     log,
   })
 

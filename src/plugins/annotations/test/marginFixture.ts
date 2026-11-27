@@ -1,5 +1,5 @@
 import {ChangeScope} from '@/data/api'
-import {keysBetween} from '@/data/orderKey'
+import {orderKeysForInsert} from '@/data/mutators'
 import {topLevelBlockIdProp} from '@/data/properties'
 import {userPageBlockId} from '@/data/stateBlocks'
 import {captureMediaFromFiles} from '@/plugins/attachments/assetUpload'
@@ -7,12 +7,10 @@ import {createContributor, ensureHumanContributor} from '@/plugins/contributors/
 import {attributionCreatorsProp, contributorPictureProp} from '@/plugins/contributors/schema'
 import {applyTheme} from '@/plugins/theme-toggle/theme'
 import {DEFAULT_THEME_ID_DARK, DEFAULT_THEME_ID_LIGHT} from '@/themeBootDefaults'
-import {buildLayout} from '@/utils/routing'
 import {captureAnchor} from '../anchor'
 import {annotationMarginOpenProp} from '../marginSchema'
 import {createThread, setThreadStatus} from '../threads'
 
-const TOPIC = 'Synthetic outline for comments'
 const ROW_COUNT = 72
 const COMMENT_GROUP_ROW = 3
 const DEEP_REPLY_TEXT = 'This nested reply finishes the closed discussion.'
@@ -46,30 +44,24 @@ export const holdChildList = (id: string) => {
   }
 }
 
-export async function createMarginFixtureOutline() {
+export async function seedMarginFixture() {
   const repo = window.__omniliner?.repo
   const workspaceId = repo?.activeWorkspaceId
-  if (!repo || !workspaceId) throw new Error('The local workspace has no repository')
+  const panelId = document.querySelector<HTMLElement>('[data-panel-active="true"]')?.dataset.panelId
+  if (!repo || !workspaceId || !panelId) throw new Error('The local workspace has no active panel')
+  const panel = repo.block(panelId)
+  const rootId = panel.peekProperty(topLevelBlockIdProp)
+  if (!rootId) throw new Error('The active panel has no top-level block')
 
-  const keys = keysBetween(null, null, ROW_COUNT)
-  const {outlineId, rows} = await repo.tx(async tx => {
-    const outlineId = await tx.create({workspaceId, parentId: null, orderKey: 'a0', content: TOPIC})
+  const rows = await repo.tx(async tx => {
+    const keys = await orderKeysForInsert(tx, rootId, workspaceId, {kind: 'last'}, ROW_COUNT)
     const children = keys.map((orderKey, index) => ({
-      workspaceId, parentId: outlineId, orderKey,
+      workspaceId, parentId: rootId, orderKey,
       content: `Outline row ${index + 1} with alpha, beta, and gamma.`,
     }))
     const ids = await tx.createMany(children)
-    return {outlineId, rows: ids.map((id, index) => ({id, content: children[index].content}))}
+    return ids.map((id, index) => ({id, content: children[index].content}))
   }, {scope: ChangeScope.BlockDefault, description: 'seed comments margin outline'})
-  return {outlineId, hash: buildLayout(workspaceId, [outlineId]), rows, firstSource: rows[COMMENT_GROUP_ROW]}
-}
-
-export async function seedMarginFixture({outlineId, rows}: Awaited<ReturnType<typeof createMarginFixtureOutline>>) {
-  const repo = window.__omniliner?.repo
-  const panelId = document.querySelector<HTMLElement>('[data-panel-active="true"]')?.dataset.panelId
-  if (!repo || !panelId) throw new Error('The local workspace has no active panel')
-  const panel = repo.block(panelId)
-  if (panel.peekProperty(topLevelBlockIdProp) !== outlineId) throw new Error('The active panel did not open the fixture outline')
 
   const threadAt = async (index: number, comment: string, quote?: string) => {
     const {id, content} = rows[index]
