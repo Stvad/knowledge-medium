@@ -57,6 +57,7 @@ import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.js'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
+import { pluginBlockId } from '@/extensions/pluginIds.js'
 
 import matrixContributions, {
   autoStartProp,
@@ -71,6 +72,8 @@ const HOMESERVER = 'https://matrix.test'
 const ROOM = '!room:matrix.test'
 const TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
 const NEXT_BATCH_KEY = `knowledge-medium:matrix-messages:state:v1:${HOMESERVER}:${ROOM}`
+const MATRIX_BLOCK_NAMESPACE = '9839e327-a96a-4974-acb1-128fc44878b8'
+const SHARED_EVENT_ID = '$evt-shared'
 
 /** The app shell owns mounts and effects; a repo-level runtime takes neither.
  *  `matrixIngestEffect.start({repo})` is then called by hand — exactly what
@@ -155,6 +158,22 @@ const cellBag = async (id: string): Promise<Record<string, unknown>> => {
     'SELECT properties_json FROM blocks WHERE id = ?', [id])
   return JSON.parse(row.properties_json) as Record<string, unknown>
 }
+
+type MessageRow = {id: string; parent_id: string | null; content: string; properties_json: string}
+
+const messageRows = (rootId: string): Promise<MessageRow[]> => sharedDb.db.getAll<MessageRow>(
+  `WITH RECURSIVE message(id) AS (
+     SELECT id FROM blocks WHERE id = ? AND deleted = 0
+     UNION ALL
+     SELECT b.id FROM blocks b JOIN message ON b.parent_id = message.id
+      WHERE b.deleted = 0 AND b.is_field_form IS NOT 1
+   )
+   SELECT id, parent_id, content, properties_json FROM blocks JOIN message USING (id)`,
+  [rootId],
+)
+
+const eventNodeId = (path: string): string =>
+  pluginBlockId(WS, MATRIX_BLOCK_NAMESPACE, `event:${SHARED_EVENT_ID}:${path}`)
 
 const savedCursor = (): string | null => {
   const raw = window.localStorage.getItem(NEXT_BATCH_KEY)
@@ -287,5 +306,85 @@ describe('matrix ingest into a child-backed workspace', () => {
       // still read the previous cursor.
       expect(savedCursor()).toBe('cursor-2')
     }, {timeout: 10_000, interval: 50})
+  }, 30_000)
+
+  it('merges conflicting-schema replicas without shifting attribute or nested message rows', async () => {
+    const makeReplica = async (presetId: 'number' | 'string'): Promise<MessageRow[]> => {
+      timeline.clear()
+      window.localStorage.clear()
+      await resetTestDb(sharedDb.db)
+      await seedFlippedWorkspace()
+      const repo = await setup()
+      await repo.userSchemas.addSchema({name: 'matrix:count', presetId})
+      await configureIngest(repo)
+      timeline.set('cursor-0', syncBody('cursor-1', [messageEvent(
+        SHARED_EVENT_ID,
+        [
+          '- hello',
+          '  - count:: many',
+          '  - ordinary',
+          '    - count:: nested many',
+          '    - nested ordinary',
+        ].join('\n'),
+      )]))
+
+      stopIngest = matrixIngestEffect.start({repo})
+      const rootId = eventNodeId('0')
+      await vi.waitFor(async () => {
+        expect(await sharedDb.db.get('SELECT id FROM blocks WHERE id = ?', [rootId])).toBeDefined()
+        expect(savedCursor()).toBe('cursor-1')
+      }, {timeout: 10_000, interval: 50})
+      stopIngest?.()
+      stopIngest = undefined
+      return messageRows(rootId)
+    }
+
+    // Each reset/reseed is an independent replica with the same event root.
+    // The string schema promotes both attributes; the number schema declines
+    // them. The test snapshots just the user-authored rows, excluding derived
+    // property branches from the message subtree.
+    const promotingRows = await makeReplica('string')
+    const decliningRows = await makeReplica('number')
+    const rootId = eventNodeId('0')
+    const promotedRoot = promotingRows.find(row => row.id === rootId)!
+    const declinedRoot = decliningRows.find(row => row.id === rootId)!
+    expect(JSON.parse(promotedRoot.properties_json)['matrix:count']).toBe('many')
+    expect(JSON.parse(declinedRoot.properties_json)['matrix:count']).toBeUndefined()
+    const promotedOrdinary = promotingRows.find(row => row.content === 'ordinary')!
+    const declinedOrdinary = decliningRows.find(row => row.content === 'ordinary')!
+    expect(JSON.parse(promotedOrdinary.properties_json)['matrix:count']).toBe('nested many')
+    expect(JSON.parse(declinedOrdinary.properties_json)['matrix:count']).toBeUndefined()
+    expect(promotingRows.map(row => row.content).sort()).toEqual(['hello', 'nested ordinary', 'ordinary'])
+    for (const row of promotingRows) {
+      expect(decliningRows.find(other => other.content === row.content)?.id).toBe(row.id)
+    }
+
+    for (const [firstRows, secondRows, firstPromotes] of [
+      [promotingRows, decliningRows, true],
+      [decliningRows, promotingRows, false],
+    ] as const) {
+      // The sync conflict policy is first-create-wins for rows sharing an id.
+      const merged = new Map<string, MessageRow>()
+      for (const row of [...firstRows, ...secondRows]) {
+        if (!merged.has(row.id)) merged.set(row.id, row)
+      }
+      const root = merged.get(rootId)!
+      const countBullet = merged.get(eventNodeId('0.0'))!
+      const ordinary = merged.get(eventNodeId('0.1'))!
+      const nestedCount = merged.get(eventNodeId('0.1.0'))!
+      const nestedOrdinary = merged.get(eventNodeId('0.1.1'))!
+
+      expect(merged.size).toBe(5)
+      expect(root.content).toBe('hello')
+      expect(root.parent_id).toBe(promotedRoot.parent_id)
+      expect(countBullet).toMatchObject({content: 'count:: many', parent_id: rootId})
+      expect(ordinary).toMatchObject({content: 'ordinary', parent_id: rootId})
+      expect(nestedCount).toMatchObject({content: 'count:: nested many', parent_id: ordinary.id})
+      expect(nestedOrdinary).toMatchObject({content: 'nested ordinary', parent_id: ordinary.id})
+      expect(JSON.parse(root.properties_json)['matrix:count'])
+        .toBe(firstPromotes ? 'many' : undefined)
+      expect(JSON.parse(ordinary.properties_json)['matrix:count'])
+        .toBe(firstPromotes ? 'nested many' : undefined)
+    }
   }, 30_000)
 })
