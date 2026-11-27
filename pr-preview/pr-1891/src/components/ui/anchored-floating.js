@@ -1,1 +1,0 @@
-export{jY as floatingAnchorFromRect,MY as useAnchoredFloating}from"../../../chunks/app-1xI9wpjz.js";

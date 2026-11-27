@@ -1,1 +1,0 @@
-export{xft as getOrCreatePropertiesPage,Sft as propertiesPageBlockId,Cft as propertiesPageSpec}from"../../chunks/app-1xI9wpjz.js";
