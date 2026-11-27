@@ -1,0 +1,1 @@
+export{qO as usePromotableBreadcrumb}from"../../../chunks/app-B-keTxst.js";

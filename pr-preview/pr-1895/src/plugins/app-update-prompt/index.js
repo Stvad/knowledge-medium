@@ -1,0 +1,1 @@
+export{rR as appUpdatePromptExtension}from"../../../chunks/app-B-keTxst.js";

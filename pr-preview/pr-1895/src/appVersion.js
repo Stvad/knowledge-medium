@@ -1,0 +1,1 @@
+export{cd as appVersion}from"../chunks/app-B-keTxst.js";

@@ -1,0 +1,1 @@
+export{mc as propertyReadContentContribution}from"../../../chunks/app-B-keTxst.js";

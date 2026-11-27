@@ -1,0 +1,1 @@
+export{wU as ExtensionRenderBoundary}from"../../chunks/app-B-keTxst.js";

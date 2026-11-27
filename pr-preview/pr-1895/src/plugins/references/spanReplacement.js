@@ -1,0 +1,1 @@
+export{GQ as preferredSpanReplacement}from"../../../chunks/app-B-keTxst.js";

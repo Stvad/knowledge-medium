@@ -1,0 +1,1 @@
+export{zc as propertiesMigrationPlugin}from"../../../chunks/app-B-keTxst.js";
