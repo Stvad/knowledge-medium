@@ -1,1 +1,0 @@
-export{cd as appVersion}from"../chunks/app-CDyLuKpP.js";
