@@ -696,15 +696,21 @@ describe('runClaude', () => {
       await fs.rm(workspaceTmpDir(root), {recursive: true, force: true})
     })
 
+    /** A fake claude whose init line reports where it really started, as real claude does. */
+    const workspaceClaude = (script: string): SpawnImpl => fakeProcess(
+      `process.stdout.write(JSON.stringify({...${JSON.stringify(cleanInit)}, cwd: process.cwd()}) + '\\n'); ${script}`,
+    )
+
     it('creates its folder and passes only the workspace environment', async () => {
       const cwd = path.join(root, 'threads', 'b1')
       const result = await runClaude(
         {...baseOptions, cwd, workspace: {root, allowedDomains: []}, env: {...process.env, GITHUB_TOKEN: 'ghp-leak', CLAUDE_CODE_OAUTH_TOKEN: 'oauth'}},
-        fakeClaude(
+        workspaceClaude(
           `process.stdout.write(JSON.stringify({type: 'result', result: JSON.stringify([process.cwd(), process.env.GITHUB_TOKEN ?? null, process.env.CLAUDE_CODE_TMPDIR, process.env.CLAUDE_CODE_OAUTH_TOKEN]), session_id: 's', is_error: false}) + '\\n')`,
         ),
       )
       // The subscription sign-in still reaches Claude Code; the settings hide it from Bash.
+      expect(result.stderr).not.toContain('thread folder')
       expect(JSON.parse(result.resultText)).toEqual([await fs.realpath(cwd), null, workspaceTmpDir(root), 'oauth'])
     })
 
@@ -712,7 +718,7 @@ describe('runClaude', () => {
       // A concurrent run can swap the folder for a link between the check and the spawn.
       const result = await runClaude(
         {...baseOptions, cwd: path.join(root, 'threads', 'b1'), workspace: {root, allowedDomains: []}, timeoutMs: 10_000},
-        fakeClaude(
+        fakeProcess(
           // An inventory of the workspace's tools, which the run is offered beyond its allow list.
           `process.stdout.write(JSON.stringify(${JSON.stringify({...cleanInit, tools: WORKSPACE_TOOLS, session_id: 's', cwd: '/elsewhere'})}) + '\\n'); setTimeout(() => {}, 60_000)`,
         ),
