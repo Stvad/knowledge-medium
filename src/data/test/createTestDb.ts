@@ -28,8 +28,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -107,6 +109,11 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
 
 let templateDbDirPromise: Promise<string> | null = null
 const TEMPLATE_READY_FILE = '.ready'
+/** Inside the build lock: the pid of the process building the template. */
+const LOCK_OWNER_FILE = 'pid'
+/** A lock with no readable owner is a builder between its mkdir and its pid
+ *  write, or one killed in that instant. Far above any real build. */
+const OWNERLESS_LOCK_STALE_MS = 5 * 60_000
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms))
@@ -164,7 +171,35 @@ const getTemplateFingerprint = (): string => {
   return hash.digest('hex').slice(0, 20)
 }
 
-const waitForTemplateReadyOrLockRelease = async (
+const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Whether the builder holding `lockDir` is gone: killed mid-build (a gate
+ *  SIGTERMs vitest when lint fails), so its `finally` never released it. */
+const lockAbandoned = (lockDir: string): boolean => {
+  let pid = NaN
+  try {
+    pid = Number(readFileSync(join(lockDir, LOCK_OWNER_FILE), 'utf8'))
+  } catch { /* no owner written yet */ }
+  if (Number.isInteger(pid) && pid > 0) return !pidAlive(pid)
+  try {
+    return Date.now() - statSync(lockDir).mtimeMs > OWNERLESS_LOCK_STALE_MS
+  } catch {
+    return false
+  }
+}
+
+/** True once the template is ready; false when the lock is free to take,
+ *  including one this call stole from a builder that is gone. Two waiters can
+ *  both steal it and both build, and the later rename then fails that run
+ *  once: accepted over a protocol to prevent a race this rare. */
+export const waitForTemplateReadyOrLockRelease = async (
   templateDir: string,
   lockDir: string,
 ): Promise<boolean> => {
@@ -172,6 +207,10 @@ const waitForTemplateReadyOrLockRelease = async (
   const startedAt = Date.now()
   while (!existsSync(readyFile)) {
     if (!existsSync(lockDir)) return false
+    if (lockAbandoned(lockDir)) {
+      rmSync(lockDir, {recursive: true, force: true})
+      return false
+    }
     if (Date.now() - startedAt > 15_000) {
       throw new Error(`[createTestDb] timed out waiting for template DB at ${templateDir}`)
     }
@@ -192,6 +231,7 @@ const ensureTemplateDbDir = async (): Promise<string> => {
     for (;;) {
       try {
         mkdirSync(lockDir)
+        writeFileSync(join(lockDir, LOCK_OWNER_FILE), String(process.pid))
         break
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
