@@ -47,6 +47,8 @@ Publish `@knowledge-medium/agent-cli` 0.14.5 before publishing `@knowledge-mediu
 
 Backlink watchers now wait for the edit hold and settle window before re-queuing a stale `running` mention. A task claimed under a watcher's former name stays with that name after a rename, so the renamed watcher cannot re-queue or park it. A claim write failure refunds its launch allowance and leaves the task eligible to retry on the next tick. Every watcher configuration now stops on corrupt state and preserves the file for recovery, including a backlinks-only daemon's baselines and launch history.
 
+With spawn delivery, pressing Stop on a running or queued mention or row task whose run disappeared parks the block with `agent:status=error` and `agent:error=cancelled`. It stays parked after the 65-minute stale window. For a running channel mention, the daemon clears only the Stop flag so the channel session can finish and record its own status.
+
 ## Upgrade to 0.9.10
 
 A claude watcher can list the non-builtin plugins its runs may load in `runner.allowedPlugins`, by the `name@marketplace` id that `enabledPlugins` uses in `runner.cwd`'s settings, for example `"allowedPlugins": ["code-guard@team-plugins"]`. In 0.9.9 any such plugin made every run fail with `Unexpected Claude init inventory: plugin …`. A listed plugin's hooks and agents load with the run, and its skills do too when `allowedTools` names `Skill`. With `Agent` in `defaultAllowedTools`, a run can hand work to a subagent the plugin defines, which gets only the run's tools. A tool or MCP server it adds is still refused unless `allowedTools` or the dispatch MCP config names it.

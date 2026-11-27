@@ -195,13 +195,17 @@ describe('dispatch attribution', () => {
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
   })
 
-  it('leaves them untouched when clearing a cancel no run owns', async () => {
+  it('leaves them untouched when parking a stopped spawn mention after its run disappeared', async () => {
     await writeInTab({[PROPS.status]: 'running', [PROPS.cancel]: 'requested'})
     const runTask = vi.fn(async () => result({}))
 
-    await engineFor(runTask).tick()
+    const engine = engineFor(runTask)
+    await engine.tick()
+    await engine.drain()
 
-    expect((await repo.load(MENTION))?.properties[PROPS.cancel]).toBe('')
+    expect((await repo.load(MENTION))?.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: '',
+    })
     expect(runTask).not.toHaveBeenCalled()
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
   })

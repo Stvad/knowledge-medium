@@ -774,32 +774,40 @@ describe('mention lifecycle', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('')
   })
 
-  it('clears an un-actionable agent:cancel with a cancel-only write (never touches status)', async () => {
-    // A channel-delivered task the daemon doesn't own — or a run stranded by
-    // a hard kill — is status:running with a Stop flag but no controller. The
-    // scan clears the inert flag so the chip un-sticks. Crucially it writes
-    // ONLY cancel: a status write would race the ambient session's concurrent
-    // status:done and revert it → the stale-running sweep would then redeliver
-    // (duplicate work). So no setTaskProps here, and status/updatedAt are left
-    // exactly as-is.
-    const {graph, blocks, propWrites, cancelClears} = fakeGraph({
+  it.each(['running', 'queued'])('parks a stranded %s spawn mention on Stop and never retries it after the stale window', async status => {
+    const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] x', editedAtMs: NOW - 10_000, properties: {
-        [PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 1_000, [PROPS.cancel]: NOW,
+      blocks: {'b-1': {properties: {
+        [PROPS.watcher]: 'mentions', [PROPS.status]: status, [PROPS.attempts]: 1,
+        [PROPS.updatedAt]: NOW, [PROPS.cancel]: NOW,
       }}},
     })
+    let now = NOW
     const runTask = vi.fn(async () => okRun())
-    const engine = engineWith({graph, runTask})
-
+    const engine = engineWith({graph, runTask, now: () => now})
     await engine.tick()
     await engine.drain()
+    expect(blocks.get('b-1')?.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: '', [PROPS.attempts]: 1,
+    })
 
-    expect(cancelClears).toEqual(['b-1'])                       // cancel-only clear fired
-    expect(propWrites.filter(w => w.id === 'b-1')).toEqual([])  // no status write → nothing to revert
-    expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('')
-    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')      // untouched
-    expect(blocks.get('b-1')?.properties?.[PROPS.updatedAt]).toBe(NOW - 1_000) // untouched
+    now += STALE_RUNNING_MS + 1
+    await engine.tick()
+    await engine.drain()
     expect(runTask).not.toHaveBeenCalled()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+  })
+
+  it('preserves a spawn mention that finished before the daemon saw its Stop', async () => {
+    const {graph, propWrites, cancelClears} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {properties: {[PROPS.status]: 'done', [PROPS.cancel]: NOW}}},
+    })
+    const engine = engineWith({graph})
+    await engine.tick()
+    await engine.drain()
+    expect(propWrites).toEqual([])
+    expect(cancelClears).toEqual([])
   })
 
   it('is idempotent: a processed mention does not re-run on later ticks', async () => {
@@ -2179,6 +2187,38 @@ describe('channel delivery (experimental)', () => {
     watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery: 'channel'}],
   })
 
+  it('clears only Stop on a running channel mention so the channel can finish independently', async () => {
+    const {graph, blocks, propWrites, cancelClears} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {properties: {
+        [PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 1_000, [PROPS.cancel]: NOW,
+      }}},
+    })
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({graph, deliverToChannel, config: channelConfig()})
+    await engine.tick()
+    await engine.drain()
+    expect(cancelClears).toEqual(['b-1'])
+    expect(propWrites).toEqual([])
+    expect(blocks.get('b-1')?.properties).toMatchObject({
+      [PROPS.cancel]: '', [PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 1_000,
+    })
+    expect(deliverToChannel).not.toHaveBeenCalled()
+  })
+
+  it('delivers a queued channel mention with a Stop before there is a running session to clear it for', async () => {
+    const {graph, cancelClears} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {properties: {[PROPS.status]: 'queued', [PROPS.cancel]: NOW}}},
+    })
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({graph, deliverToChannel, config: channelConfig()})
+    await engine.tick()
+    await engine.drain()
+    expect(deliverToChannel).toHaveBeenCalledOnce()
+    expect(cancelClears).toEqual([])
+  })
+
   it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {
     const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
@@ -3197,9 +3237,10 @@ describe('query row tasks', () => {
   })
 
   it.each([
-    {status: 'done', cancel: NOW},
-    {status: 'running', cancel: ''},
-  ])('leaves the row alone when the fresh Stop read shows status $status and cancel $cancel', async ({status, cancel}) => {
+    {change: 'completion', props: {[PROPS.status]: 'done'}},
+    {change: 'a withdrawn Stop', props: {[PROPS.cancel]: ''}},
+    {change: 'an Ask for a mention watcher', props: {[PROPS.askedAt]: NOW}},
+  ])('leaves the row alone when the fresh Stop read shows $change', async ({props}) => {
     const {graph, blocks, reconciles, propWrites, cancelClears} = fakeGraph({blocks: {alpha: {properties: {
       [PROPS.status]: 'running', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1,
       [PROPS.updatedAt]: NOW, [PROPS.cancel]: NOW,
@@ -3209,13 +3250,13 @@ describe('query row tasks', () => {
     const getBlock = graph.getBlock
     graph.getBlock = async id => {
       const block = await getBlock(id)
-      if (block) block.properties = {...block.properties, [PROPS.status]: status, [PROPS.cancel]: cancel}
+      if (block) block.properties = {...block.properties, ...props}
       return block
     }
     const runTask = vi.fn(async () => okRun())
     await tick(engineWith({graph, state, runTask, config: config()}))
 
-    expect(blocks.get('alpha')?.properties).toMatchObject({[PROPS.status]: status, [PROPS.cancel]: cancel})
+    expect(blocks.get('alpha')?.properties).toMatchObject(props)
     expect(runTask).not.toHaveBeenCalled()
     expect(propWrites).toEqual([])
     expect(cancelClears).toEqual([])

@@ -285,8 +285,9 @@ export const createEngine = (deps: EngineDeps) => {
     if (task.kind === 'row' && rowTaskAction(source, task.watcher, task.baselineMs) !== 'run') {
       return {pending: false, reason: 'ineligible-row'} as const
     }
-    if (task.kind === 'row' && source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
-      return {pending: false, reason: 'cancelled'} as const
+    if (source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
+      if (task.watcher.delivery === 'spawn') return {pending: false, reason: 'cancelled'} as const
+      if (status === 'running') return {pending: false, reason: 'clear-cancel'} as const
     }
     return decidePending({
       source, nowMs: now(), editingActiveAtMs,
@@ -742,7 +743,7 @@ export const createEngine = (deps: EngineDeps) => {
       }
       // A channel session can finish independently. Clear only its Stop,
       // so a stale snapshot cannot overwrite its terminal status.
-      if (view.properties?.[PROPS.cancel] && view.properties[PROPS.status] === 'running') {
+      if (preview.reason === 'clear-cancel') {
         await graph.clearCancel(task.id)
         log(`[${watcher.name}] cleared an un-actionable agent:cancel on ${task.id}`)
         continue
