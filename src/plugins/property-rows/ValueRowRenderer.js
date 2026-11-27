@@ -1,1 +1,1 @@
-export{mc as propertyReadContentContribution}from"../../../chunks/app-ByOIzUI-.js";
+export{mc as propertyReadContentContribution}from"../../../chunks/app-D3dCZbad.js";

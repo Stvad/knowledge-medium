@@ -1,1 +1,1 @@
-export{Dj as BlockRef}from"../../../chunks/app-ByOIzUI-.js";
+export{Dj as BlockRef}from"../../../chunks/app-D3dCZbad.js";

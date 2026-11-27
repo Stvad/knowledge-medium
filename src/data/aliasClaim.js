@@ -1,1 +1,1 @@
-export{snt as assertAliasClaimable,cnt as claimedAliases}from"../../chunks/app-ByOIzUI-.js";
+export{snt as assertAliasClaimable,cnt as claimedAliases}from"../../chunks/app-D3dCZbad.js";

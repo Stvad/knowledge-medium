@@ -1,1 +1,1 @@
-export{kL as BlockPasteShellDecorator,AL as blockPasteShellDecorator}from"../../chunks/app-ByOIzUI-.js";
+export{kL as BlockPasteShellDecorator,AL as blockPasteShellDecorator}from"../../chunks/app-D3dCZbad.js";

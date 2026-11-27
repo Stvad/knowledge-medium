@@ -1,1 +1,1 @@
-export{C4 as contributorsDataExtension}from"../../../chunks/app-ByOIzUI-.js";
+export{C4 as contributorsDataExtension}from"../../../chunks/app-D3dCZbad.js";

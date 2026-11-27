@@ -1,1 +1,1 @@
-export{pC as blockDragPlugin}from"../../../chunks/app-ByOIzUI-.js";
+export{pC as blockDragPlugin}from"../../../chunks/app-D3dCZbad.js";
