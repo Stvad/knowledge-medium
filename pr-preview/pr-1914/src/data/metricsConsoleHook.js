@@ -1,0 +1,1 @@
+export{tL as ensureMetricsConsoleHook}from"../../chunks/app-DM_lul7p.js";

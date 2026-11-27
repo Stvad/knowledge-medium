@@ -1,0 +1,1 @@
+export{vJ as isIOS,yJ as isMacPlatform}from"../../chunks/app-DM_lul7p.js";

@@ -1,0 +1,1 @@
+export{jz as BlockLoadingPlaceholder}from"../../chunks/app-DM_lul7p.js";

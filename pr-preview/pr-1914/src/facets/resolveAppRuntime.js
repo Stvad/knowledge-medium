@@ -1,0 +1,1 @@
+export{BR as resolveAppRuntime,VR as resolveAppRuntimeSync}from"../../chunks/app-DM_lul7p.js";

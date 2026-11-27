@@ -1,0 +1,1 @@
+export{bZ as staticDataExtensions}from"../../chunks/app-DM_lul7p.js";

@@ -1,0 +1,1 @@
+export{kt as bootstrapWorkspace}from"../../chunks/app-DM_lul7p.js";

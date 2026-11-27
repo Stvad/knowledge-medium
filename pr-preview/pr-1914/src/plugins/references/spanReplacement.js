@@ -1,0 +1,1 @@
+export{GQ as preferredSpanReplacement}from"../../../chunks/app-DM_lul7p.js";

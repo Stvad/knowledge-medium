@@ -1,0 +1,1 @@
+export{AV as useIsMobile,jV as usePointerCoarse}from"../../chunks/app-DM_lul7p.js";

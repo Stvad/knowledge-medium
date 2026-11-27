@@ -1,0 +1,1 @@
+export{rn as supertagsPlugin}from"../../../chunks/app-DM_lul7p.js";

@@ -1,0 +1,1 @@
+export{i_t as SYSTEM_AUTHOR_PREFIX,a_t as isSystemAuthor,o_t as systemAuthor}from"../../../chunks/app-DM_lul7p.js";

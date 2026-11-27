@@ -1,0 +1,1 @@
+export{ty as authorIdOf}from"../../../chunks/app-DM_lul7p.js";

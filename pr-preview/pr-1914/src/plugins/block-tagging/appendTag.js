@@ -1,0 +1,1 @@
+export{Qf as appendTagToBlocks,$f as appendTagToContent}from"../../../chunks/app-DM_lul7p.js";

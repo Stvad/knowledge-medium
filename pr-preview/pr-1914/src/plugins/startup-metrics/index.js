@@ -1,0 +1,1 @@
+export{Fa as startupMetricsPlugin}from"../../../chunks/app-DM_lul7p.js";

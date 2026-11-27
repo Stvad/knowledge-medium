@@ -1,0 +1,1 @@
+export{ip as blockTaggingDataExtension}from"../../../chunks/app-DM_lul7p.js";
