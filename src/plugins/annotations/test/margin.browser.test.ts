@@ -3,7 +3,7 @@ import {resolve} from 'node:path'
 import {chromium, type Browser, type Locator, type Page} from 'playwright'
 import {createServer, type ViteDevServer} from 'vite'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it} from 'vitest'
-import type {createMarginFixtureOutline, seedAuthorStamps, seedMarginFixture} from './marginFixture'
+import type {seedAuthorStamps, seedMarginFixture} from './marginFixture'
 
 let server: ViteDevServer | undefined
 let browser: Browser | undefined
@@ -46,7 +46,7 @@ beforeEach(async () => {
     localStorage.setItem('ftm.localOnly', 'true')
     localStorage.setItem('ftm.user', JSON.stringify({id: 'margin-fixture', name: 'Fixture Reviewer'}))
   })
-  await page.goto(new URL('?seed=margin', origin).href, {waitUntil: 'commit', timeout: 15_000})
+  await page.goto(origin, {waitUntil: 'commit', timeout: 15_000})
   try {
     await page.waitForFunction(() => !!window.__omniliner?.repo?.activeWorkspaceId &&
       !!document.querySelector('[data-panel-active="true"]'), null, {timeout: 75_000})
@@ -55,24 +55,9 @@ beforeEach(async () => {
     throw new Error(`Local app did not open its panel. ${text}\n${pageErrors.join('\n')}`, {cause})
   }
   fixtureUrl = new URL('/src/plugins/annotations/test/marginFixture.ts', origin).href
-  const prepared = await page.evaluate<Awaited<ReturnType<typeof createMarginFixtureOutline>>>(
-    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.createMarginFixtureOutline())`,
-  )
-  // Dropping the seed query opens a new document with the fixture as its boot route.
-  await page.goto(new URL(prepared.hash, origin).href, {waitUntil: 'commit', timeout: 15_000})
-  const root = outline().locator(`[data-block-shell][data-block-id="${prepared.outlineId}"]`)
-  try {
-    await root.waitFor({timeout: 30_000})
-  } catch (cause) {
-    const text = await page.locator('body').innerText({timeout: 2_000}).catch(() => '')
-    throw new Error(`Fixture outline did not open at ${page.url()}. ${text}\n${pageErrors.join('\n')}`, {cause})
-  }
-  const {firstSource} = prepared
-  await row({targetId: firstSource.id}).getByText(firstSource.content, {exact: true}).waitFor({timeout: 10_000})
   fixture = await page.evaluate<Awaited<ReturnType<typeof seedMarginFixture>>>(
-    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture(${JSON.stringify(prepared)}))`,
+    `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture())`,
   )
-  await root.waitFor({timeout: 10_000})
   await card(fixture.first).waitFor({timeout: 10_000})
   await margin().and(page.locator('[aria-busy="false"]')).waitFor({timeout: 10_000})
 })
