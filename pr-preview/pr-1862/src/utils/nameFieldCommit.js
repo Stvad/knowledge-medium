@@ -1,1 +1,1 @@
-export{FB as trimIfEdited}from"../../chunks/app-DB79IriR.js";
+export{LB as trimIfEdited}from"../../chunks/app-CDyLuKpP.js";

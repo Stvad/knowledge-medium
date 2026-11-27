@@ -1,1 +1,1 @@
-export{Ys as QueryText}from"../../../../chunks/app-DB79IriR.js";
+export{Ys as QueryText}from"../../../../chunks/app-CDyLuKpP.js";
