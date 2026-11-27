@@ -41,6 +41,7 @@ import {
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
+import {useCommentAuthor} from '@/plugins/contributors/useCommentAuthor'
 import {CONTRIBUTOR_CARD_HEADER_KEY, CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
 import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
@@ -666,20 +667,23 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
   const threads = useMemo(() => threadsUnderComment(all, chain), [all, chain])
   const highlights = useHighlightFeed(block, chain)
   const outlineLinked = useOutlineLinked(block)
+  const author = useCommentAuthor(block)
   return (
     <div className="w-full" {...outlineLinked}>
-      <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
-        <Inner block={block}/>
-      </MarkdownInputProvider>
-      {!readOnly && (
-        <div className="flex gap-2 pb-0.5">
-          <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
-          <ActionButton onClick={() => deleteCommentFromCard(block).catch(reportFailure)}>Delete</ActionButton>
-          <ActionButton onClick={() => moveCommentToOwnThread(block, blockContext.panelId).catch(reportFailure)}>
-            Own thread
-          </ActionButton>
-        </div>
-      )}
+      <div data-comment-turn="" className={author?.isSelf ? 'border-s-[3px] border-primary ps-1.5' : undefined}>
+        <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
+          <Inner block={block}/>
+        </MarkdownInputProvider>
+        {!readOnly && (
+          <div className="flex gap-2 pb-0.5">
+            <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
+            <ActionButton onClick={() => deleteCommentFromCard(block).catch(reportFailure)}>Delete</ActionButton>
+            <ActionButton onClick={() => moveCommentToOwnThread(block, blockContext.panelId).catch(reportFailure)}>
+              Own thread
+            </ActionButton>
+          </div>
+        )}
+      </div>
       {threads.length > 0 && (
         <div className="mb-1 space-y-1 border-l-2 border-yellow-500/50 pl-1.5" aria-label="Comments on this comment">
           {threads.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
