@@ -1,0 +1,1 @@
+export{II as TypeChip}from"../../../chunks/app-Zs_RNzkM.js";

@@ -1,0 +1,1 @@
+export{CH as BlockEditor}from"../../chunks/app-Zs_RNzkM.js";

@@ -1,0 +1,1 @@
+export{tM as BlockCrumbs}from"../../chunks/app-Zs_RNzkM.js";

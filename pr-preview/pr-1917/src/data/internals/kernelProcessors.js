@@ -1,0 +1,1 @@
+export{lnt as KERNEL_PROCESSORS}from"../../../chunks/app-Zs_RNzkM.js";

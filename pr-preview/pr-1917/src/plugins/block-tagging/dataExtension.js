@@ -1,0 +1,1 @@
+export{ip as blockTaggingDataExtension}from"../../../chunks/app-Zs_RNzkM.js";

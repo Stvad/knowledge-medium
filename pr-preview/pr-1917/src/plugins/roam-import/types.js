@@ -1,0 +1,1 @@
+export{vm as getExtraRoamProps}from"../../../chunks/app-Zs_RNzkM.js";
