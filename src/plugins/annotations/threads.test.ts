@@ -346,6 +346,7 @@ describe('moveToOwnThread', () => {
 
   it('offers the blocks the comment links on its thread’s page, in link order', async () => {
     const {point} = await reviewThread()
+    await repo.awaitProcessors()
     expect(await ownThreadTargets(repo, point)).toEqual([C])
   })
 })
