@@ -34,7 +34,7 @@ describe('state store', () => {
   it('preserves pending columns and the baseline beside overlapping budget writes', async () => {
     const file = path.join(dir, 'row-tasks.json')
     const store = createStateStore(file)
-    const snapshot = {baselineIds: ['old'], pending: [{id: 'new', tag: 'sample', count: 2, extra: null}]}
+    const snapshot = {baselineMs: 40, baselineIds: ['old'], pending: [{id: 'new', tag: 'sample', count: 2, extra: null}]}
     await Promise.all([store.setRowTasks('watcher', snapshot), store.setLaunchTimes([42])])
     const restarted = createStateStore(file)
     expect(await restarted.getRowTasks('watcher')).toEqual(snapshot)

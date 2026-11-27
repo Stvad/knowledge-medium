@@ -17,6 +17,7 @@ import { isErrnoException } from '@knowledge-medium/agent-cli/config'
 // the row from its SQL result. The block owns status and attempt count.
 const rowTaskState = z.object({
   baselineIds: z.array(z.string()),
+  baselineMs: z.number(),
   pending: z.array(z.looseObject({id: z.string().min(1)})),
 })
 export type RowTaskState = z.infer<typeof rowTaskState>

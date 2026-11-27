@@ -48,6 +48,7 @@ export const taskAttempts = (block: BlockView | undefined): number => {
  *  re-queued on the next sweep. The daemon is the only writer of these
  *  properties, so a long-stale `running` can only mean a dead run: the
  *  window outlasts the longest allowed run plus its kill and final write. */
+// A stale row retry reads any partial edits the abandoned run left in its subtree.
 export const STALE_RUNNING_MS = MAX_RUN_TIMEOUT_MS + 5 * 60_000
 
 /** A task is re-claimed at most this many times before it's parked as

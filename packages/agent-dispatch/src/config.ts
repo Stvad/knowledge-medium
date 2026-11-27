@@ -175,16 +175,21 @@ export type CodexSandbox = z.infer<typeof codexSandboxSchema>
 export type CodexApprovalPolicy = z.infer<typeof codexApprovalPolicySchema>
 export type CodexApprovalsReviewer = z.infer<typeof codexApprovalsReviewerSchema>
 
-const watcherBase = {
+const defaultSettleMs = 250
+const defaultEditHoldMs = 120_000
+
+const blockTiming = {
   /** Wait this long after a block's last change, so the final debounced
    *  write of an edit lands before the daemon snapshots the block. */
   settleMs: z.number().int().nonnegative()
-    .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
-    .default(250),
+    .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`),
   /** A block still open in an editor is not claimed until it has gone
    *  unedited this long: the user may just be thinking, but a device that
    *  vanished mid-edit leaves its editing flag set forever. */
-  editHoldMs: z.number().int().nonnegative().default(120_000),
+  editHoldMs: z.number().int().nonnegative(),
+}
+
+const watcherBase = {
   name: z.string().min(1),
   /** Keep a watcher parked in the config without registering it,
    *  blocking its target wikilinks, or spending on it. Disabled entries
@@ -206,6 +211,8 @@ const watcherBase = {
 
 const backlinksWatcherSchema = z.strictObject({
   ...watcherBase,
+  settleMs: blockTiming.settleMs.default(defaultSettleMs),
+  editHoldMs: blockTiming.editHoldMs.default(defaultEditHoldMs),
   kind: z.literal('backlinks'),
   /** Page alias whose NEW backlinks become tasks (e.g. "claude"). */
   target: z.string().min(1),
@@ -240,6 +247,8 @@ const backlinksWatcherSchema = z.strictObject({
 
 const queryWatcherSchema = z.strictObject({
   ...watcherBase,
+  settleMs: blockTiming.settleMs.optional(),
+  editHoldMs: blockTiming.editHoldMs.optional(),
   kind: z.literal('query'),
   /** Read-only SQL run through the bridge; rows must expose an `id`
    *  column — new ids (vs the state file) trigger a run. Enforced at
@@ -260,10 +269,21 @@ const queryWatcherSchema = z.strictObject({
   /** Post each row task result as a reply block. */
   reply: z.boolean().default(true),
 }).superRefine((watcher, ctx) => {
+  if (!watcher.rowTasks) {
+    for (const setting of ['settleMs', 'editHoldMs'] as const) {
+      if (Object.hasOwn(watcher, setting)) {
+        ctx.addIssue({code: 'custom', path: [setting], message: `${setting} requires rowTasks=true`})
+      }
+    }
+  }
   if (watcher.rowTasks && watcher.delivery === 'channel') {
     ctx.addIssue({code: 'custom', path: ['delivery'], message: 'rowTasks requires delivery="spawn"; channel delivery cannot guarantee cancellation or retries'})
   }
-})
+}).transform(watcher => ({
+  ...watcher,
+  settleMs: watcher.settleMs ?? defaultSettleMs,
+  editHoldMs: watcher.editHoldMs ?? defaultEditHoldMs,
+}))
 
 const rawWatcherSchema = z.discriminatedUnion('kind', [
   backlinksWatcherSchema,

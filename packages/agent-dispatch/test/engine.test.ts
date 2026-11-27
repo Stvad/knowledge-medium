@@ -6,9 +6,9 @@ import type {BlockData, Graph, MemoryScope, ReplyWriter} from '../src/graph'
 import {createStreamJsonParser, type AgentRunResult} from '../src/runner'
 import {createCodexJsonlParser} from '../src/codexRunner'
 import {activityStateFor, chipStateFor} from '../../../src/plugins/agent-dispatch-companion/chipState'
-import type {StateStore} from '../src/state'
+import type {RowTaskState, StateStore} from '../src/state'
 import type {MemoryEntry} from '../src/memory'
-import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS, type QueryRow} from '../src/watchers'
+import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS} from '../src/watchers'
 
 const NOW = 1_800_000_000_000
 
@@ -28,9 +28,8 @@ interface FakeGraphSeed {
  *  write is pinned against the real ones in dispatchAttribution.test.ts. */
 const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const blocks = new Map<string, BlockData & {workspaceId?: string, deleted?: boolean}>(
-    // editedAtMs defaults to NOW: most tests exercise the post-baseline
-    // lifecycle, where a candidate block was just edited.
-    Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, editedAtMs: NOW, workspaceId: 'ws-test', ...data}]),
+    // Creation and edit time default independently for post-baseline candidates.
+    Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, createdAt: NOW, editedAtMs: NOW, workspaceId: 'ws-test', ...data}]),
   )
   const reconciles: Array<{parentId: string, markdown: string, replyKey: string, shape: 'outline' | 'block', final: boolean}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
@@ -121,7 +120,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       ids.flatMap(id => {
         const target = blocks.get(id)
         return target && !target.deleted && (!workspaceId || target.workspaceId === workspaceId)
-          ? [[id, {id, properties: target.properties ?? {}, editedAtMs: target.editedAtMs ?? null}] as const] : []
+          ? [[id, {id, properties: target.properties ?? {}, createdAt: target.createdAt, editedAtMs: target.editedAtMs ?? null}] as const] : []
       }),
     ),
   }
@@ -135,7 +134,7 @@ const memoryState = (
 ): StateStore & {cursors: Map<string, string[]>, baselines: Map<string, number>, launches: number[]} => {
   const cursors = new Map<string, string[]>()
   const baselines = new Map<string, number>()
-  const rowTasks = new Map<string, {baselineIds: string[], pending: QueryRow[]}>()
+  const rowTasks = new Map<string, RowTaskState>()
   // Armed (epoch-0) baseline by default so most tests exercise the
   // post-baseline lifecycle; {armBaselines: false} tests establishment.
   const armed = opts.armBaselines ?? true
@@ -144,7 +143,7 @@ const memoryState = (
     baselines,
     launches: [...seedLaunchTimes],
     getRowTasks: async (name: string) => structuredClone(rowTasks.get(name) ?? null),
-    setRowTasks: async (name: string, snapshot: {baselineIds: string[], pending: QueryRow[]}) => {
+    setRowTasks: async (name: string, snapshot: RowTaskState) => {
       rowTasks.set(name, structuredClone(snapshot))
     },
     getCursor: async (name: string) => cursors.get(name) ?? null,
@@ -856,6 +855,56 @@ describe('mention lifecycle', () => {
     await engine.tick()
     await engine.drain()
     expect(runTask).not.toHaveBeenCalled()
+  })
+
+  it('holds a stale running mention until its editor closes and its edit settles', async () => {
+    const seed: FakeGraphSeed = {
+      beingEdited: ['b-1'],
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] continue', editedAtMs: NOW - 1000, properties: {
+        [PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS - 1,
+        [PROPS.attempts]: 1, [PROPS.watcher]: 'mentions',
+      }}},
+    }
+    const {graph, blocks, propWrites} = fakeGraph(seed)
+    let now = NOW
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, now: () => now, config: mentionConfig({
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', editHoldMs: 30_000, settleMs: 1000}],
+    })})
+    const tick = async () => { await engine.tick(); await engine.drain() }
+    await tick()
+    expect(propWrites).toEqual([])
+
+    seed.beingEdited = []
+    blocks.get('b-1')!.editedAtMs = now
+    await tick()
+    expect(propWrites).toEqual([])
+    expect(runTask).not.toHaveBeenCalled()
+
+    now += 1000
+    await tick()
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(blocks.get('b-1')?.properties).toMatchObject({[PROPS.status]: 'done', [PROPS.attempts]: 2})
+  })
+
+  it.each([1, MAX_ATTEMPTS])('leaves an earlier watcher name’s stale mention untouched at attempt %i', async attempts => {
+    const props = {
+      [PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS - 1,
+      [PROPS.attempts]: attempts, [PROPS.watcher]: 'previous-name',
+    }
+    const {graph, blocks, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] continue', properties: props}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+    expect(blocks.get('b-1')?.properties).toEqual(props)
   })
 
   it('holds a mention open in an editor, and claims it once it leaves', async () => {
@@ -2294,6 +2343,167 @@ describe('query row tasks', () => {
   const oversizedRows = () => Array.from({length: MAX_CURSOR_IDS + 1}, (_, id) => ({id: `overflow-${id}`}))
   const rowTaskKey = JSON.stringify(['ws-test', 'inbox'])
 
+  it('dispatches Ask Agent on a finished row only through the mention watcher', async () => {
+    const backlinks: NonNullable<FakeGraphSeed['backlinks']> = []
+    const {graph, blocks, propWrites} = fakeGraph({backlinks, blocks: {alpha: {content: 'Original text'}}})
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, config: mentionConfig({watchers: [
+      config({reply: false}).watchers[0],
+      {kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0},
+    ]})})
+    await tick(engine)
+    graph.sqlAll = async () => blocks.get('alpha')?.properties?.[PROPS.status] ? [] : [{id: 'alpha'}]
+    await tick(engine)
+    const block = blocks.get('alpha')!
+    expect(block.properties).toMatchObject({[PROPS.watcher]: 'inbox', [PROPS.status]: 'done'})
+    expect(runTask).toHaveBeenCalledOnce()
+
+    block.content = 'Corrected text [[claude]]'
+    block.properties = {[PROPS.askedAt]: NOW}
+    backlinks.push({id: 'alpha'})
+    propWrites.length = 0
+    await tick(engine)
+
+    expect(runTask).toHaveBeenCalledTimes(2)
+    expect(block.properties).toMatchObject({[PROPS.watcher]: 'mentions', [PROPS.status]: 'done'})
+    expect(propWrites.filter(write => write.status === 'running')).toHaveLength(1)
+  })
+
+  it.each([NOW, 0])('drops a saved pending row with Ask Agent timestamp %i before any claim', async askedAt => {
+    const seed: FakeGraphSeed = {beingEdited: ['alpha'], blocks: {alpha: {}}}
+    const {graph, blocks, propWrites} = fakeGraph(seed)
+    const state = memoryState()
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, state, runTask, config: config()})
+    await tick(engine)
+    graph.sqlAll = async () => [{id: 'alpha', label: 'saved input'}]
+    await tick(engine)
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([{id: 'alpha', label: 'saved input'}])
+
+    graph.sqlAll = async () => []
+    blocks.get('alpha')!.properties = {[PROPS.askedAt]: askedAt}
+    seed.beingEdited = []
+    await tick(engine)
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([])
+  })
+
+  it.each(['late sync', 'restore'])('skips historical rows surfaced by %s despite their recent edits', async source => {
+    const restoring = source === 'restore'
+    const old = {id: 'old', workspaceId: 'ws-test', createdAt: NOW - 100_000, editedAtMs: NOW}
+    const {graph, blocks, propWrites} = fakeGraph({blocks: {
+      ...(restoring ? {old: {...old, deleted: true}} : {}),
+      current: {},
+    }})
+    const runTask = vi.fn(async () => okRun())
+    const state = memoryState()
+    const deps = {graph, runTask, state, config: config()}
+    graph.sqlAll = async () => restoring ? [{id: 'old'}] : []
+    await tick(engineWith(deps))
+    expect((await state.getRowTasks(rowTaskKey))?.baselineIds).toEqual([])
+
+    blocks.set('old', old)
+    graph.sqlAll = async () => [{id: 'old'}, {id: 'current'}]
+    await tick(engineWith(deps))
+
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(propWrites.filter(write => write.status === 'running').map(write => write.id)).toEqual(['current'])
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([{id: 'current'}])
+  })
+
+  it('captures the cutoff before the first SQL scan so rows created while it runs remain eligible', async () => {
+    const {graph} = fakeGraph({blocks: {alpha: {createdAt: NOW + 1}}})
+    const state = memoryState()
+    let now = NOW
+    const runTask = vi.fn(async () => okRun())
+    const deps = {graph, state, runTask, now: () => now, config: config()}
+    graph.sqlAll = async () => {
+      now += 1000
+      return []
+    }
+    await tick(engineWith(deps))
+    expect(await state.getRowTasks(rowTaskKey)).toEqual({baselineIds: [], baselineMs: NOW, pending: []})
+
+    graph.sqlAll = async () => [{id: 'alpha'}]
+    await tick(engineWith(deps))
+    expect(runTask).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    {label: 'a queued block awaiting its first claim', props: {[PROPS.status]: 'queued'}},
+    {label: 'an unclaimed block with a leftover attempt count', props: {[PROPS.attempts]: 1}},
+  ])('keeps $label behind the creation cutoff', async ({props}) => {
+    const {graph, propWrites} = fakeGraph({blocks: {old: {createdAt: NOW - 1, properties: props}}})
+    const state = memoryState()
+    const engine = engineWith({graph, state, config: config()})
+    await tick(engine)
+    graph.sqlAll = async () => [{id: 'old'}]
+    await tick(engine)
+    expect(propWrites).toEqual([])
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([])
+  })
+
+  it('recovers a saved retry of an old block after SQL drops it, but skips an old row without a prior claim', async () => {
+    const {graph, blocks, propWrites} = fakeGraph({blocks: {
+      retry: {
+        createdAt: NOW - 100_000,
+        properties: {[PROPS.status]: 'queued', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1},
+      },
+      unclaimed: {
+        createdAt: NOW - 100_000,
+        properties: {[PROPS.status]: 'queued', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 0},
+      },
+    }})
+    const state = memoryState()
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], baselineMs: NOW, pending: [{id: 'retry'}, {id: 'unclaimed'}]})
+    const runTask = vi.fn(async () => okRun())
+    await tick(engineWith({graph, state, runTask, config: config()}))
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(propWrites.filter(write => write.status === 'running').map(write => write.id)).toEqual(['retry'])
+    expect(blocks.get('retry')?.properties).toMatchObject({[PROPS.status]: 'done', [PROPS.attempts]: 2})
+  })
+
+  it.each([null, undefined])('skips an unclaimed row with creation timestamp %s', async createdAt => {
+    const {graph, propWrites} = fakeGraph({blocks: {alpha: {createdAt}}})
+    const state = memoryState()
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, state, runTask, config: config()})
+    await tick(engine)
+    graph.sqlAll = async () => [{id: 'alpha'}]
+    await tick(engine)
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+    expect((await state.getRowTasks(rowTaskKey))?.pending).toEqual([])
+  })
+
+  it('bounds retries when a failed row rewrite drops its attempt counter', async () => {
+    const {graph, blocks} = fakeGraph({blocks: {alpha: {}}})
+    const claimAttempts: unknown[] = []
+    const runTask = vi.fn(async () => {
+      const props = blocks.get('alpha')!.properties!
+      claimAttempts.push(props[PROPS.attempts])
+      delete props[PROPS.attempts]
+      graph.sqlAll = async () => []
+      return okRun({ok: false, exitCode: 1, stderr: 'rewrite failed'})
+    })
+    const engine = engineWith({graph, runTask, config: config({reply: false})})
+    await tick(engine)
+    graph.sqlAll = async () => [{id: 'alpha'}]
+
+    for (let attempt = 1; attempt < MAX_ATTEMPTS; attempt++) {
+      await tick(engine)
+      expect(blocks.get('alpha')?.properties).toMatchObject({[PROPS.status]: 'queued', [PROPS.attempts]: attempt})
+    }
+    await tick(engine)
+    await tick(engine)
+
+    expect(claimAttempts).toEqual(Array.from({length: MAX_ATTEMPTS}, (_, index) => index + 1))
+    expect(blocks.get('alpha')?.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.attempts]: MAX_ATTEMPTS, [PROPS.error]: expect.stringContaining('rewrite failed'),
+    })
+  })
+
   it('waits for an in-bounds initial result to establish the baseline', async () => {
     const {graph, propWrites} = fakeGraph({blocks: {existing: {}}})
     const state = memoryState()
@@ -2305,7 +2515,7 @@ describe('query row tasks', () => {
     graph.sqlAll = async () => [{id: 'existing'}]
     await tick(engine)
 
-    expect(await state.getRowTasks(rowTaskKey)).toEqual({baselineIds: ['existing'], pending: []})
+    expect(await state.getRowTasks(rowTaskKey)).toEqual({baselineIds: ['existing'], baselineMs: NOW, pending: []})
     expect(runTask).not.toHaveBeenCalled()
     expect(propWrites).toEqual([])
   })
@@ -2441,8 +2651,9 @@ describe('query row tasks', () => {
     expect(propWrites.filter(write => write.status === 'running').map(write => write.id)).toEqual(['session:one', 'beta'])
   })
 
-  it('honors both the edit hold and settle window when retrying a stale claim', async () => {
+  it('honors the edit hold and settle window when retrying a stale claim created before the baseline', async () => {
     const seed: FakeGraphSeed = {beingEdited: ['alpha'], blocks: {alpha: {
+      createdAt: NOW - STALE_RUNNING_MS - 1,
       properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS - 1, [PROPS.attempts]: 1},
     }}}
     const {graph, blocks} = fakeGraph(seed)
@@ -2614,7 +2825,10 @@ describe('query row tasks', () => {
     {change: 'ID', patch: {id: 'different'}},
     {change: 'workspace', patch: {workspaceId: 'ws-other'}},
     {change: 'watcher ownership', patch: {properties: {[PROPS.status]: 'queued', [PROPS.watcher]: 'different'}}},
-  ])('backs off when a pre-claim read reports a different $change', async ({patch}) => {
+    {change: 'Ask Agent timestamp', patch: {properties: {[PROPS.askedAt]: 0}}},
+    {change: 'pre-baseline creation time', patch: {createdAt: NOW - 1}},
+    {change: 'missing creation time', patch: {createdAt: undefined}},
+  ])('backs off when the pre-claim read reports $change', async ({patch}) => {
     const {graph, propWrites} = fakeGraph({blocks: {alpha: {}}})
     const getBlock = graph.getBlock
     graph.getBlock = async id => {
@@ -2736,7 +2950,7 @@ describe('query row tasks', () => {
 
     graph.sqlAll = async () => [{id: 'existing'}]
     await tick(engine)
-    expect(await state.getRowTasks(rowTaskKey)).toEqual({baselineIds: ['existing'], pending: []})
+    expect(await state.getRowTasks(rowTaskKey)).toEqual({baselineIds: ['existing'], baselineMs: NOW, pending: []})
     expect(runTask).not.toHaveBeenCalled()
 
     graph.sqlAll = async () => [{id: 'existing'}, {id: 'later'}]
@@ -2772,7 +2986,7 @@ describe('query row tasks', () => {
       [PROPS.updatedAt]: NOW, [PROPS.cancel]: NOW,
     }}}})
     const state = memoryState()
-    await state.setRowTasks(rowTaskKey, {baselineIds: [], pending: [{id: 'alpha'}]})
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], baselineMs: NOW, pending: [{id: 'alpha'}]})
     const runTask = vi.fn(async () => okRun())
     const deps = {graph, state, runTask, config: config({reply: false})}
     await tick(engineWith(deps))
@@ -2796,7 +3010,7 @@ describe('query row tasks', () => {
       [PROPS.updatedAt]: NOW, [PROPS.cancel]: NOW,
     }}}})
     const state = memoryState()
-    await state.setRowTasks(rowTaskKey, {baselineIds: [], pending: [{id: 'alpha'}]})
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], baselineMs: NOW, pending: [{id: 'alpha'}]})
     const getBlock = graph.getBlock
     graph.getBlock = async id => {
       const block = await getBlock(id)
@@ -2839,8 +3053,9 @@ describe('query row tasks', () => {
     expect(reconciles).toEqual([])
   })
 
-  it('refunds the launch budget when a row claim write fails before committing', async () => {
-    const {graph, blocks, propWrites, reconciles} = fakeGraph({blocks: {alpha: {}}})
+  it.each(['row', 'mention'])('refunds the launch budget when a %s claim write fails before committing', async kind => {
+    const backlinks: NonNullable<FakeGraphSeed['backlinks']> = []
+    const {graph, blocks, propWrites, reconciles} = fakeGraph({backlinks, blocks: {alpha: {content: '[[claude]] continue'}}})
     const setTaskProps = graph.setTaskProps
     let failClaim = true
     graph.setTaskProps = async (id, update) => {
@@ -2849,8 +3064,10 @@ describe('query row tasks', () => {
     }
     const runTask = vi.fn(async () => okRun())
     const state = memoryState()
-    const engine = engineWith({graph, state, runTask, config: config({}, {runsPerHour: 1})})
+    const budget = {runsPerHour: 1}
+    const engine = engineWith({graph, state, runTask, config: kind === 'row' ? config({}, budget) : mentionConfig(budget)})
     await tick(engine)
+    backlinks.push({id: 'alpha'})
     graph.sqlAll = async () => [{id: 'alpha'}]
     await tick(engine)
 

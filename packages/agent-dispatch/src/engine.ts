@@ -24,11 +24,19 @@ import { KM_MCP_ALLOWED_TOOLS_WITHOUT_LOCAL_FILES as DISPATCH_MCP_ALLOWED_TOOLS 
 
 type BlockTask =
   | {id: string, watcher: BacklinksWatcher, deepLink: string, baselineMs: number}
-  | {id: string, watcher: QueryWatcher, row: QueryRow}
+  | {id: string, watcher: QueryWatcher, row: QueryRow, createdSinceMs: number}
 
+// A renamed watcher leaves claims under its former name for explicit recovery.
 const belongsToWatcher = (block: BlockView, watcher: Watcher) => {
   const props = block.properties
   return !props?.[PROPS.status] || !props[PROPS.watcher] || props[PROPS.watcher] === watcher.name
+}
+
+const eligibleRowTask = (block: BlockView, createdSinceMs: number): boolean => {
+  if (Object.hasOwn(block.properties ?? {}, PROPS.askedAt)) return false
+  const status = block.properties?.[PROPS.status]
+  const claimed = status === 'running' || (status === 'queued' && taskAttempts(block) > 0)
+  return claimed || (block.createdAt ?? -Infinity) >= createdSinceMs
 }
 
 const postsReply = (watcher: Watcher) => watcher.kind === 'backlinks' || watcher.reply
@@ -256,13 +264,15 @@ export const createEngine = (deps: EngineDeps) => {
     }
   }
 
-  const currentTaskBlock = async (watcher: Watcher, id: string) => {
+  const currentTaskBlock = async (task: BlockTask) => {
+    const {watcher, id} = task
     const block = await graph.getBlock(id)
     if (!block || !belongsToWatcher(block, watcher)) return null
     if (watcher.kind === 'query' && (block.id !== id || block.workspaceId !== config.workspaceId)) {
       log(`[${watcher.name}] skipped ${id}: block no longer matches the row in the configured workspace`)
       return null
     }
+    if ('row' in task && !eligibleRowTask(block, task.createdSinceMs)) return null
     return block
   }
 
@@ -282,7 +292,7 @@ export const createEngine = (deps: EngineDeps) => {
    *  so a failed reply cannot retrigger this unbilled write every tick. */
   const parkTask = async (task: BlockTask, expected: 'attempts-exhausted' | 'cancelled') => {
     const {watcher, id: sourceId} = task
-    const fresh = await currentTaskBlock(watcher, sourceId)
+    const fresh = await currentTaskBlock(task)
     if (!fresh || pendingDecision(task, fresh).reason !== expected) return
     const reason = expected === 'cancelled' ? 'cancelled'
       : `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
@@ -365,11 +375,11 @@ export const createEngine = (deps: EngineDeps) => {
 
   /** The pre-claim re-check; null when the mention is no longer pending. */
   const readPendingTask = async (task: BlockTask) => {
-    const {watcher, id: sourceId} = task
+    const sourceId = task.id
     // Edit state first: a block read after "not being edited" can't be older
     // than the edit that ended, and the prompt is built from this read.
     const editingActiveAtMs = (await graph.beingEditedBlocks()).get(sourceId)
-    const block = await currentTaskBlock(watcher, sourceId)
+    const block = await currentTaskBlock(task)
     if (!block) return null
     const decision = pendingDecision(task, block, editingActiveAtMs)
     if (!decision.pending) return null
@@ -465,7 +475,7 @@ export const createEngine = (deps: EngineDeps) => {
     let claimed = false
     let runSucceeded = false
     const failureProps = () => !runSucceeded && 'row' in task && attempt < MAX_ATTEMPTS && !abortController.signal.aborted
-      ? {status: 'queued' as const} : {status: 'error' as const, cancel: null}
+      ? {status: 'queued' as const, attempts: attempt} : {status: 'error' as const, attempts: attempt, cancel: null}
     try {
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
@@ -791,6 +801,7 @@ export const createEngine = (deps: EngineDeps) => {
 
   const tickRowTasks = async (watcher: QueryWatcher) => {
     const key = JSON.stringify([config.workspaceId, watcher.name])
+    const tickStartMs = now()
     const saved = await state.getRowTasks(key)
     const rows = await graph.sqlAll(watcher.sql, watcher.params).catch(error => {
       if (!saved) throw error
@@ -810,7 +821,7 @@ export const createEngine = (deps: EngineDeps) => {
       if (!views.has(id)) log(`[${watcher.name}] skipped ${id}: no live block with this id in the configured workspace`)
     }
     if (!saved) {
-      await state.setRowTasks(key, {baselineIds: [...views.keys()], pending: []})
+      await state.setRowTasks(key, {baselineMs: tickStartMs, baselineIds: [...views.keys()], pending: []})
       log(`[${watcher.name}] row-task baseline established (${views.size} existing blocks)`)
       return
     }
@@ -818,14 +829,14 @@ export const createEngine = (deps: EngineDeps) => {
     const pending = [...candidates.values()].filter(row => {
       const view = views.get(row.id)
       const status = view?.properties?.[PROPS.status]
-      return view && belongsToWatcher(view, watcher) && !view.properties?.[PROPS.reply] && status !== 'done' && status !== 'error'
+      return view && eligibleRowTask(view, saved.baselineMs) && belongsToWatcher(view, watcher) && !view.properties?.[PROPS.reply] && status !== 'done' && status !== 'error'
     })
     // Keep the original columns until the graph reports a terminal state,
     // including while the budget or an editor holds the task.
     if (pending.length !== saved.pending.length || pending.some((row, i) => row !== saved.pending[i])) {
-      await state.setRowTasks(key, {baselineIds: saved.baselineIds, pending})
+      await state.setRowTasks(key, {...saved, pending})
     }
-    await scheduleBlockTasks(pending.map(row => ({id: row.id, watcher, row})), views)
+    await scheduleBlockTasks(pending.map(row => ({id: row.id, watcher, row, createdSinceMs: saved.baselineMs})), views)
   }
 
   const tickQueryWatcher = async (watcher: QueryWatcher) => {

@@ -71,6 +71,8 @@ describe('parseConfig', () => {
       kind: 'backlinks',
       target: 'claude',
       resume: true,
+      settleMs: 250,
+      editHoldMs: 120_000,
       runner: {
         executor: 'claude',
         allowedTools: [],
@@ -95,6 +97,25 @@ describe('parseConfig', () => {
   it('defaults query row tasks off and reply on, with shared settle timings', () => {
     const watcher = parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'query', name: 'q', sql: 'SELECT id FROM blocks'}]}).watchers[0]
     expect(watcher).toMatchObject({kind: 'query', rowTasks: false, reply: true, settleMs: 250, editHoldMs: 120_000})
+  })
+
+  it.each([['settleMs', 250], ['editHoldMs', 120_000]])('refuses explicit %s on a plain query watcher', (setting, value) => {
+    const result = configSchema.safeParse({
+      workspaceId: 'ws-test',
+      watchers: [{kind: 'query', name: 'q', sql: 'SELECT id FROM blocks', [setting]: value}],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues).toEqual([
+      expect.objectContaining({path: ['watchers', 0, setting], message: expect.stringMatching(/requires rowTasks/)}),
+    ])
+  })
+
+  it.each([{}, {settleMs: 1_000, editHoldMs: 2_000}])('applies row task timings with overrides %j', timings => {
+    const config = parseConfig({
+      workspaceId: 'ws-test',
+      watchers: [{kind: 'query', name: 'q', sql: 'SELECT id FROM blocks', rowTasks: true, ...timings}],
+    })
+    expect(config.watchers[0]).toMatchObject({rowTasks: true, settleMs: 250, editHoldMs: 120_000, ...timings})
   })
 
   it('refuses row tasks with channel delivery', () => {
