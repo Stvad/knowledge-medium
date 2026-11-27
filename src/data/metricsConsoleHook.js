@@ -1,1 +1,1 @@
-export{tL as ensureMetricsConsoleHook}from"../../chunks/app-D3dCZbad.js";
+export{tL as ensureMetricsConsoleHook}from"../../chunks/app-CSzj1GG6.js";

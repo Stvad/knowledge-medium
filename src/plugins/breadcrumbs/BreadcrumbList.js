@@ -1,1 +1,1 @@
-export{QO as BreadcrumbList}from"../../../chunks/app-D3dCZbad.js";
+export{QO as BreadcrumbList}from"../../../chunks/app-CSzj1GG6.js";
