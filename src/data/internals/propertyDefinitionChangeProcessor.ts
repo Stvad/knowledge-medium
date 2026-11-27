@@ -98,7 +98,7 @@ import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetada
 import { isResolvableFieldDefinition } from './propertySchemaResolution'
 import { presetConfigProp, presetIdProp, propertyDefaultProp } from '@/data/properties'
 import { peekRowProperty, storedPropertyValue } from '@/data/rowProperty'
-import { materializePropertyChildrenForExistingRow } from './propertyChildrenProcessor'
+import { materializePropertyChildrenForExistingRow, projectFieldValue } from './propertyChildrenProcessor'
 import { projectedRefsForField } from './refProjection'
 import { inlineJsonPath, jsonPathForProperty } from './typedBlockQuery'
 import { jsonValuesEqual } from './jsonCanonical'
@@ -780,7 +780,9 @@ export const countConsumingParents = async (
  *
  *  THE BEFORE SIDE IS THE CHILDREN, not the stored cell: the cell is derived,
  *  and one that disagrees with its children is stale by definition — the next
- *  projection drops the difference whether or not this edit happens. */
+ *  projection drops the difference whether or not this edit happens. The one
+ *  exception is the projection's own: a member the rows cannot resolve yet is
+ *  held where the stored cell holds it ({@link projectFieldValue}). */
 const valuesLostBy = (
   change: DefinitionChange,
   perFieldRow: readonly (readonly BlockData[])[],
@@ -792,10 +794,9 @@ const valuesLostBy = (
   // rebuilding the before-projection over every value of every consumer on the
   // commonest edit there is.
   if (!change.encodingChanged) return 0
-  const held = projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
-    change.beforeSchema,
-    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow), stored,
-  ))
+  // At cell grain, through the writers' own read, so a member the rows cannot
+  // resolve yet counts as held only where the stored cell holds it.
+  const held = projectedValueCount(change.beforeSchema, projectFieldValue(change.beforeSchema, perFieldRow, stored))
   return Math.max(0, held - projectedValueCount(change.schema, projected))
 }
 
@@ -967,16 +968,14 @@ const applyToParent = async (
       }
       canonicalized.push(group)
     }
-    // Union ACROSS field rows, the same rule the projection runs, over the
-    // CANONICAL text because that is what gets published. Both this and
-    // `childContentsToEncodedPropertyValue` own what a definition's value is at
-    // either grain — a list property is N sibling value children, and a
-    // first-parseable-wins read here would publish one member and let
-    // MATERIALIZE reap the rest.
-    const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
+    // The projection's own value, over the CANONICAL text because that is what
+    // gets published. A rename keeps the stored cell's members the rows cannot
+    // read yet; a re-encode cannot carry old-encoded members across, so
+    // `valuesLostBy` counts them and the edit refuses instead.
     const stored = storedPropertyValue(parent.properties, change.oldName)
-    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents,
-      change.encodingChanged ? undefined : stored)
+    const projected = change.encodingChanged
+      ? childContentsToEncodedPropertyValue(change.schema, unionValuesAcrossFieldRows(change.schema, canonicalized), undefined)
+      : projectFieldValue(change.schema, canonicalized, stored)
     const lost = valuesLostBy(change, perFieldRow, projected, stored)
     if (lost > 0) {
       lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)

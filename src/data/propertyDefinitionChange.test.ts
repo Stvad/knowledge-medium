@@ -458,6 +458,63 @@ describe('anyBlockHoldsFieldRowFor', () => {
 })
 
 describe('rename', () => {
+  /** `p` holds `[target-a, target-c]` under a refList `status`, its second
+   *  value row a `[[Name C]]` this device has not stamped: the synced shape. */
+  const seedPendingRefList = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition('refList')
+    for (const id of ['target-a', 'target-c']) {
+      await repo.tx(tx => tx.create({id, workspaceId: WS, parentId: null, orderKey: `k-${id}`, content: id}),
+        {scope: ChangeScope.BlockDefault})
+    }
+    await createHost(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', schemaFor(repo, 'status'), ['target-a', 'target-c']),
+      {scope: ChangeScope.BlockDefault})
+    const rows = await valueRowsOf('p')
+    expect(rows).toHaveLength(2)
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET content = ?, reference_target_id = NULL WHERE id = ?', ['[[Name C]]', rows[1]!.id]))
+    expect(await cell('p')).toEqual({status: ['target-a', 'target-c']})
+    return repo
+  }
+
+  it('a rename keeps a list member this device cannot read yet', async () => {
+    const repo = await seedPendingRefList()
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(await cell('p')).toEqual({state: ['target-a', 'target-c']})
+  })
+
+  it('REFUSES a re-type over a list member this device cannot read yet', async () => {
+    const repo = await seedPendingRefList()
+
+    await expect(retype(repo, FIELD_ID, 'string')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+    })
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({status: ['target-a', 'target-c']})
+  })
+
+  it('does not refuse a scalar re-type over a pending sibling the cell never held', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition('ref')
+    await repo.tx(tx => tx.create({id: 'target-a', workspaceId: WS, parentId: null, orderKey: 'k-a', content: 'a'}),
+      {scope: ChangeScope.BlockDefault})
+    await createHost(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', schemaFor(repo, 'status'), 'target-a'), {scope: ChangeScope.BlockDefault})
+    const fieldRowId = (await liveFieldRow('p', FIELD_ID))!
+    await repo.tx(tx => tx.create({
+      id: 'pending-sibling', workspaceId: WS, parentId: fieldRowId, orderKey: 'zz', content: '[[Name C]]',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    expect(await valueRowsOf('p')).toHaveLength(2)
+    expect(await cell('p')).toEqual({status: 'target-a'})
+
+    await expect(retype(repo, FIELD_ID, 'string')).resolves.toBeUndefined()
+  })
+
   it('re-keys consuming cells; field-row content is id-stable across the rename', async () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
