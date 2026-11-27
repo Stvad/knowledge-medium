@@ -1,1 +1,1 @@
-export{NS as referencesPlugin}from"../../../chunks/app-B5NWYOV4.js";
+export{NS as referencesPlugin}from"../../../chunks/app-DgVpU5wt.js";
