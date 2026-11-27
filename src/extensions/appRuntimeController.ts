@@ -25,6 +25,7 @@ export interface AppRuntimeContext extends FacetResolveContext {
 }
 
 type ReportBatch = Pick<BatchableKeyedStore<unknown>, 'beginBatch' | 'commitBatch' | 'abandonBatch'>
+/** Hands the runtime to the host before Repo installation. Reconcile after installation. */
 type RuntimeListener = (runtime: FacetRuntime) => void
 
 interface RuntimeResolutionOptions extends Pick<DynamicExtensionsOptions, 'cache' | 'persistent'> {
@@ -54,6 +55,8 @@ export class AppRuntimeController {
     baseExtensions, context, overrides, cache, persistent, errorStore, approvalStore,
     signal, beforePublish, onRuntime, onLoadError,
   }: RuntimeResolutionOptions): Promise<FacetRuntime | undefined> {
+    if (signal.aborted) return
+
     const {repo, workspaceId, safeMode} = context
     errorStore.beginBatch()
     approvalStore.beginBatch()

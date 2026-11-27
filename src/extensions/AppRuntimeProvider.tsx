@@ -39,12 +39,13 @@ export function AppRuntimeProvider({
   // canonical block diverge).
   const {overrides, generation} = useOverrides(workspaceId)
 
-  // One store per provider instance — survives runtime re-resolutions
-  // (so the renderer can show errors from the most recent load) and
-  // re-creates on workspace switch.
-  const errorStore = useMemo(() => {
+  // Keep the last reports across re-resolutions and reset on workspace switch.
+  const {errorStore, approvalStore} = useMemo(() => {
     void workspaceId
-    return new ExtensionLoadErrorStore()
+    return {
+      errorStore: new ExtensionLoadErrorStore(),
+      approvalStore: new ExtensionApprovalStatusStore(),
+    }
   }, [workspaceId])
 
   // Keys (`${workspaceId}:${blockId}`) we've already toasted a load error
@@ -53,14 +54,6 @@ export function AppRuntimeProvider({
   // workspace for the provider's lifetime. The errorStore (status icons)
   // still reflects every report.
   const toastedLoadErrors = useRef<Set<string>>(new Set())
-
-  // Device-local trust status (needs-approval / update-available) for the
-  // current resolution, surfaced to the Extensions settings UI (#67). Same
-  // per-provider / per-workspace lifecycle as the error store.
-  const approvalStore = useMemo(() => {
-    void workspaceId
-    return new ExtensionApprovalStatusStore()
-  }, [workspaceId])
 
   const runtimeContext: AppRuntimeContext = useMemo(() => ({
     repo,

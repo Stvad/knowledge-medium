@@ -49,8 +49,14 @@ describe('AppRuntimeController', () => {
     const disabled = systemToggle({id: 'system:disabled', name: 'Disabled'})
     const overrides = new Map([[approved.id, true], [pending.id, true], [disabled.id, false]])
     const order: string[] = []
+    const failure = new Error('Extension factory failed')
+    const onLoadError = vi.fn()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     const restore = __setCompileImplForTest(async () => ({
-      default: labels.of('extension', {enables: labels.of('enabled child')}),
+      default: [
+        labels.of('extension', {enables: labels.of('enabled child')}),
+        () => { throw failure },
+      ],
     }))
     errorStore.reportError('previous', new Error('previous load'))
     const unsubscribeErrors = errorStore.subscribe(() => order.push('errors'))
@@ -72,19 +78,21 @@ describe('AppRuntimeController', () => {
           return readiness
         },
         onRuntime: () => { order.push('host') },
+        onLoadError,
       })
 
       await vi.waitFor(() => expect(order).toContain('ready'))
       expect(order).toEqual(['ready'])
       expect(approvalStore.getSnapshot().size).toBe(0)
       expect(errorStore.getSnapshot().has('previous')).toBe(true)
+      expect(onLoadError).toHaveBeenCalledExactlyOnceWith(approved.id, failure)
 
       ready()
       const runtime = await result
       expect(runtime?.context).toBe(context)
       expect(runtime?.read(labels)).toEqual(['static', 'extension', 'enabled child'])
       expect(approvalStore.getSnapshot().get(pending.id)?.kind).toBe('needs-approval')
-      expect(errorStore.getSnapshot().size).toBe(0)
+      expect([...errorStore.getSnapshot()]).toEqual([[approved.id, failure]])
       expect(order).toEqual(['ready', 'errors', 'approvals', 'host', 'repo'])
       expect(setFacetRuntime).toHaveBeenCalledWith(runtime)
     } finally {
@@ -92,6 +100,7 @@ describe('AppRuntimeController', () => {
       unsubscribeErrors()
       unsubscribeApprovals()
       restore()
+      log.mockRestore()
     }
   })
 
@@ -101,9 +110,11 @@ describe('AppRuntimeController', () => {
     const cleanup = vi.fn()
     const allowedStart = vi.fn(() => cleanup)
     const blockedStart = vi.fn()
+    const firstStart = vi.fn()
     const runtime = resolveAppRuntimeSync([
       appEffectsFacet.of({id: 'shared', start: allowedStart}, {source: 'block:allowed/helper'}),
       appEffectsFacet.of({id: 'shared', start: blockedStart}, {source: 'static', precedence: 10}),
+      appEffectsFacet.of({id: 'first', start: firstStart}, {source: 'block:allowed', precedence: -10}),
     ], {overrides: new Map(), context})
     let writable = true
     const eligible = ({source}: {source?: string}) => writable && isExtensionContribution(source, 'allowed')
@@ -111,8 +122,9 @@ describe('AppRuntimeController', () => {
     try {
       controller.reconcile(runtime, context, eligible)
       expect(allowedStart).toHaveBeenCalledTimes(1)
+      expect(firstStart).toHaveBeenCalledBefore(allowedStart)
       expect(blockedStart).not.toHaveBeenCalled()
-      expect(runtime.read(appEffectsFacet).map(effect => effect.start)).toEqual([allowedStart, blockedStart])
+      expect(runtime.read(appEffectsFacet).map(effect => effect.start)).toEqual([firstStart, allowedStart, blockedStart])
 
       writable = false
       controller.reconcile(runtime, context, eligible)
@@ -173,6 +185,30 @@ describe('AppRuntimeController', () => {
       releaseOld()
       releaseNew()
     }
+  })
+
+  it('does no resolution work and leaves an open batch intact when the signal is already aborted', async () => {
+    const host = makeHost()
+    const failure = new Error('Active load error')
+    host.errorStore.beginBatch()
+    host.errorStore.reportError('active', failure)
+    host.approvalStore.beginBatch()
+    host.approvalStore.report('active', {kind: 'needs-approval', name: 'Active', liveHash: 'hash'})
+    const extension = vi.fn(() => null)
+
+    const runtime = await new AppRuntimeController().resolve({
+      ...host,
+      baseExtensions: [extension],
+      overrides: new Map(),
+      signal: AbortSignal.abort(),
+    })
+
+    expect(runtime).toBeUndefined()
+    expect(extension).not.toHaveBeenCalled()
+    host.errorStore.commitBatch()
+    expect(host.errorStore.getSnapshot().get('active')).toBe(failure)
+    host.approvalStore.commitBatch()
+    expect(host.approvalStore.getSnapshot().get('active')?.kind).toBe('needs-approval')
   })
 
   it('publishes the base on a cold context and holds the merged runtime on a warm reload', async () => {
