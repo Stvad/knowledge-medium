@@ -41,6 +41,10 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.9.11
+
+Row tasks require `@knowledge-medium/agent-cli` 0.14.5 for workspace-scoped block reads. Install it with `@knowledge-medium/agent-dispatch` 0.9.11 and restart the daemon. Enabling `rowTasks` takes a fresh baseline, including when the watcher already has a batch cursor.
+
 ## Upgrade to 0.9.10
 
 A claude watcher can list the non-builtin plugins its runs may load in `runner.allowedPlugins`, by the `name@marketplace` id that `enabledPlugins` uses in `runner.cwd`'s settings, for example `"allowedPlugins": ["code-guard@team-plugins"]`. In 0.9.9 any such plugin made every run fail with `Unexpected Claude init inventory: plugin …`. A listed plugin's hooks and agents load with the run, and its skills do too when `allowedTools` names `Skill`. With `Agent` in `defaultAllowedTools`, a run can hand work to a subagent the plugin defines, which gets only the run's tools. A tool or MCP server it adds is still refused unless `allowedTools` or the dispatch MCP config names it.
@@ -464,6 +468,37 @@ Registrations are ephemeral tab state: they die with the tab and expire after 10
 ## Query watchers
 
 Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in the state file, `~/.config/knowledge-medium/agent-dispatch-state.json` unless `statePath` or `instance` says otherwise (alongside the backlink-watcher baselines); the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).
+
+### One task per matching block
+
+With `"rowTasks": true`, each new id gets a separate spawned run. Select one row per exact, live block id and filter by the configured workspace. The daemon independently verifies membership and logs skipped ids. The first successful scan records the existing ids without claiming them. Those ids stay excluded even if they leave the SQL results and later return. A single result set is limited to 20,000 rows. Use a stable predicate that covers the historical rows you want to exclude on the first scan. A rotating `LIMIT` can expose older blocks only after that scan.
+
+For example, this watcher selects voice-note message blocks with an audio URL and no task status. Replace both workspace placeholders with the same workspace id and supply your task instructions in `prompt`.
+
+```json
+{
+  "workspaceId": "<workspace-id>",
+  "watchers": [
+    {
+      "kind": "query",
+      "name": "voice-notes",
+      "rowTasks": true,
+      "reply": false,
+      "sql": "SELECT b.id, json_extract(b.properties_json, '$.\"matrix:audio-url\"') AS audio_url FROM blocks b WHERE b.workspace_id = ? AND b.deleted = 0 AND audio_url IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(b.properties_json, '$.types') t WHERE t.value = 'matrix-message') AND json_extract(b.properties_json, '$.\"agent:status\"') IS NULL",
+      "params": [
+        "<workspace-id>"
+      ],
+      "prompt": "<task instructions>\nBlock {{blockId}}\n{{subtree}}\nSelected columns: {{row}}"
+    }
+  ]
+}
+```
+
+The row template receives `{{row}}` (one JSON object with all selected columns), `{{blockId}}`, `{{subtree}}` (a fresh outline including properties), and `{{watcherName}}`. Batch templates continue to receive `{{newRows}}`. Select only columns needed by the run. The daemon saves the original columns for pending rows in its local state file before launching any of them. Keep that file across restarts. A claim, an edit, or a changing query result can then remove a row from the SQL without losing its retry.
+
+The block carries its status, attempt count, and failure reason. A completed block stays done even when its edits make the SQL match again. Preserve its `agent:*` properties when editing it. Each block has one task status, so choose disjoint sources for watchers that should do independent work. Failed row runs queue again up to three claims in total. A stale running claim follows the same limit. Exhaustion parks the task with `agent:status=error` and `agent:error`. Stop cancels a live run and parks it immediately. A crash after an edit but before the terminal write can repeat the work, so make edits safe to repeat.
+
+Each row uses the daemon's shared `maxConcurrent` and `runsPerHour` limits and the same `settleMs` and `editHoldMs` as a mention (250 ms and 120,000 ms by default). Set `reply` to `false` for in-place work. This suppresses both success and error children. With the default `true`, the daemon posts an outline reply on success and a failure note on a failed attempt. Row tasks use spawn delivery. Watcher Memory belongs to backlinks watchers and lives under their target page.
 
 ## km MCP server standalone
 

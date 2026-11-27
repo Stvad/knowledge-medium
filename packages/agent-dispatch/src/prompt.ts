@@ -224,3 +224,31 @@ export const renderQueryPrompt = (
     newRows: JSON.stringify(context.newRows, null, 2),
     watcherName: context.watcherName,
   })
+
+export interface RowTaskPromptContext {
+  row: unknown
+  blockId: string
+  subtree: string
+  watcherName: string
+}
+
+export const DEFAULT_ROW_TASK_PROMPT = `A watched query over the user's Knowledge Medium notes returned a new row.
+
+Watcher: {{watcherName}}
+Row (JSON):
+{{row}}
+
+The matching block is {{blockId}}. Its subtree is:
+{{subtree}}
+
+Use the km MCP tools to inspect the block if needed, then act per the watcher's intent.`
+
+export const renderRowTaskPrompt = (
+  template: string | undefined,
+  context: RowTaskPromptContext,
+): string => renderTemplate(template ?? DEFAULT_ROW_TASK_PROMPT, {
+  row: JSON.stringify(context.row, null, 2),
+  blockId: context.blockId,
+  subtree: context.subtree,
+  watcherName: context.watcherName,
+})

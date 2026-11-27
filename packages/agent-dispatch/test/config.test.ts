@@ -92,6 +92,19 @@ describe('parseConfig', () => {
     expect(parseConfig(query('SELECT id FROM blocks')).watchers).toHaveLength(1)
   })
 
+  it('defaults query row tasks off and reply on, with shared settle timings', () => {
+    const watcher = parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'query', name: 'q', sql: 'SELECT id FROM blocks'}]}).watchers[0]
+    expect(watcher).toMatchObject({kind: 'query', rowTasks: false, reply: true, settleMs: 250, editHoldMs: 120_000})
+  })
+
+  it('refuses row tasks with channel delivery', () => {
+    const result = configSchema.safeParse({workspaceId: 'ws-test', watchers: [{kind: 'query', name: 'q', sql: 'SELECT id FROM blocks', rowTasks: true, delivery: 'channel'}]})
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues).toEqual([
+      expect.objectContaining({path: ['watchers', 0, 'delivery'], message: expect.stringMatching(/rowTasks requires delivery="spawn"/)}),
+    ])
+  })
+
   // Calls that name no workspace act on whichever one the user's focused app
   // tab has open; an unattended daemon must not move with them.
   it('requires the workspace the daemon acts on', () => {

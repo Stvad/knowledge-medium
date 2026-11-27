@@ -61,6 +61,8 @@ export type Executor = 'claude' | 'codex'
  *  sweep window (STALE_RUNNING_MS, watchers.ts) is derived from it, so a
  *  live slow run is never concurrently re-claimed as crashed. */
 export const MAX_RUN_TIMEOUT_MS = 60 * 60_000
+export const DEFAULT_WATCHER_SETTLE_MS = 250
+export const DEFAULT_WATCHER_EDIT_HOLD_MS = 120_000
 
 const runnerBase = {
   /** Working directory for the spawned agent process. */
@@ -209,11 +211,11 @@ const backlinksWatcherSchema = z.strictObject({
    *  write of an edit lands before the daemon snapshots the block. */
   settleMs: z.number().int().nonnegative()
     .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
-    .default(250),
+    .default(DEFAULT_WATCHER_SETTLE_MS),
   /** A mention still open in an editor is not claimed until it has gone
    *  unedited this long: the user may just be thinking, but a device that
    *  vanished mid-edit leaves its editing flag set forever. */
-  editHoldMs: z.number().int().nonnegative().default(120_000),
+  editHoldMs: z.number().int().nonnegative().default(DEFAULT_WATCHER_EDIT_HOLD_MS),
   /** Show the reply being BUILT LIVE as the run streams, instead of posting
    *  it only once at the end. Orthogonal to `splitReply`: streaming just
    *  reconciles the reply subtree with the growing text on each tick (a
@@ -255,6 +257,19 @@ const queryWatcherSchema = z.strictObject({
    *  in-tab watch-events registration; default: blocks). The polling
    *  sweep ignores this. */
   tables: z.array(z.string().min(1)).max(WATCH_EVENTS_MAX_TABLES).optional(),
+  /** Run once per new row with retryable block lifecycle state. */
+  rowTasks: z.boolean().default(false),
+  /** Post each row task result as a reply block. */
+  reply: z.boolean().default(true),
+  /** Row task settle and edit hold share mention watcher timing. */
+  settleMs: z.number().int().nonnegative()
+    .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
+    .default(DEFAULT_WATCHER_SETTLE_MS),
+  editHoldMs: z.number().int().nonnegative().default(DEFAULT_WATCHER_EDIT_HOLD_MS),
+}).superRefine((watcher, ctx) => {
+  if (watcher.rowTasks && watcher.delivery === 'channel') {
+    ctx.addIssue({code: 'custom', path: ['delivery'], message: 'rowTasks requires delivery="spawn"; channel delivery cannot guarantee cancellation or retries'})
+  }
 })
 
 const rawWatcherSchema = z.discriminatedUnion('kind', [

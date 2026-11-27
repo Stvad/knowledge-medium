@@ -280,15 +280,15 @@ export const createBridgeGraph = (client: BridgeClient) => {
    *  bridge round-trip per backlink source, so processed mentions stay
    *  cheap to re-scan forever. Includes the last-edit timestamp for the
    *  settle and edit-hold gates. */
-  const blockViews = async (ids: string[]): Promise<Map<string, BlockView>> => {
+  const blockViews = async (ids: string[], workspaceId?: string): Promise<Map<string, BlockView>> => {
     const views = new Map<string, BlockView>()
     for (let offset = 0; offset < ids.length; offset += 500) {
       const chunk = ids.slice(offset, offset + 500)
       const placeholders = chunk.map(() => '?').join(', ')
       const rows = await sqlAll(
         `SELECT id, properties_json, coalesce(user_updated_at, updated_at) AS edited_at
-           FROM blocks WHERE deleted = 0 AND id IN (${placeholders})`,
-        chunk,
+           FROM blocks WHERE deleted = 0 AND id IN (${placeholders})${workspaceId === undefined ? '' : ' AND workspace_id = ?'}`,
+        workspaceId === undefined ? chunk : [...chunk, workspaceId],
       )
       for (const row of rows) {
         const {id, properties_json, edited_at} = row as Record<string, unknown>

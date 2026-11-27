@@ -9,9 +9,19 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { z } from 'zod'
 import { isErrnoException } from '@knowledge-medium/agent-cli/config'
 
+// Snapshots preserve prompt columns when a claim or the run's edits remove
+// the row from its SQL result. The block owns status and attempt count.
+const rowTaskState = z.object({
+  baselineIds: z.array(z.string()),
+  pending: z.array(z.looseObject({id: z.string().min(1)})),
+})
+export type RowTaskState = z.infer<typeof rowTaskState>
+
 interface StateData {
+  rowTasks: Record<string, RowTaskState>
   queryCursors: Record<string, string[]>
   /** Epoch-ms of recent run launches; pruned to the rolling window. */
   launchTimes: number[]
@@ -20,11 +30,13 @@ interface StateData {
   backlinkBaselines: Record<string, number>
 }
 
-const emptyState = (): StateData => ({queryCursors: {}, launchTimes: [], backlinkBaselines: {}})
+const emptyState = (): StateData => ({rowTasks: {}, queryCursors: {}, launchTimes: [], backlinkBaselines: {}})
 
 const normalizeState = (value: unknown): StateData => {
   const state = emptyState()
   if (!value || typeof value !== 'object') return state
+
+  if ('rowTasks' in value) state.rowTasks = z.record(z.string(), rowTaskState).parse(value.rowTasks)
 
   const cursors = (value as {queryCursors?: unknown}).queryCursors
   if (cursors && typeof cursors === 'object') {
@@ -50,6 +62,8 @@ const normalizeState = (value: unknown): StateData => {
 }
 
 export interface StateStore {
+  getRowTasks: (key: string) => Promise<RowTaskState | null>
+  setRowTasks: (key: string, snapshot: RowTaskState) => Promise<void>
   /** null = never seen (first run baselines without firing). */
   getCursor: (watcherName: string) => Promise<string[] | null>
   setCursor: (watcherName: string, ids: string[]) => Promise<void>
@@ -83,15 +97,15 @@ export const createStateStore = (filePath: string): StateStore => {
   // strictly sequential without a lock library.
   let writeChain: Promise<void> = Promise.resolve()
 
-  const persist = (state: StateData): Promise<void> => {
-    const snapshot = `${JSON.stringify(state, null, 2)}\n`
+  const persist = (update: (state: StateData) => StateData): Promise<void> => {
     const result = writeChain.then(async () => {
+      const next = update(await load())
+      const snapshot = `${JSON.stringify(next, null, 2)}\n`
       await fs.mkdir(path.dirname(filePath), {recursive: true})
-      // tmp + rename: a crash mid-write must not leave truncated JSON
-      // (which load() would silently treat as "never seen anything").
       const tmpPath = `${filePath}.tmp`
-      await fs.writeFile(tmpPath, snapshot)
+      await fs.writeFile(tmpPath, snapshot, {mode: 0o600})
       await fs.rename(tmpPath, filePath)
+      cache = next
     })
     // The chain swallows failures so one bad write doesn't wedge every
     // later persist; the caller still sees the real outcome via `result`.
@@ -100,23 +114,13 @@ export const createStateStore = (filePath: string): StateStore => {
   }
 
   return {
+    getRowTasks: async key => (await load()).rowTasks[key] ?? null,
+    setRowTasks: (key, snapshot) => persist(state => ({...state, rowTasks: {...state.rowTasks, [key]: snapshot}})),
     getCursor: async name => (await load()).queryCursors[name] ?? null,
-    setCursor: async (name, ids) => {
-      const state = await load()
-      state.queryCursors[name] = ids
-      await persist(state)
-    },
+    setCursor: (name, ids) => persist(state => ({...state, queryCursors: {...state.queryCursors, [name]: ids}})),
     getBaseline: async name => (await load()).backlinkBaselines[name] ?? null,
-    setBaseline: async (name, ms) => {
-      const state = await load()
-      state.backlinkBaselines[name] = ms
-      await persist(state)
-    },
+    setBaseline: (name, ms) => persist(state => ({...state, backlinkBaselines: {...state.backlinkBaselines, [name]: ms}})),
     getLaunchTimes: async () => [...(await load()).launchTimes],
-    setLaunchTimes: async times => {
-      const state = await load()
-      state.launchTimes = times
-      await persist(state)
-    },
+    setLaunchTimes: times => persist(state => ({...state, launchTimes: times})),
   }
 }

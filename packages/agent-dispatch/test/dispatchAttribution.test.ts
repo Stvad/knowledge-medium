@@ -57,6 +57,8 @@ beforeEach(async () => {
 })
 
 const memoryState = (): StateStore => ({
+  getRowTasks: async () => null,
+  setRowTasks: async () => {},
   getCursor: async () => null,
   setCursor: async () => {},
   getBaseline: async () => 0,

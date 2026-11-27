@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt, type ThreadPromptContext} from '../src/prompt'
+import {DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt, renderRowTaskPrompt, type ThreadPromptContext} from '../src/prompt'
 
 const context = {
   content: '[[claude]] summarize this',
@@ -174,5 +174,21 @@ describe('renderQueryPrompt', () => {
     })
     expect(prompt).toContain('inbox-growth')
     expect(prompt).toContain('"content": "new item"')
+  })
+})
+
+describe('renderRowTaskPrompt', () => {
+  it('renders row JSON and all block context placeholders', () => {
+    const prompt = renderRowTaskPrompt('watcher={{watcherName}} id={{blockId}} row={{row}} subtree={{subtree}}', {
+      row: {id: 'b-1', title: 'A row'}, blockId: 'b-1', subtree: '- [b-1] A row', watcherName: 'row-watch',
+    })
+    expect(prompt).toContain('watcher=row-watch id=b-1')
+    expect(prompt).toContain('"title": "A row"')
+    expect(prompt).toContain('subtree=- [b-1] A row')
+  })
+
+  it('provides the row-specific default prompt', () => {
+    expect(renderRowTaskPrompt(undefined, {row: {id: 'b-1'}, blockId: 'b-1', subtree: '- [b-1] item', watcherName: 'watch'}))
+      .toContain('A watched query over the user\'s Knowledge Medium notes returned a new row.')
   })
 })

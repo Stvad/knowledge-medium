@@ -105,16 +105,16 @@ export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = 
     const age = typeof updatedAt === 'number' ? nowMs - updatedAt : Number.POSITIVE_INFINITY
     if (age < STALE_RUNNING_MS) return {pending: false, reason: 'already-processed'}
     if (taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
-    return {pending: true, reason: 'stale-running'}
+  } else if (status && status !== 'queued') {
+    return {pending: false, reason: 'already-processed'}
   }
   // `queued` is seen-but-unclaimed: it goes through every gate below.
-  if (status && status !== 'queued') return {pending: false, reason: 'already-processed'}
 
   // Baseline gate only for UNCLAIMED blocks (a claim implies the block
   // already passed it). Unknown edit time counts as old: every real row
   // carries updated_at, and firing on "can't tell" is the direction
   // that claims — and bills — a page's entire history.
-  if (typeof baselineMs === 'number'
+  if (status !== 'running' && typeof baselineMs === 'number'
     && !(typeof source.editedAtMs === 'number' && source.editedAtMs >= baselineMs)) {
     return {pending: false, reason: 'pre-baseline'}
   }
@@ -126,7 +126,7 @@ export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = 
   }
   if (editedAgoMs < settleMs) return {pending: false, reason: 'still-typing'}
 
-  return {pending: true, reason: 'pending'}
+  return {pending: true, reason: status === 'running' ? 'stale-running' : 'pending'}
 }
 
 /** Reference fields through which the app credits a block's contributors.
