@@ -21,8 +21,9 @@ export interface RunJsonlProcessOptions {
   timeoutMs: number
   /** Called with decoded stdout text as it arrives (StringDecoder-fed,
    *  so a multibyte char split across chunks never decodes as U+FFFD
-   *  garbage). Feed this straight into the caller's line parser. */
-  onStdoutText: (text: string) => void
+   *  garbage). Returning false immediately kills a child that violated its
+   *  output protocol. */
+  onStdoutText: (text: string) => boolean | void
   /** Abort the run on demand (the UI Stop action, via the engine): kills
    *  the child the same way the timeout does. Independent of `timedOut` —
    *  the caller reads `signal.aborted` to tell a cancel from a timeout. */
@@ -56,7 +57,9 @@ export const runJsonlProcess = async (options: RunJsonlProcessOptions): Promise<
   const stdoutDecoder = new StringDecoder('utf8')
   const stderrDecoder = new StringDecoder('utf8')
   let stderr = ''
-  child.stdout?.on('data', (chunk: Buffer) => options.onStdoutText(stdoutDecoder.write(chunk)))
+  child.stdout?.on('data', (chunk: Buffer) => {
+    if (options.onStdoutText(stdoutDecoder.write(chunk)) === false) child.kill('SIGKILL')
+  })
   child.stderr?.on('data', (chunk: Buffer) => { stderr += stderrDecoder.write(chunk) })
 
   // SIGTERM, then SIGKILL after a grace period if it's still alive —

@@ -37,8 +37,8 @@ export interface EngineDeps {
   /** EXPERIMENTAL: push an event into the ambient channel session
    *  (delivery: 'channel' watchers). Throws if unreachable. */
   deliverToChannel: (event: ChannelEvent) => Promise<void>
-  /** Generated --mcp-config path; null disables graph tools for runs. */
-  mcpConfigPath: string | null
+  /** Generated --mcp-config path and the server names allowed in Claude events. Null disables graph tools. */
+  mcpConfig: NonNullable<AgentRunOptions['mcpConfig']> | null
   log: (message: string) => void
   now?: () => number
   /** Sleep between terminal reply-reconcile retries — injected so tests run
@@ -121,7 +121,7 @@ const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null
 }
 
 export const createEngine = (deps: EngineDeps) => {
-  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
+  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfig, log} = deps
   const now = deps.now ?? Date.now
   const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
@@ -221,12 +221,12 @@ export const createEngine = (deps: EngineDeps) => {
       cwd: runner.cwd ?? os.homedir(),
       allowedTools: runner.executor === 'claude'
         ? [...new Set([
-          ...(mcpConfigPath ? DISPATCH_MCP_ALLOWED_TOOLS : []),
+          ...(mcpConfig ? DISPATCH_MCP_ALLOWED_TOOLS : []),
           ...config.defaultAllowedTools,
           ...runner.allowedTools,
         ])]
         : [],
-      mcpConfigPath: mcpConfigPath ?? undefined,
+      mcpConfig: mcpConfig ?? undefined,
       model: runner.model,
       effort: runner.executor === 'claude' ? runner.effort : undefined,
       resumeSessionId,

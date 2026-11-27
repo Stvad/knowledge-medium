@@ -10,12 +10,12 @@
  *    (runner.ts / codexRunner.ts), and reported here by NAME so the log
  *    confirms the scrub is doing something. (Never the value — these are
  *    secrets.)
- *  - A key stored via the CLI's own login (`claude` / `codex`
- *    `--with-api-key`, or an `apiKeyHelper`): lives in auth.json, OUTSIDE
- *    the env, so scrubbing can't reach it. We can't safely mutate the
- *    login, so we don't detect the value — we just warn that the vector
- *    exists and to verify the login. Turning a silent gap into a visible
- *    one is the honest version of the guard.
+ *  - Stored CLI credentials (including `codex login --with-api-key` in
+ *    auth.json) and Claude project/local or managed settings, including
+ *    an `apiKeyHelper`, live outside the child environment scrub. At the
+ *    default cwd of $HOME, Claude reads ~/.claude/settings.json as project
+ *    settings. Report these sources so operators can verify their login
+ *    and settings.
  */
 import { BILLING_ENV_DENYLIST } from './runner.js'
 import { CODEX_BILLING_ENV_DENYLIST } from './codexRunner.js'
@@ -58,7 +58,7 @@ export const reportBillingPosture = (config: DaemonConfig, env: NodeJS.ProcessEn
   } else {
     lines.push('billing=subscription — spawned runs bill your CLI plan login (OAuth)')
     if (present.length > 0) lines.push(`  scrubbing from run env: ${present.join(', ')}`)
-    lines.push('  note: a key stored via `claude`/`codex` login (auth.json / apiKeyHelper) is NOT env-scrubbable — verify your login if unsure')
+    lines.push('  note: stored Claude/Codex credentials and Claude settings (including apiKeyHelper) can still select usage-based billing — verify your login and settings if unsure')
   }
   return {mode: config.billing, present, lines}
 }

@@ -169,7 +169,7 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
     state: memoryState(),
     runTask: vi.fn(async () => okRun()),
     deliverToChannel: vi.fn(async () => {}),
-    mcpConfigPath: '/tmp/mcp.json',
+    mcpConfig: {path: 'dispatch.json', serverNames: ['km']},
     log: () => {},
     now: () => NOW,
     delay: async () => {}, // no-op so deliverReply retries don't slow tests
