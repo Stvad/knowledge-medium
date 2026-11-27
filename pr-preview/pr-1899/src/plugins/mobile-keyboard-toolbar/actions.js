@@ -1,1 +1,1 @@
-export{DO as INSERT_BLOCK_REF_TRIGGER_ACTION_ID,OO as INSERT_PAGE_REF_TRIGGER_ACTION_ID,kO as mobileKeyboardToolbarActions}from"../../../chunks/app-7C27XE4I.js";
+export{DO as INSERT_BLOCK_REF_TRIGGER_ACTION_ID,OO as INSERT_PAGE_REF_TRIGGER_ACTION_ID,kO as mobileKeyboardToolbarActions}from"../../../chunks/app-Cp5fxwij.js";

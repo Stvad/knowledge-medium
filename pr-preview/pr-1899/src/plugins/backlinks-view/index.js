@@ -1,1 +1,1 @@
-export{Ex as backlinksViewPlugin}from"../../../chunks/app-7C27XE4I.js";
+export{Ex as backlinksViewPlugin}from"../../../chunks/app-Cp5fxwij.js";

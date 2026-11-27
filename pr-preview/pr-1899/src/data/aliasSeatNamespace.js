@@ -1,1 +1,1 @@
-export{Dft as aliasSeatNamespacesInTx,Oft as resolveAliasSeatNamespaces}from"../../chunks/app-7C27XE4I.js";
+export{Dft as aliasSeatNamespacesInTx,Oft as resolveAliasSeatNamespaces}from"../../chunks/app-Cp5fxwij.js";
