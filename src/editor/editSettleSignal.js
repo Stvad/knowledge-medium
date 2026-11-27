@@ -1,1 +1,1 @@
-export{wH as blockEditSettled,TH as notifyBlockEditSettled}from"../../chunks/app-D8pVVXMQ.js";
+export{wH as blockEditSettled,TH as notifyBlockEditSettled}from"../../chunks/app-BV3TjMCP.js";
