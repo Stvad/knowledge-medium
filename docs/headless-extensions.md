@@ -1,6 +1,6 @@
 # Installed extensions in the headless host
 
-> **Status:** Proposed. Nothing is implemented. Four decisions are settled by the owner; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
+> **Status:** Approved by the owner (2026-11-27); not yet implemented. Four decisions are settled by the owner; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
 > Claims are tagged as in [headless-client.md](headless-client.md). **[read]** means seen in the code. **[measured]** means run or queried, and the entry says where. **[reasoned]** means inferred; the slice that would verify it is named.
 
 ## 1. Goal
