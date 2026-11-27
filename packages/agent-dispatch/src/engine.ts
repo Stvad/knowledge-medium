@@ -286,8 +286,8 @@ export const createEngine = (deps: EngineDeps) => {
       return {pending: false, reason: 'ineligible-row'} as const
     }
     if (source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
-      if (task.watcher.delivery === 'spawn') return {pending: false, reason: 'cancelled'} as const
-      if (status === 'running') return {pending: false, reason: 'clear-cancel'} as const
+      if (status === 'queued' || task.watcher.delivery === 'spawn') return {pending: false, reason: 'cancelled'} as const
+      return {pending: false, reason: 'clear-cancel'} as const
     }
     return decidePending({
       source, nowMs: now(), editingActiveAtMs,

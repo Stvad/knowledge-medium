@@ -2206,17 +2206,24 @@ describe('channel delivery (experimental)', () => {
     expect(deliverToChannel).not.toHaveBeenCalled()
   })
 
-  it('delivers a queued channel mention with a Stop before there is a running session to clear it for', async () => {
-    const {graph, cancelClears} = fakeGraph({
+  it('parks a stopped queued channel mention without delivering it', async () => {
+    const {graph, blocks, reconciles, cancelClears} = fakeGraph({
       backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {properties: {[PROPS.status]: 'queued', [PROPS.cancel]: NOW}}},
+      blocks: {'b-1': {content: '[[claude]] follow up', properties: {
+        [PROPS.status]: 'queued', [PROPS.watcher]: 'mentions', [PROPS.executor]: 'claude',
+        [PROPS.activity]: THREAD_BUSY_ACTIVITY, [PROPS.cancel]: NOW,
+      }}},
     })
     const deliverToChannel = vi.fn(async () => {})
     const engine = engineWith({graph, deliverToChannel, config: channelConfig()})
     await engine.tick()
     await engine.drain()
-    expect(deliverToChannel).toHaveBeenCalledOnce()
+    expect(deliverToChannel).not.toHaveBeenCalled()
     expect(cancelClears).toEqual([])
+    expect(blocks.get('b-1')?.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.activity]: '', [PROPS.cancel]: '',
+    })
+    expect(reconciles.at(-1)?.markdown).toContain('cancelled')
   })
 
   it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {
