@@ -87,8 +87,7 @@ export function literalModuleSpecifier(node: Node): string | undefined {
 
 export function isUnsupportedImportMeta(node: Node, parent?: Node): boolean {
   if (node.type !== 'MetaProperty' || node.meta.name !== 'import') return false
-  if ((parent?.type === 'MemberExpression' || parent?.type === 'OptionalMemberExpression')
-    && parent.object === node) {
+  if (parent?.type === 'MemberExpression' || parent?.type === 'OptionalMemberExpression') {
     return parent.computed
       ? literalModuleSpecifier(parent.property) !== 'url'
       : parent.property.type !== 'Identifier' || parent.property.name !== 'url'
