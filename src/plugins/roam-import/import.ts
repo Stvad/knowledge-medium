@@ -297,8 +297,11 @@ export const importRoam = async (
   // on first read. ref vs refList kinds get different write shapes
   // (single id vs array) — see normalizeRefPropertyValues.
   const refPropertyKinds = new Map<string, 'ref' | 'refList'>()
-  for (const r of reconciliation.toRegister) {
-    if (r.presetId === 'refList') refPropertyKinds.set(r.name, 'refList')
+  // Only a dry run needs the prediction. A real registration can adopt a different stored codec.
+  if (options.dryRun) {
+    for (const r of reconciliation.toRegister) {
+      if (r.presetId === 'refList') refPropertyKinds.set(r.name, 'refList')
+    }
   }
   // Also normalize for already-registered ref/refList schemas — a
   // kernel/plugin schema named `assignee` with codec.type === 'ref'

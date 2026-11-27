@@ -257,6 +257,25 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(page?.updated_at).toBeGreaterThan(1_600_000_000_000)
   })
 
+  it('keeps reference-looking text when registration adopts a synced string definition', async () => {
+    const name = 'roam:label'
+    await env.repo.whenPropertyDefinitionsReady(WORKSPACE)
+    const id = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!})
+    await env.h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({types: ['property-schema'], 'property-schema:name': name, 'property-schema:preset': 'string'}), id],
+    ))
+    expect(env.repo.propertySchemas.has(name)).toBe(false)
+    await importRoam([
+      {title: 'Target', uid: 'labelTarget'},
+      {title: 'Owner', uid: 'labelOwner', children: [{string: 'label:: [[Target]]', uid: 'labelProp'}]},
+    ], env.repo, {workspaceId: WORKSPACE, currentUserId: USER_ID})
+
+    expect(env.repo.userSchemas.getSchemaBlockId(name)).toBe(id)
+    const page = await readBlock(roamBlockId(WORKSPACE, 'labelOwner'))
+    expect(JSON.parse(page!.properties_json)[name]).toBe('[[Target]]')
+  })
+
   it('reports a value a pre-existing definition cannot hold, and keeps it', async () => {
     // Promotion invents keys from block text, so a key can meet a definition
     // that predates the import and is narrower than the text. Removing the

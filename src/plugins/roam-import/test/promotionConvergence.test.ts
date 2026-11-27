@@ -53,11 +53,7 @@ type Replica = Awaited<ReturnType<typeof createReplica>>
 const upload = async ({db}: Replica, server: FakeSyncServer): Promise<void> => {
   const rejections: unknown[] = []
   await __runUploadLoopForTest(db, {
-    applyOperations: (database, ops) => __applyCompactedBlockOperationsForTest(database, ops, {
-      createRows: rows => server.createRows(rows),
-      applyPatches: patches => server.applyPatches(patches),
-      deleteRow: id => server.deleteRow(id),
-    }),
+    applyOperations: (database, ops) => __applyCompactedBlockOperationsForTest(database, ops, server),
     recordRejection: async (_db, _tx, error) => { rejections.push(error) },
   }, new Map())
   expect(rejections).toEqual([])

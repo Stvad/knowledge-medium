@@ -10,7 +10,6 @@
  *  and the distinct public surface — `addSchema` / `appendUserSchema`
  *  and the `getSchemaBlockId` / `getSchemaForBlockId` lookups. */
 
-import {v5 as uuidv5} from 'uuid'
 import {
   ChangeScope,
   normalizePresetDefault,
@@ -21,7 +20,7 @@ import {
   type Tx,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import {promotedPropertyDefinitionId} from '@/data/derivedIds'
+import {PROMOTION_NAMESPACE, promotedPropertyDefinitionId} from '@/data/derivedIds'
 import {derivedIdNamespaceInTx, resolveDerivedIdNamespace} from '@/data/workspaceIdNamespace'
 import type { DefinitionBlockProjector } from '@/data/projectorRuntime'
 import {
@@ -29,10 +28,12 @@ import {
   type PropertyDefinitionMetadata,
 } from '@/data/propertyDefinitionMetadata'
 import {
+  effectivePropertyDefinitionName,
   isParsedPropertyDefinition,
   projectedPropertyDefinitionFieldId,
   type ProjectedPropertyDefinition,
 } from '@/data/propertyDefinitionRegistry'
+import {requirePropertyRegistryFor} from '@/data/internals/propertyKeyScan'
 import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
 import {peekRowProperty} from '@/data/rowProperty'
 import {
@@ -294,18 +295,20 @@ export interface AddSchemaArgs {
   config?: unknown
 }
 
-const PROMOTION_NAMESPACE = {
-  label: 'km/property-promotion-ns/v1',
-  plaintextNamespace: uuidv5('urn:knowledge-medium:property-promotion:v1', uuidv5.URL),
-}
-
 type OnSchemaCreate = (tx: Tx, fieldId: string) => Promise<void>
 
-const promotionSlot = async (tx: Tx, workspaceId: string, name: string) => {
+/** Promotion after a rename or deletion requires writers to have synced that history before choosing a slot. */
+const promotionSlot = async (repo: Repo, tx: Tx, workspaceId: string, name: string) => {
   // A live same-name definition at the derived id is reused with its stored codec, including before projection.
   // A legacy random-id claimant owns the name on exactly the same terms and keeps all of its field rows.
   const holders = (await tx.livePropertyDefinitionNames(workspaceId, [name])).get(name)
-  if (holders) return {existing: await tx.liveRowsForIds(workspaceId, holders)} as const
+  const registry = requirePropertyRegistryFor(repo, workspaceId)
+  const stored = await tx.liveRowsForIds(workspaceId, holders ?? [])
+  // A seed answers only to its declared name. An unreadable claimant still reserves its stored name.
+  const existing = stored.map(row => projectDefinition(row, repo)).filter(definition =>
+    !isParsedPropertyDefinition(definition) ||
+    effectivePropertyDefinitionName(definition.metadata, registry.seedsByKey) === name)
+  if (existing.length) return {existing} as const
 
   const namespace = await derivedIdNamespaceInTx(tx, tx.meta.user.id, workspaceId, PROMOTION_NAMESPACE)
   for (let slot = 0; ; slot++) {
@@ -498,7 +501,7 @@ export class UserSchemasService {
         // return. A queued write must not commit against a projector generation
         // or seed/name registry that changed after the optimistic preflight.
         assertGeneration('creation')
-        const slot = creation === 'promotion' ? await promotionSlot(tx, workspaceId, name) : undefined
+        const slot = creation === 'promotion' ? await promotionSlot(this.repo, tx, workspaceId, name) : undefined
         if (slot?.existing) return {existing: slot.existing}
         assertNameAvailable()
         const id = await tx.run(createChildMutator, {
@@ -518,11 +521,18 @@ export class UserSchemasService {
         assertGeneration('creation')
         assertNameAvailable()
         return {id}
-      }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
+      }, {
+        scope: ChangeScope.BlockDefault,
+        description: `addSchema ${name}`,
+        // Another writer can already have fields bound to this shared definition when the importer undoes its content.
+        skipUndo: creation === 'promotion',
+      })
 
       assertGeneration('registration')
       if (result.existing) {
-        for (const row of result.existing) handle.upsert(projectDefinition(row, this.repo), row.id, workspaceId)
+        for (const definition of result.existing) {
+          handle.upsert(definition, projectedPropertyDefinitionFieldId(definition), workspaceId)
+        }
       } else {
         this.appendUserSchema(newSchema, result.id, workspaceId)
       }

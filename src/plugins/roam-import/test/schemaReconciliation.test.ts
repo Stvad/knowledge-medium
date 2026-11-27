@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {v5 as uuidv5} from 'uuid'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {propertyChangeScopeProp, seedKeyProp, showPropertiesProp} from '@/data/properties'
 import {seedWorkspaceRow, storeWorkspaceKey, stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {requireWorkspaceKeys} from '@/sync/keys/openWorkspaceKeys'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
@@ -294,6 +296,45 @@ describe('automatic promotion identity', () => {
     expect(await register()).toBe(slotId(1))
     expect(await savedRow(occupied)).toEqual(before)
     expect(env.repo.propertySchemas.get(name)?.codec.type).toBe('string')
+  })
+
+  it('promotes a free name that a declared seed stores but does not claim', async () => {
+    const seedId = propertyDefinitionBlockId(WS, showPropertiesProp.seedKey)
+    await placeDefinition(seedId, name)
+    await env.repo.db.execute(
+      'UPDATE blocks SET properties_json = json_set(properties_json, ?, ?) WHERE id = ?',
+      ['$.' + JSON.stringify(seedKeyProp.name), showPropertiesProp.seedKey, seedId],
+    )
+    const before = await savedRow(seedId)
+    expect(await register()).toBe(slotId(0))
+    expect(await savedRow(seedId)).toEqual(before)
+    expect(env.repo.propertySchemaResolverFor(WS).resolve(showPropertiesProp.name)).toMatchObject({
+      schema: {fieldId: seedId},
+    })
+  })
+
+  it('reserves an unreadable definition and reports it without minting a rival', async () => {
+    const id = 'unreadable-definition'
+    await placeDefinition(id, name)
+    await env.h.db.execute(
+      'UPDATE blocks SET properties_json = json_set(properties_json, ?, ?) WHERE id = ?',
+      ['$.' + JSON.stringify(propertyChangeScopeProp.name), 'invalid', id],
+    )
+    const diagnostics: string[] = []
+    await applySchemaReconciliation([{name, presetId: 'string'}], env.repo, diagnostics)
+    expect(diagnostics.join(' ')).toContain('does not resolve after registration')
+    expect(env.repo.propertyDefinitions?.unparseableDefinitionIds.has(id)).toBe(true)
+    expect(await env.h.db.getAll('SELECT id FROM blocks WHERE parent_id = ?', [env.repo.propertiesPageId]))
+      .toEqual([{id}])
+  })
+
+  it('keeps the shared definition when a writer undoes its import', async () => {
+    const id = await register()
+    const owner = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!, content: 'import'})
+    expect(await env.repo.undo()).toBe(true)
+    expect(await env.repo.db.get('SELECT deleted FROM blocks WHERE id = ?', [owner])).toEqual({deleted: 1})
+    expect(await env.repo.undo()).toBe(false)
+    expect(await env.repo.db.get('SELECT deleted FROM blocks WHERE id = ?', [id])).toEqual({deleted: 0})
   })
 
   it('derives the sealed slot from the workspace key and trimmed, case-sensitive registry name', async () => {
