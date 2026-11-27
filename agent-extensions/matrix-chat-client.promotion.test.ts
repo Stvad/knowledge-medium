@@ -63,14 +63,15 @@ import matrixContributions, {
   homeserverProp,
   matrixChatPrefsType,
   matrixIngestEffect,
+  nextBatchKey,
+  tokenKey,
   roomIdProp,
 } from './matrix-chat-client.tsx'
 
 const WS = 'ws-matrix'
 const HOMESERVER = 'https://matrix.test'
 const ROOM = '!room:matrix.test'
-const TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
-const NEXT_BATCH_KEY = `knowledge-medium:matrix-messages:state:v1:${HOMESERVER}:${ROOM}`
+const destination = {workspaceId: WS, baseUrl: HOMESERVER, roomId: ROOM}
 
 /** The app shell owns mounts and effects; a repo-level runtime takes neither.
  *  `matrixIngestEffect.start({repo})` is then called by hand — exactly what
@@ -114,9 +115,9 @@ const setup = async (): Promise<Repo> => {
  *  (that call only establishes a position), so without one no message is ever
  *  read. */
 const configureIngest = async (repo: Repo): Promise<void> => {
-  window.localStorage.setItem(TOKEN_KEY, 'secret-token')
+  window.localStorage.setItem(tokenKey(destination), 'secret-token')
   window.localStorage.setItem(
-    NEXT_BATCH_KEY,
+    nextBatchKey(destination),
     JSON.stringify({nextBatch: 'cursor-0', savedAt: 1}),
   )
   const block = await getPluginPrefsBlock(repo, WS, repo.user, matrixChatPrefsType)
@@ -157,7 +158,7 @@ const cellBag = async (id: string): Promise<Record<string, unknown>> => {
 }
 
 const savedCursor = (): string | null => {
-  const raw = window.localStorage.getItem(NEXT_BATCH_KEY)
+  const raw = window.localStorage.getItem(nextBatchKey(destination))
   return raw ? (JSON.parse(raw) as {nextBatch: string}).nextBatch : null
 }
 
