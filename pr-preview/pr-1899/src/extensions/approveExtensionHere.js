@@ -1,0 +1,1 @@
+export{QL as approveExtensionHere}from"../../chunks/app-DG7BiGcK.js";

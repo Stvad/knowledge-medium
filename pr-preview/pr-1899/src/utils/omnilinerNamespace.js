@@ -1,0 +1,1 @@
+export{JX as omnilinerNamespace}from"../../chunks/app-DG7BiGcK.js";

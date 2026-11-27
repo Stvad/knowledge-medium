@@ -1,0 +1,1 @@
+export{hU as BlockReadText}from"../../../chunks/app-DG7BiGcK.js";

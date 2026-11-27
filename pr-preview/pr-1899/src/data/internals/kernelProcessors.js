@@ -1,0 +1,1 @@
+export{lnt as KERNEL_PROCESSORS}from"../../../chunks/app-DG7BiGcK.js";

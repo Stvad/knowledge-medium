@@ -1,0 +1,1 @@
+export{Bx as inlineBacklinksApplies}from"../../../../chunks/app-DG7BiGcK.js";

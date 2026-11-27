@@ -1,0 +1,1 @@
+export{wU as ExtensionRenderBoundary}from"../../chunks/app-DG7BiGcK.js";

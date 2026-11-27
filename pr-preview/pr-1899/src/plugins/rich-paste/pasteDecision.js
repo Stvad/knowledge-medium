@@ -1,0 +1,1 @@
+export{$C as richPasteDecisionContribution}from"../../../chunks/app-DG7BiGcK.js";

@@ -1,0 +1,1 @@
+export{wS as usePlaceSearch}from"../../../chunks/app-DG7BiGcK.js";

@@ -1,0 +1,1 @@
+export{Bz as MarkdownImage}from"../../chunks/app-DG7BiGcK.js";

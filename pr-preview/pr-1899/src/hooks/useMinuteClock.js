@@ -1,0 +1,1 @@
+export{Oj as useMinuteClock}from"../../chunks/app-DG7BiGcK.js";

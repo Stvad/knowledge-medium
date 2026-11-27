@@ -1,0 +1,1 @@
+export{ftt as kernelDataExtension}from"../../chunks/app-DG7BiGcK.js";
