@@ -1,0 +1,1 @@
+export{AH as useShortcutSurfaceActivations}from"../../chunks/app-CP5UMC6w.js";

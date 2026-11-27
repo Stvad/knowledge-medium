@@ -1,0 +1,1 @@
+export{CC as useIsReadOnly}from"../../chunks/app-CP5UMC6w.js";

@@ -1,0 +1,1 @@
+export{nn as staticAppExtensions}from"../../chunks/app-CP5UMC6w.js";

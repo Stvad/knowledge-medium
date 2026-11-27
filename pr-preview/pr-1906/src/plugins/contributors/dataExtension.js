@@ -1,0 +1,1 @@
+export{C4 as contributorsDataExtension}from"../../../chunks/app-CP5UMC6w.js";

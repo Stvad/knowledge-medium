@@ -1,0 +1,1 @@
+export{bZ as staticDataExtensions}from"../../chunks/app-CP5UMC6w.js";

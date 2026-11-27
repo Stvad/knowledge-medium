@@ -1,0 +1,1 @@
+export{pc as propertyRowsPlugin}from"../../../chunks/app-CP5UMC6w.js";

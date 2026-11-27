@@ -1,0 +1,1 @@
+export{BJ as withMoveTransition}from"../../chunks/app-CP5UMC6w.js";

@@ -1,0 +1,1 @@
+export{JN as BlockLink}from"../../../chunks/app-CP5UMC6w.js";

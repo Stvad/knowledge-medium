@@ -1,0 +1,1 @@
+export{o$ as htmlDocumentTypeSeed}from"../../../chunks/app-CP5UMC6w.js";

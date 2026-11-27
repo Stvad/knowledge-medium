@@ -1,0 +1,1 @@
+export{A6 as aliasDataExtension}from"../../../chunks/app-CP5UMC6w.js";
