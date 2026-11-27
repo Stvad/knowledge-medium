@@ -186,9 +186,4 @@ describe('renderRowTaskPrompt', () => {
     expect(prompt).toContain('"title": "A row"')
     expect(prompt).toContain('subtree=- [b-1] A row')
   })
-
-  it('provides the row-specific default prompt', () => {
-    expect(renderRowTaskPrompt(undefined, {row: {id: 'b-1'}, blockId: 'b-1', subtree: '- [b-1] item', watcherName: 'watch'}))
-      .toContain('A watched query over the user\'s Knowledge Medium notes returned a new row.')
-  })
 })

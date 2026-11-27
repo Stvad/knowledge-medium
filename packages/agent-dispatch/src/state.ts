@@ -10,7 +10,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import type { Watcher } from './config.js'
 import { isErrnoException } from '@knowledge-medium/agent-cli/config'
 
 // Snapshots preserve prompt columns when a claim or the run's edits remove
@@ -22,49 +21,13 @@ const rowTaskState = z.object({
 })
 export type RowTaskState = z.infer<typeof rowTaskState>
 
-interface StateData {
-  rowTasks: Record<string, RowTaskState>
-  queryCursors: Record<string, string[]>
-  /** Epoch-ms of recent run launches; pruned to the rolling window. */
-  launchTimes: number[]
-  /** Per-backlink-watcher first-tick timestamp: blocks edited before it
-   *  are pre-existing content and never become tasks. */
-  backlinkBaselines: Record<string, number>
-}
-
-const emptyState = (): StateData => ({rowTasks: {}, queryCursors: {}, launchTimes: [], backlinkBaselines: {}})
-
-const normalizeState = (value: unknown, requireObjectRoot: boolean): StateData => {
-  const state = emptyState()
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    if (requireObjectRoot) throw new Error('state root must be an object')
-    return state
-  }
-
-  if ('rowTasks' in value) state.rowTasks = z.record(z.string(), rowTaskState).parse(value.rowTasks)
-
-  const cursors = (value as {queryCursors?: unknown}).queryCursors
-  if (cursors && typeof cursors === 'object') {
-    for (const [name, ids] of Object.entries(cursors as Record<string, unknown>)) {
-      if (Array.isArray(ids) && ids.every(id => typeof id === 'string')) {
-        state.queryCursors[name] = ids
-      }
-    }
-  }
-
-  const launches = (value as {launchTimes?: unknown}).launchTimes
-  if (Array.isArray(launches)) {
-    state.launchTimes = launches.filter((ms): ms is number => typeof ms === 'number' && Number.isFinite(ms))
-  }
-
-  const baselines = (value as {backlinkBaselines?: unknown}).backlinkBaselines
-  if (baselines && typeof baselines === 'object') {
-    for (const [name, ms] of Object.entries(baselines as Record<string, unknown>)) {
-      if (typeof ms === 'number' && Number.isFinite(ms)) state.backlinkBaselines[name] = ms
-    }
-  }
-  return state
-}
+const stateSchema = z.strictObject({
+  rowTasks: z.record(z.string(), rowTaskState).default({}),
+  queryCursors: z.record(z.string(), z.array(z.string())).default({}),
+  launchTimes: z.array(z.number()).default([]),
+  backlinkBaselines: z.record(z.string(), z.number()).default({}),
+})
+type StateData = z.infer<typeof stateSchema>
 
 export interface StateStore {
   getRowTasks: (key: string) => Promise<RowTaskState | null>
@@ -81,8 +44,7 @@ export interface StateStore {
   setLaunchTimes: (times: number[]) => Promise<void>
 }
 
-export const createStateStore = (filePath: string, watchers: readonly Watcher[] = []): StateStore => {
-  const hasRowTasks = watchers.some(watcher => watcher.kind === 'query' && watcher.rowTasks)
+export const createStateStore = (filePath: string): StateStore => {
   let cache: StateData | null = null
 
   const load = async (): Promise<StateData> => {
@@ -92,13 +54,9 @@ export const createStateStore = (filePath: string, watchers: readonly Watcher[] 
       throw error
     })
     try {
-      cache = normalizeState(JSON.parse(contents), hasRowTasks)
+      cache = stateSchema.parse(JSON.parse(contents))
     } catch (error) {
-      if (hasRowTasks) {
-        throw new Error(`state file at ${filePath} contains invalid state. Restore a valid copy to resume.`, {cause: error})
-      }
-      if (error instanceof SyntaxError) cache = emptyState()
-      else throw error
+      throw new Error(`state file at ${filePath} contains invalid state. See the README for recovery.`, {cause: error})
     }
     return cache
   }
@@ -114,6 +72,7 @@ export const createStateStore = (filePath: string, watchers: readonly Watcher[] 
       const next = update(await load())
       const snapshot = `${JSON.stringify(next, null, 2)}\n`
       await fs.mkdir(path.dirname(filePath), {recursive: true})
+      // Rename the complete snapshot atomically so a crash cannot truncate the previous state.
       const tmpPath = `${filePath}.tmp`
       await fs.writeFile(tmpPath, snapshot, {mode: 0o600})
       await fs.rename(tmpPath, filePath)

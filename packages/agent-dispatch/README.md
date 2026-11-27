@@ -45,7 +45,7 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 Publish `@knowledge-medium/agent-cli` 0.14.5 before publishing `@knowledge-medium/agent-dispatch` 0.9.11. Row tasks need the updated CLI for workspace-scoped reads and block creation timestamps. Install both releases and restart the dispatch daemon. Reload the app for exact reads of imported block IDs that look like references. If dispatch pairs with a headless host, update that host's checkout to a revision containing the bridge changes, refresh its dependencies and builds with `node scripts/ensure-deps.mjs`, and restart the headless host. Enabling `rowTasks` takes a fresh baseline even if the watcher already has a batch cursor.
 
-Backlink watchers now wait for the edit hold and settle window before re-queuing a stale `running` mention. A task claimed under a watcher's former name stays with that name after a rename, so the renamed watcher cannot re-queue or park it. A claim write failure refunds its launch allowance and leaves the task eligible to retry on the next tick.
+Backlink watchers now wait for the edit hold and settle window before re-queuing a stale `running` mention. A task claimed under a watcher's former name stays with that name after a rename, so the renamed watcher cannot re-queue or park it. A claim write failure refunds its launch allowance and leaves the task eligible to retry on the next tick. Every watcher configuration now stops on corrupt state and preserves the file for recovery, including a backlinks-only daemon's baselines and launch history.
 
 ## Upgrade to 0.9.10
 

@@ -14,7 +14,7 @@ import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunR
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { QueryRow } from './queryDiff.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, isMention, isTerminalTask, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt, renderRowTaskPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
@@ -23,8 +23,8 @@ import { MEMORY_DIFF_LIMIT } from './graph.js'
 import { KM_MCP_ALLOWED_TOOLS_WITHOUT_LOCAL_FILES as DISPATCH_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
 type BlockTask =
-  | {id: string, watcher: BacklinksWatcher, deepLink: string, baselineMs: number}
-  | {id: string, watcher: QueryWatcher, row: QueryRow, createdSinceMs: number}
+  | {kind: 'mention', id: string, watcher: BacklinksWatcher, deepLink: string, baselineMs: number}
+  | {kind: 'row', id: string, watcher: QueryWatcher, row: QueryRow, baselineMs: number}
 
 // A renamed watcher leaves claims under its former name for explicit recovery.
 const belongsToWatcher = (block: BlockView, watcher: Watcher) => {
@@ -39,7 +39,7 @@ const eligibleRowTask = (block: BlockView, createdSinceMs: number): boolean => {
   return claimed || (block.createdAt ?? -Infinity) >= createdSinceMs
 }
 
-const postsReply = (watcher: Watcher) => watcher.kind === 'backlinks' || watcher.reply
+const postsReply = (task: BlockTask) => task.kind === 'mention' || task.watcher.reply
 
 export interface ChannelEvent {
   content: string
@@ -268,23 +268,24 @@ export const createEngine = (deps: EngineDeps) => {
     const {watcher, id} = task
     const block = await graph.getBlock(id)
     if (!block || !belongsToWatcher(block, watcher)) return null
-    if (watcher.kind === 'query' && (block.id !== id || block.workspaceId !== config.workspaceId)) {
+    // Defence in depth: an older app can resolve a literal row id as a reference despite exactIds.
+    if (task.kind === 'row' && (block.id !== id || block.workspaceId !== config.workspaceId)) {
       log(`[${watcher.name}] skipped ${id}: block no longer matches the row in the configured workspace`)
       return null
     }
-    if ('row' in task && !eligibleRowTask(block, task.createdSinceMs)) return null
+    if (task.kind === 'row' && !eligibleRowTask(block, task.baselineMs)) return null
     return block
   }
 
   const pendingDecision = (task: BlockTask, source: BlockView, editingActiveAtMs?: number) => {
     const status = source.properties?.[PROPS.status]
-    if ('row' in task && source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
+    if (task.kind === 'row' && source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
       return {pending: false, reason: 'cancelled'} as const
     }
     return decidePending({
       source, nowMs: now(), editingActiveAtMs,
       settleMs: task.watcher.settleMs, editHoldMs: task.watcher.editHoldMs,
-      baselineMs: 'baselineMs' in task ? task.baselineMs : undefined,
+      baselineMs: task.kind === 'mention' ? task.baselineMs : undefined,
     })
   }
 
@@ -297,7 +298,7 @@ export const createEngine = (deps: EngineDeps) => {
     const reason = expected === 'cancelled' ? 'cancelled'
       : `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
     await graph.setTaskProps(sourceId, {status: 'error', error: reason, cancel: null, activity: null, nowMs: now()})
-    if (postsReply(watcher)) await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`, {
+    if (postsReply(task)) await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`, {
       replyKey: `park:${sourceId}`, shape: 'block', final: true,
     }).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
@@ -335,7 +336,7 @@ export const createEngine = (deps: EngineDeps) => {
     const sourceId = task.id
     const subtreeRows = await graph.getSubtree(sourceId)
     const subtree = renderSubtreeOutline(subtreeRows as SubtreeOutlineRow[], {includeProperties: true})
-    if ('row' in task) {
+    if (task.kind === 'row') {
       const prompt = renderRowTaskPrompt(task.watcher.prompt, {
         row: task.row, subtree, blockId: sourceId, watcherName: task.watcher.name,
       })
@@ -383,12 +384,12 @@ export const createEngine = (deps: EngineDeps) => {
     if (!block) return null
     const decision = pendingDecision(task, block, editingActiveAtMs)
     if (!decision.pending) return null
-    return {block, decision, ancestorBlocks: 'row' in task ? [] : await graph.ancestors(sourceId)}
+    return {block, decision, ancestorBlocks: task.kind === 'row' ? [] : await graph.ancestors(sourceId)}
   }
 
   const processBlockTask = async (task: BlockTask, launchStamp: number) => {
     const {watcher, id: sourceId} = task
-    const streamReply = watcher.kind === 'backlinks' && watcher.streamReply
+    const streamReply = task.kind === 'mention' && task.watcher.streamReply
     const {runner} = watcher
     // Pre-claim exits spawned nothing, so each one, a failed read included,
     // gives the launch slot back.
@@ -402,7 +403,7 @@ export const createEngine = (deps: EngineDeps) => {
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
-    const session = watcher.kind === 'backlinks' && watcher.resume
+    const session = task.kind === 'mention' && task.watcher.resume
       ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
       : null
     const sessionKey = session ? `session:${session}` : null
@@ -439,7 +440,7 @@ export const createEngine = (deps: EngineDeps) => {
     let terminalReplyDelivered = false
     const attempt = taskAttempts(block) + 1
     const replyKey = `reply:${sourceId}:${attempt}`
-    const replyShape = watcher.kind === 'query' || watcher.splitReply ? 'outline' : 'block'
+    const replyShape = task.kind === 'row' || task.watcher.splitReply ? 'outline' : 'block'
     // Abort handle for THIS run — a cancel request (agent:cancel, detected
     // in the tick) aborts it, killing the child. `signal.aborted` after the
     // run tells a user cancel apart from a timeout/crash.
@@ -457,7 +458,7 @@ export const createEngine = (deps: EngineDeps) => {
       markdown: string,
       {final = false, shape = replyShape}: {final?: boolean, shape?: 'outline' | 'block'} = {},
     ): Promise<void> => {
-      if (postsReply(watcher)) await replies.reconcileReplyTree(sourceId, markdown, {replyKey, shape, final})
+      if (postsReply(task)) await replies.reconcileReplyTree(sourceId, markdown, {replyKey, shape, final})
     }
     const writeWithRetry = async (label: string, write: () => Promise<void>): Promise<void> => {
       for (let attempt = 0; ; attempt += 1) {
@@ -474,14 +475,13 @@ export const createEngine = (deps: EngineDeps) => {
 
     let claimed = false
     let runSucceeded = false
-    const failureProps = () => !runSucceeded && 'row' in task && attempt < MAX_ATTEMPTS && !abortController.signal.aborted
+    const failureProps = () => !runSucceeded && task.kind === 'row' && attempt < MAX_ATTEMPTS && !abortController.signal.aborted
       ? {status: 'queued' as const, attempts: attempt} : {status: 'error' as const, attempts: attempt, cancel: null}
     try {
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, nowMs: claimStamp,
-        ...('row' in task ? {error: null} : {}),
+        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, error: null, nowMs: claimStamp,
       })
 
       claimed = true
@@ -785,7 +785,7 @@ export const createEngine = (deps: EngineDeps) => {
     }
 
     const views = await graph.blockViews(sources.map(source => source.id))
-    await scheduleBlockTasks(sources.map(({id, deepLink}) => ({id, deepLink, baselineMs, watcher})), views)
+    await scheduleBlockTasks(sources.map(({id, deepLink}) => ({kind: 'mention', id, deepLink, baselineMs, watcher})), views)
   }
 
   const queryDiff = (watcher: QueryWatcher, rows: unknown[], prev: string[] | null) => {
@@ -828,15 +828,14 @@ export const createEngine = (deps: EngineDeps) => {
 
     const pending = [...candidates.values()].filter(row => {
       const view = views.get(row.id)
-      const status = view?.properties?.[PROPS.status]
-      return view && eligibleRowTask(view, saved.baselineMs) && belongsToWatcher(view, watcher) && !view.properties?.[PROPS.reply] && status !== 'done' && status !== 'error'
+      return view && eligibleRowTask(view, saved.baselineMs) && belongsToWatcher(view, watcher) && !isTerminalTask(view)
     })
     // Keep the original columns until the graph reports a terminal state,
     // including while the budget or an editor holds the task.
     if (pending.length !== saved.pending.length || pending.some((row, i) => row !== saved.pending[i])) {
       await state.setRowTasks(key, {...saved, pending})
     }
-    await scheduleBlockTasks(pending.map(row => ({id: row.id, watcher, row, createdSinceMs: saved.baselineMs})), views)
+    await scheduleBlockTasks(pending.map(row => ({kind: 'row', id: row.id, watcher, row, baselineMs: saved.baselineMs})), views)
   }
 
   const tickQueryWatcher = async (watcher: QueryWatcher) => {

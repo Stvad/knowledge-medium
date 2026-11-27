@@ -857,6 +857,18 @@ describe('mention lifecycle', () => {
     expect(runTask).not.toHaveBeenCalled()
   })
 
+  it('clears the previous error before running a claimed mention', async () => {
+    const {graph, blocks} = fakeGraph({backlinks: [{id: 'm'}], blocks: {m: {properties: {[PROPS.error]: 'earlier failure'}}}})
+    const errorsAtRun: unknown[] = []
+    const engine = engineWith({graph, runTask: async () => {
+      errorsAtRun.push(blocks.get('m')?.properties?.[PROPS.error])
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(errorsAtRun).toEqual([''])
+  })
+
   it('holds a stale running mention until its editor closes and its edit settles', async () => {
     const seed: FakeGraphSeed = {
       beingEdited: ['b-1'],

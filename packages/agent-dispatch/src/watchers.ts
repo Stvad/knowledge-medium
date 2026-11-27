@@ -4,7 +4,7 @@
  * watchers (a source block without our status property is pending), so
  * a daemon restart re-derives the queue instead of trusting a cache.
  */
-import { MAX_RUN_TIMEOUT_MS, PROPS, type TaskStatus } from './config.js'
+import { MAX_RUN_TIMEOUT_MS, PROPS } from './config.js'
 
 /** The slice of a block the pending-decision needs. */
 export interface BlockView {
@@ -32,11 +32,9 @@ export interface PendingDecision {
 const prop = (block: BlockView | undefined, key: string): unknown =>
   block?.properties?.[key]
 
-const taskStatus = (block: BlockView | undefined): TaskStatus | null => {
-  const value = prop(block, PROPS.status)
-  return value === 'queued' || value === 'running' || value === 'done' || value === 'error'
-    ? value
-    : null
+export const isTerminalTask = (source: BlockView): boolean => {
+  const status = prop(source, PROPS.status)
+  return Boolean(prop(source, PROPS.reply)) || status === 'done' || status === 'error'
 }
 
 export const taskAttempts = (block: BlockView | undefined): number => {
@@ -98,16 +96,16 @@ export interface PendingArgs {
  * - wait out the settle window so an edit's last write isn't missed.
  */
 export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = null, editHoldMs = 0, baselineMs}: PendingArgs): PendingDecision => {
-  if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
+  if (isTerminalTask(source)) {
+    return {pending: false, reason: prop(source, PROPS.reply) ? 'is-reply' : 'already-processed'}
+  }
 
-  const status = taskStatus(source)
+  const status = prop(source, PROPS.status)
   if (status === 'running') {
     const updatedAt = prop(source, PROPS.updatedAt)
     const age = typeof updatedAt === 'number' ? nowMs - updatedAt : Number.POSITIVE_INFINITY
     if (age < STALE_RUNNING_MS) return {pending: false, reason: 'already-processed'}
     if (taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
-  } else if (status && status !== 'queued') {
-    return {pending: false, reason: 'already-processed'}
   }
   // `queued` is seen-but-unclaimed: it goes through every gate below.
 
