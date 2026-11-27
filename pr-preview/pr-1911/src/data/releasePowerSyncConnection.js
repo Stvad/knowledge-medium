@@ -1,1 +1,1 @@
-export{WX as releasePowerSyncConnection}from"../../chunks/app-R6UXjN1R.js";
+export{WX as releasePowerSyncConnection}from"../../chunks/app-D2jLEf8b.js";

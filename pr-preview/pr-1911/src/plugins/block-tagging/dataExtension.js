@@ -1,1 +1,1 @@
-export{ip as blockTaggingDataExtension}from"../../../chunks/app-R6UXjN1R.js";
+export{ip as blockTaggingDataExtension}from"../../../chunks/app-D2jLEf8b.js";
