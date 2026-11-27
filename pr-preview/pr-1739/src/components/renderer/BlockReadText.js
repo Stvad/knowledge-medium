@@ -1,1 +1,1 @@
-export{hU as BlockReadText}from"../../../chunks/app-D9rQ8jwq.js";
+export{hU as BlockReadText}from"../../../chunks/app-BijdSol0.js";
