@@ -1,1 +1,0 @@
-export{qO as usePromotableBreadcrumb}from"../../../chunks/app-Ck_K1Mof.js";

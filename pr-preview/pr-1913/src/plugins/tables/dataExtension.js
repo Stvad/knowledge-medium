@@ -1,1 +1,0 @@
-export{FZ as tablesDataExtension}from"../../../chunks/app-Ck_K1Mof.js";

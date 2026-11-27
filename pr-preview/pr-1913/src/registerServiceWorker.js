@@ -1,1 +1,0 @@
-export{fR as checkForAppUpdate,pR as registerServiceWorker}from"../chunks/app-Ck_K1Mof.js";

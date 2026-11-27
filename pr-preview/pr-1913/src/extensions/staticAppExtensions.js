@@ -1,1 +1,0 @@
-export{nn as staticAppExtensions}from"../../chunks/app-Ck_K1Mof.js";

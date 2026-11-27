@@ -1,1 +1,0 @@
-export{W4 as characterCounterDataExtension}from"../../../chunks/app-Ck_K1Mof.js";

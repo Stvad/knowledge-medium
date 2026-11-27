@@ -1,1 +1,0 @@
-export{vJ as isIOS,yJ as isMacPlatform}from"../../chunks/app-Ck_K1Mof.js";

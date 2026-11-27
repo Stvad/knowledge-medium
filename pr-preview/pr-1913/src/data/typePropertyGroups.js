@@ -1,1 +1,0 @@
-export{hG as typePropertyGroups}from"../../chunks/app-Ck_K1Mof.js";

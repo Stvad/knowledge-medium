@@ -1,1 +1,0 @@
-export{uC as BLOCK_HOLD_GESTURE,dC as BLOCK_HOLD_RECOGNIZER_ID,fC as blockHoldRecognizer}from"../../../chunks/app-Ck_K1Mof.js";

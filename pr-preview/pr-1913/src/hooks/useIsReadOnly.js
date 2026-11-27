@@ -1,1 +1,0 @@
-export{CC as useIsReadOnly}from"../../chunks/app-Ck_K1Mof.js";

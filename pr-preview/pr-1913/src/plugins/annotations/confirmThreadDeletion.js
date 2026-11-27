@@ -1,1 +1,0 @@
-export{sg as confirmThreadDeletion}from"../../../chunks/app-Ck_K1Mof.js";

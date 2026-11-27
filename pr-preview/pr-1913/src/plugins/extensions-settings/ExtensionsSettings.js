@@ -1,1 +1,0 @@
-export{Kr as ExtensionsSettings}from"../../../chunks/app-Ck_K1Mof.js";

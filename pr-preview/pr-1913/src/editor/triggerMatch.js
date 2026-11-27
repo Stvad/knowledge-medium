@@ -1,1 +1,0 @@
-export{m1 as matchCharTrigger}from"../../chunks/app-Ck_K1Mof.js";

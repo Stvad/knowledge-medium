@@ -1,1 +1,0 @@
-export{Bc as MigrationGate}from"../../../chunks/app-Ck_K1Mof.js";

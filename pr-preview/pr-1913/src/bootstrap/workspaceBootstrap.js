@@ -1,1 +1,0 @@
-export{kt as bootstrapWorkspace}from"../../chunks/app-Ck_K1Mof.js";

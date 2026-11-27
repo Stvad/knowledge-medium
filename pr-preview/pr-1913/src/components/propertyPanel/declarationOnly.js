@@ -1,1 +1,0 @@
-export{yG as declarationOnlyDefinitionForName,bG as declarationOnlyStatusText}from"../../../chunks/app-Ck_K1Mof.js";

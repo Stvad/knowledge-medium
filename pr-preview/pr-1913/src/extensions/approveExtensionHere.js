@@ -1,1 +1,0 @@
-export{QL as approveExtensionHere}from"../../chunks/app-Ck_K1Mof.js";

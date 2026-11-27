@@ -1,1 +1,0 @@
-export{QC as richPastePlugin}from"../../../chunks/app-Ck_K1Mof.js";
