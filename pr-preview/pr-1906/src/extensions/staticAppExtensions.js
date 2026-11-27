@@ -1,1 +1,0 @@
-export{nn as staticAppExtensions}from"../../chunks/app-BppOdq28.js";

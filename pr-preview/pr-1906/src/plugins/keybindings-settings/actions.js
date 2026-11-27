@@ -1,1 +1,0 @@
-export{JP as openKeybindingsSettingsAction}from"../../../chunks/app-BppOdq28.js";

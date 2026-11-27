@@ -1,1 +1,0 @@
-export{ho as tablesPlugin}from"../../../chunks/app-BppOdq28.js";

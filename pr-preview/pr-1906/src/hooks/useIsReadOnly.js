@@ -1,1 +1,0 @@
-export{CC as useIsReadOnly}from"../../chunks/app-BppOdq28.js";

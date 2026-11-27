@@ -1,1 +1,0 @@
-export{C4 as contributorsDataExtension}from"../../../chunks/app-BppOdq28.js";

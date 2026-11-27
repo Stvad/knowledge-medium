@@ -1,1 +1,0 @@
-export{Md as archiveSrsCard}from"../../../chunks/app-BppOdq28.js";

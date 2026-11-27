@@ -1,1 +1,0 @@
-export{pc as propertyRowsPlugin}from"../../../chunks/app-BppOdq28.js";

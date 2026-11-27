@@ -1,1 +1,0 @@
-export{AV as useIsMobile,jV as usePointerCoarse}from"../../chunks/app-BppOdq28.js";

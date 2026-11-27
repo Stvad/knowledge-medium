@@ -1,1 +1,0 @@
-export{mc as propertyReadContentContribution}from"../../../chunks/app-BppOdq28.js";

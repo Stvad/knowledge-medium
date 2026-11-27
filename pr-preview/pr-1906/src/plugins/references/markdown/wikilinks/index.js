@@ -1,1 +1,0 @@
-export{IS as wikilinkMarkdownExtension}from"../../../../../chunks/app-BppOdq28.js";
