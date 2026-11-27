@@ -105,7 +105,7 @@ process.stdout.write('fake sync ready\\n')
     )
     const result = launchSessionEndSync({ cwd, syncScript: fixture, probeTimeout: LOADED_PROBE_TIMEOUT })
 
-    expect(result.started, result.error).toBe(true)
+    expect(result.started, 'error' in result ? result.error : undefined).toBe(true)
     await waitForLog(syncLogPath(realpathSync(main)), 'fake sync failure')
   }, 20_000)
 
@@ -115,7 +115,7 @@ process.stdout.write('fake sync ready\\n')
     const spawnImpl = vi.fn(() => child)
     const result = launchSessionEndSync({ cwd, syncScript: '/tmp/fake-sync.mjs', spawnImpl, probeTimeout: LOADED_PROBE_TIMEOUT })
 
-    expect(result.started, result.error).toBe(true)
+    expect(result.started, 'error' in result ? result.error : undefined).toBe(true)
     expect(spawnImpl).toHaveBeenCalledWith(
       process.execPath,
       ['/tmp/fake-sync.mjs', '--quiet'],
