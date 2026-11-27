@@ -1,0 +1,1 @@
+export{cg as confirmThreadDeletion}from"../../../chunks/app-BD3cYXSo.js";

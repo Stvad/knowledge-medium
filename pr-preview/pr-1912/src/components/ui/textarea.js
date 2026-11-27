@@ -1,0 +1,1 @@
+export{t as Textarea}from"../../../chunks/textarea-BWY0P-yW.js";

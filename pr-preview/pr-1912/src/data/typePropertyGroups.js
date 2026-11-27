@@ -1,0 +1,1 @@
+export{MG as typePropertyGroups}from"../../chunks/app-BD3cYXSo.js";

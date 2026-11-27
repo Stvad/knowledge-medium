@@ -1,0 +1,1 @@
+export{zI as chipStyle}from"../../../chunks/app-BD3cYXSo.js";

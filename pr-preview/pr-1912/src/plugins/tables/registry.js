@@ -1,0 +1,1 @@
+export{vQ as TABLE_SURFACE,yQ as gridDrawing,bQ as gridInScope,xQ as gridOfHost,SQ as isGridMounted,CQ as notesInScope,wQ as registerGrid,TQ as tableNotesScopeId,EQ as tableRenderScopeId}from"../../../chunks/app-BD3cYXSo.js";

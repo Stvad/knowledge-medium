@@ -1,0 +1,1 @@
+export{QY as usePropertySchemas}from"../../chunks/app-BD3cYXSo.js";

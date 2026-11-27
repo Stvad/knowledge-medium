@@ -1,0 +1,1 @@
+export{ic as showTableAsOutline,ac as turnIntoTable}from"../../../chunks/app-BD3cYXSo.js";

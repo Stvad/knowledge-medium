@@ -1,0 +1,1 @@
+export{rX as adoptOrCreatePropertySchema}from"../../chunks/app-BD3cYXSo.js";

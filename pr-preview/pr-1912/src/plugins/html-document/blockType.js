@@ -1,0 +1,1 @@
+export{C$ as htmlDocumentTypeSeed}from"../../../chunks/app-BD3cYXSo.js";

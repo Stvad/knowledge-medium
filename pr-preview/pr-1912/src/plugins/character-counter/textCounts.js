@@ -1,0 +1,1 @@
+export{er as countCharacters,tr as countWords}from"../../../chunks/app-BD3cYXSo.js";

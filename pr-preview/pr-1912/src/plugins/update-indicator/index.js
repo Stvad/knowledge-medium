@@ -1,0 +1,1 @@
+export{xx as updateIndicatorPlugin}from"../../../chunks/app-BD3cYXSo.js";

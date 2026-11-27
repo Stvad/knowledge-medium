@@ -1,0 +1,1 @@
+export{MU as BlockReadText}from"../../../chunks/app-BD3cYXSo.js";

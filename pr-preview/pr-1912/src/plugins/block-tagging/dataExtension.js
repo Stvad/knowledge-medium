@@ -1,0 +1,1 @@
+export{ap as blockTaggingDataExtension}from"../../../chunks/app-BD3cYXSo.js";

@@ -1,0 +1,1 @@
+export{t$ as RENAME_BACKLINKS_PRECEDENCE,n$ as RENAME_BACKLINKS_PROCESSOR,r$ as applyRefRewrites,i$ as renameBacklinksProcessor,a$ as renameSameTxProcessors,o$ as replacementFor,s$ as splitBySurvivingSpan}from"../../../chunks/app-BD3cYXSo.js";

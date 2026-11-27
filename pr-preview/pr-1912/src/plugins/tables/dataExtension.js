@@ -1,0 +1,1 @@
+export{QZ as tablesDataExtension}from"../../../chunks/app-BD3cYXSo.js";

@@ -1,0 +1,1 @@
+export{HX as closePowerSyncDbIfOpen,UX as ensurePowerSyncReady,WX as getActiveSyncResolver,GX as getActiveUserId,KX as getPowerSyncDb,qX as isRemoteSyncActive,JX as syncObserverDepsFor,YX as syncResolverForUser,XX as webDatabaseOptions}from"../../chunks/app-BD3cYXSo.js";

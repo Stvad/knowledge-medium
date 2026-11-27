@@ -1,0 +1,1 @@
+export{JN as CompactReferenceLink}from"../../../chunks/app-BD3cYXSo.js";

@@ -1,0 +1,1 @@
+export{XR as extensionDisplayName,ZR as extensionName,QR as shownExtensionSource,$R as userExtensionShellToggle,ez as userExtensionToggle}from"../../chunks/app-BD3cYXSo.js";

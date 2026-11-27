@@ -1,0 +1,1 @@
+export{aR as appUpdatePromptExtension}from"../../../chunks/app-BD3cYXSo.js";
