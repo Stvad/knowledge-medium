@@ -120,9 +120,6 @@ export async function serveDatabase(
         closedReason: gate ? gate.reason() : 'Starting gate',
       }),
     })
-    // Runtime introspection accepts an absent document. Reading the browser
-    // context's getter in Node would evaluate the unbound global instead.
-    Object.defineProperty(context, 'document', {get: () => undefined})
     bridge = await register(config, user, async command => {
       signal.throwIfAborted()
       return executeHeadlessCommand(command, context, () => gate)

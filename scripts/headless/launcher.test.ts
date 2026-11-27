@@ -47,8 +47,8 @@ it('serves health and reads over the bridge from a production vite-node host wit
       host.then(() => { throw new Error('Host exited before serving health') }),
     ])
     expect(await client.runCommand({type: 'sql', sql: 'SELECT 1 AS n'})).toEqual([{n: 1}])
-    expect(await client.runCommand({type: 'runtime-summary'})).toMatchObject({activeWorkspaceId: 'fixture'})
     expect(await client.runCommand({type: 'describe-runtime', brief: true})).toMatchObject({activeWorkspaceId: 'fixture'})
+    expect(await client.runCommand({type: 'runtime-summary'})).toMatchObject({activeWorkspaceId: 'fixture'})
     expect(await readdir(stateDir)).toContain(PID_FILENAME)
     host.child.kill('SIGTERM')
     await host
