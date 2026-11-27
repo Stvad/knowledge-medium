@@ -100,7 +100,7 @@ describe('unexpectedClaudeInventory', () => {
   it('accepts a plugin the watcher allows and still reports the others', () => {
     const allowing = {...intended, allowedPlugins: new Set(['guard@local'])}
     const plugins = [{source: 'guard@local'}, {source: 'guard@other'}]
-    expect(unexpectedClaudeInventory({...clean, plugins}, allowing)).toEqual(['plugin guard@other'])
+    expect(unexpectedClaudeInventory({...clean, plugins}, allowing)).toEqual(['plugin guard@other (not in runner.allowedPlugins)'])
   })
 
   it('still reports a tool an allowed plugin adds', () => {
@@ -383,6 +383,7 @@ const streamResult = (obj: Record<string, unknown>) =>
   `process.stdout.write(JSON.stringify(${JSON.stringify(obj)}) + '\\n')`
 
 const cleanInit = {type: 'system', subtype: 'init', tools: [], mcp_servers: [], plugins: []}
+const emptyToolSet = {acceptedBuiltIns: new Set<string>(), serverNames: [], allowedPlugins: new Set<string>()}
 const fakeClaude = (script: string): SpawnImpl => fakeProcess(streamResult(cleanInit) + '; ' + script)
 
 describe('runClaude', () => {
@@ -428,7 +429,7 @@ describe('runClaude', () => {
 
   it.each(['\n', ''])('discards a buffered session after refusal with terminator %j', terminator => {
     const events: RunEvent[] = []
-    const parser = createStreamJsonParser(event => events.push(event), {acceptedBuiltIns: new Set<string>(), serverNames: [], allowedPlugins: new Set<string>()})
+    const parser = createStreamJsonParser(event => events.push(event), emptyToolSet)
     const refused = JSON.stringify({...cleanInit, tools: ['Extra']})
     const buffered = JSON.stringify({...cleanInit, session_id: 'late'})
     parser.feed(`${refused}\n${buffered}${terminator}`)
@@ -475,7 +476,7 @@ describe('runClaude', () => {
 
   it('ignores non-tool blocks and payloads outside tool request events', () => {
     const other = toolUse('Unused')
-    const parser = createStreamJsonParser(undefined, {acceptedBuiltIns: new Set<string>(), serverNames: [], allowedPlugins: new Set<string>()})
+    const parser = createStreamJsonParser(undefined, emptyToolSet)
     const records = [
       cleanInit,
       assistant(null, {type: 'text', text: 'ok'}, {type: 'server_tool_use', name: 'server_operation'}),
