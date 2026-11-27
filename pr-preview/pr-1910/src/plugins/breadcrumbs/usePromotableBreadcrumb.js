@@ -1,1 +1,0 @@
-export{qO as usePromotableBreadcrumb}from"../../../chunks/app-DW9HC2_W.js";

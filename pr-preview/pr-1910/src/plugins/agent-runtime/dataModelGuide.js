@@ -1,1 +1,0 @@
-export{Gb as DATA_MODEL_GUIDE,Kb as dataModelGuide}from"../../../chunks/app-DW9HC2_W.js";

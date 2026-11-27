@@ -1,1 +1,0 @@
-export{GL as extensionPromptDiagnosticContribution,KL as extensionPromptDiagnosticSource}from"../../../chunks/app-DW9HC2_W.js";

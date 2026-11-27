@@ -1,1 +1,0 @@
-export{Zr as openExtensionsSettingsAction}from"../../../chunks/app-DW9HC2_W.js";

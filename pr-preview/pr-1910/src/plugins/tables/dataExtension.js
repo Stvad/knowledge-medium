@@ -1,1 +1,0 @@
-export{FZ as tablesDataExtension}from"../../../chunks/app-DW9HC2_W.js";

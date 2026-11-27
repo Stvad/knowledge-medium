@@ -1,1 +1,0 @@
-export{FY as usePropertySchemas}from"../../chunks/app-DW9HC2_W.js";
