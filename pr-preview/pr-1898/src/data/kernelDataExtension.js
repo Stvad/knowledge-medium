@@ -1,0 +1,1 @@
+export{ftt as kernelDataExtension}from"../../chunks/app-B2sKsV1Y.js";
