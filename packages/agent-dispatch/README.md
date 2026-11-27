@@ -43,7 +43,7 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 ## Upgrade to 0.9.12
 
-A queued channel mention with `agent:cancel` set now parks with `agent:status=error` and `agent:error=cancelled` before delivery. Upgrade `@knowledge-medium/agent-dispatch` and restart the daemon.
+A queued channel mention with `agent:cancel` set now parks with `agent:status=error` and `agent:error=cancelled` before delivery. Stale channel mentions stay `running` while waiting to retry on a busy thread, so a Stop leaves the ambient session free to finish the earlier attempt. Upgrade `@knowledge-medium/agent-dispatch` and restart the daemon.
 
 ## Upgrade to 0.9.11
 

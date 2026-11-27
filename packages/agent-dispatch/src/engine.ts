@@ -416,7 +416,9 @@ export const createEngine = (deps: EngineDeps) => {
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) {
       refundLaunch(launchStamp)
-      if (block.properties?.[PROPS.status] === 'queued') return
+      // A stale channel claim may still be active in the ambient session.
+      if (block.properties?.[PROPS.status] === 'queued'
+        || (decision.reason === 'stale-running' && watcher.delivery === 'channel')) return
       log(`[${watcher.name}] ${sourceId} waiting: its thread's session ${session} is still running`)
       await graph.setTaskProps(sourceId, {
         status: 'queued', watcher: watcher.name, executor: runner.executor, activity: THREAD_BUSY_ACTIVITY, nowMs: now(),
