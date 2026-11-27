@@ -1,1 +1,1 @@
-export{HY as adoptOrCreatePropertySchema}from"../../chunks/app-D2jLEf8b.js";
+export{HY as adoptOrCreatePropertySchema}from"../../chunks/app-65YW1UUl.js";

@@ -1,1 +1,1 @@
-export{Px as inlineBacklinkCountsExtension}from"../../../../chunks/app-D2jLEf8b.js";
+export{Px as inlineBacklinkCountsExtension}from"../../../../chunks/app-65YW1UUl.js";

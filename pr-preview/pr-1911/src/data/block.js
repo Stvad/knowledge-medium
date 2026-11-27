@@ -1,1 +1,1 @@
-export{dtt as Block,ftt as requireLoadedBlock}from"../../chunks/app-D2jLEf8b.js";
+export{dtt as Block,ftt as requireLoadedBlock}from"../../chunks/app-65YW1UUl.js";
