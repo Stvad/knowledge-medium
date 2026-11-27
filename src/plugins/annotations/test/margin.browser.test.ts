@@ -59,6 +59,9 @@ async function openFixture(waitMs = 10_000) {
   await page.addInitScript(() => {
     localStorage.setItem('ftm.localOnly', 'true')
     localStorage.setItem('ftm.user', JSON.stringify({id: 'margin-fixture', name: 'Fixture Reviewer'}))
+    addEventListener('pointermove', event => {
+      Object.assign(window, {__marginTestPointer: {x: event.clientX, y: event.clientY}})
+    }, true)
   })
   await page.goto(origin, {waitUntil: 'commit', timeout: 15_000})
   try {
@@ -122,13 +125,28 @@ const positionCard = async (locator: Locator, fromTop: number) => {
   }, {timeout: 5_000}).toBe('settled')
 }
 
+/** Every element that can scroll under the pointer, innermost first, with its
+ *  offset: where a wheel went when it did not reach the outline. */
+const scrollersUnderPointer = () => page.evaluate(() => {
+  const {x, y} = (window as {__marginTestPointer?: {x: number, y: number}}).__marginTestPointer ?? {x: -1, y: -1}
+  const scrollers: string[] = []
+  for (let el = document.elementFromPoint(x, y); el; el = el.parentElement) {
+    if (!/auto|scroll/.test(getComputedStyle(el).overflowY) || el.scrollHeight <= el.clientHeight) continue
+    const name = el.getAttributeNames().find(attribute => attribute.startsWith('data-')) ?? el.tagName
+    scrollers.push(`${name} at ${el.scrollTop} of ${el.scrollHeight - el.clientHeight}`)
+  }
+  return `(${x}, ${y}): ${scrollers.join(' < ') || 'none'}`
+})
+
 const wheelOutline = async (delta: number) => {
   const before = await scrollTop()
+  const scrollersBefore = await scrollersUnderPointer()
   await page.mouse.wheel(0, delta)
   await expect.poll(async () => Math.abs(await scrollTop() - before - delta), {timeout: 3_000})
     .toBeLessThanOrEqual(2)
     .catch(async error => {
-      throw new Error(`Wheel ${delta} px moved the outline by ${(await scrollTop()) - before} px`, {cause: error})
+      throw new Error(`Wheel ${delta} px moved the outline by ${(await scrollTop()) - before} px. ` +
+        `Scrollers under the pointer before ${scrollersBefore}; after ${await scrollersUnderPointer()}`, {cause: error})
     })
 }
 
