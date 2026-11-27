@@ -47,8 +47,8 @@ describe('resolveMainRepoRoot', () => {
   })
 })
 
-// The production probe budget (1s) is tuned for Codex's 3s hook cap; under full-gate load a
-// `git rev-parse` can exceed it, so tests that need a real probe to succeed allow more.
+// The production probe budget (1s) must fit the SessionEnd hook's 3s cap; under full-gate
+// load a `git rev-parse` can exceed it, so tests that need a real probe to succeed allow more.
 const LOADED_PROBE_TIMEOUT = 15_000
 
 describe('launchSessionEndSync', () => {
