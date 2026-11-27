@@ -1,1 +1,1 @@
-export{cd as appVersion}from"../chunks/app-T-CMrhtE.js";
+export{cd as appVersion}from"../chunks/app-DLRoII3y.js";

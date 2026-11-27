@@ -1,1 +1,1 @@
-export{VC as BlockSearchPicker}from"../../chunks/app-T-CMrhtE.js";
+export{VC as BlockSearchPicker}from"../../chunks/app-DLRoII3y.js";
