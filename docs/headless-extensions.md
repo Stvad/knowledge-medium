@@ -1,6 +1,6 @@
 # Installed extensions in the headless host
 
-> **Status:** Proposed. Nothing is implemented. Three decisions are settled by the owner and one is proposed; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
+> **Status:** Proposed. Nothing is implemented. Four decisions are settled by the owner; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
 > Claims are tagged as in [headless-client.md](headless-client.md). **[read]** means seen in the code. **[measured]** means run or queried, and the entry says where. **[reasoned]** means inferred; the slice that would verify it is named.
 
 ## 1. Goal
@@ -218,19 +218,29 @@ These states are host-owned and always served. The extension's own `diagnosticsF
 - *Per-user prefs.* The host sets `preferencesPage` to the owner's user page, an existing config field. The slice-3 Matrix edit reads its config with `readPluginPref(repo, preferencesRootId(repo, ws), …)` (`src/data/stateBlocks.ts`), which reads without creating anything. So the host follows the owner's homeserver and room, and mints no prefs block of its own. A tab's reads are unchanged, because its root is its own page. The edit also makes the effect re-read its config when the prefs block changes, instead of only at start or on its in-tab restart event.
 - *Toasts* go to sonner's module queue with no `<Toaster/>` to drain them. Matrix toasts once per failure streak, and its diagnostics already carry the same states, so no sink is added **[read]**.
 
-<a id="one-writer"></a>**One ingesting device per room** ([§9](#9-decisions) D4, proposed). Derived ids were meant to let several clients ingest one room and converge, but they do not converge when two replicas' property schemas differ **[read]**.
-- *Why the layout depends on the replica.* Whether an attribute bullet is promoted into a property depends on the local schema (`promotedValueAcceptorFor(repo)`), and promoted bullets are removed. A message's child ids then follow positions in the remaining tree (`messageNodeId(…, nodePath)`).
-- *How rows duplicate.* Two replicas that disagree about one bullet lay the same message out differently. The server keeps the first create per row id, so the rows unique to each writer both land, and a sibling can appear twice.
-- *Why tab and host disagree.* The host's seed set is narrower than a tab's ([headless-client.md](headless-client.md) §10), so this is the likely case, not a rare one.
+<a id="one-writer"></a>**One ingesting device per room by default, correct with several** ([§9](#9-decisions) D4, decided). Normally one device ingests a room, but ingest must stay correct when several do, as tabs do today.
 
-So exactly one device ingests a given room at a time, and that device is the one holding the room's token and its `/sync` cursor, both device-local. A tab without the token reports missing-token and does not poll. Handing ingest to the host:
+*Correct with several writers.* Derived ids are what let several clients converge, but today they do not converge when two replicas' property schemas differ **[read]**:
+- *Why the layout depends on the replica.* Whether an attribute bullet is promoted into a property depends on the local schema (`promotedValueAcceptorFor(repo)`), and promoted bullets are removed. A message's child ids then follow positions in the remaining tree: `createBlockTree` mints `messageNodeId(…, [...path, index])` over the pruned tree.
+- *How rows duplicate.* Two replicas that disagree about one bullet give the bullets after it different ids. The server keeps the first create per row id, so the rows unique to each writer both land, and a sibling appears twice.
+- *Why it matters more now.* Replicas disagree when a definition has synced to one and not yet the other, or across extension versions, and always between a tab and the host, whose seed set is narrower ([headless-client.md](headless-client.md) §10).
+
+The fix is to mint each node's id from its original path in the message as written. The promotion walk already computes that path (`blockPathUid`) **[read]**. Carrying it onto each kept node, and minting from it instead of the re-indexed position, gives every replica the same ids whatever it promotes. Two writers that disagree about one bullet then produce, depending on which create arrives first:
+- the parent with the promoted property, plus the bullet as a row from the writer that kept it;
+- or the parent without the property, plus the same bullet once.
+
+Either way there are no duplicate rows and no lost text; the worst case is an attribute shown both as a property and as a bullet. Existing messages are unaffected, because an event whose root (always path `[0]`) already exists is skipped. A client on the old scheme and one on the new, ingesting at once, still diverge, so this rolls out coordinated: deploy, then re-approve in tabs. The change is filed as a bug of its own. Its acceptance test is an exact tree from two replicas whose schemas disagree, in both upload orders: no duplicate rows and no lost bullet text.
+
+The remaining multi-writer differences are benign under first-create-wins on the same ids: two versions writing different content for one event, and order keys computed from each writer's local view. Each row takes one writer's value, and nothing duplicates.
+
+*One writer by default.* The normal deployment is one ingesting device per room, which also spares every device the network and write cost. That device is the one holding the room's token and its `/sync` cursor, both device-local. A tab without the token reports missing-token and does not poll. Handing ingest to the host:
 1. stop the tab's ingest;
 2. copy its token and its cursor value to the host with `headless storage set`, then remove both from the tab;
 3. start the host.
 
 The host continues from exactly the event the tab stopped at, so no message falls into the gap. Without the cursor, a fresh device drops its whole first timeline and saves the cursor after it **[read]**. Handing back is the same in reverse.
 
-Order keys, version skew and link unwrapping stop mattering for convergence, because one writer has one view. The ingest still has to be safe to replay, since a cursor handoff, paging back through `prev_batch`, or a crash between a write and the cursor save all replay events:
+With several writers each has its own cursor, so every writer replays every event the others already wrote; with one, a cursor handoff, paging back through `prev_batch`, or a crash between a write and the cursor save all replay events. So the ingest must be safe to replay:
 - *Recognise handled events.* It recognises an event already handled by its identity, the `matrix-event:id` property, across live rows, tombstones and moved rows. That check runs in the write transaction, before it creates a day, registers properties or restores a container. Today the check is a `tx.get` on the derived root id plus a scan of the day container's live children, run after the container is ensured **[read]**. So replaying a deleted or moved older message, minted before ids were derived, makes a new copy, and replaying any message can restore a container the user deleted.
 - *Cancel cleanly.* Each config read gets its abort controller before its first `await`, and the controller is checked before every write and every cursor save. Today the controller is created after the preferences read **[read]**, so a stop or a second change during that read can leave an untracked poll running.
 
@@ -263,10 +273,10 @@ The parity test in [§5](#pinned-url-imports) runs the same fixture extension th
   - *Cost accepted:* tabs keep the unpinned behaviour for the transition's length, and the import plugin carries a second branch until 0b removes it.
   - *Rejected:* refusing unpinned imports at once. That closes the gap immediately, but an extension stops until someone pins it on every device.
   - *Unaffected:* the host loads pinned imports only, in both phases.
-- **D4, proposed: one ingesting device per room, handed over with its token and cursor** ([§7](#one-writer)).
-  - *Why:* two writers do not converge when their property schemas differ, and tab and host differ by construction. The handoff keeps every message.
-  - *Cost:* while the host ingests, the owner's tabs do not, and show missing-token for that room.
-  - *Rejected:* keeping simultaneous writers and making them converge. That needs an event representation independent of each replica's schema and a reconciliation rule, proven by an exact-tree test over two divergent replicas and both upload orders. It is a project of its own for a case one writer avoids.
+- **D4, decided by the owner (2026-11-27): one ingesting device per room by default, and correct with several** ([§7](#one-writer)).
+  - *Default:* ingest moves to the host by handing over the room's token and `/sync` cursor, so no message is missed. While the host ingests, the owner's tabs show missing-token for that room.
+  - *Several writers stay safe:* ids come from each bullet's original path, and replays recognise handled events by identity. So concurrent writers produce no duplicate rows and lose no text, as tabs ingesting together do today.
+  - *Rejected:* relying on one writer alone. Tabs can still ingest together, and a handoff mistake would then corrupt messages instead of merely doing extra work.
 
 ## 10. Slices
 
@@ -306,14 +316,18 @@ The parity test in [§5](#pinned-url-imports) runs the same fixture extension th
    - a deleted-then-restored allowlisted block runs its reviewed copy.
 3. **Matrix on the host.** This slice changes the extension first:
    - pin the SDK import: add `&target=es2024` and run `pin-imports`;
-   - recognise handled events by event identity before creating anything, and cancel cleanly ([§7](#one-writer));
+   - mint node ids from each bullet's original path, recognise handled events by event identity before creating anything, and cancel cleanly ([§7](#one-writer)). The id change is filed as its own bug and, like the gap fix below, can ship ahead of this slice;
    - page back through `prev_batch` when a timeline comes back `limited`. Today a gap of more than 30 messages since the saved cursor is silently skipped on that client, tabs included. It is filed as a bug of its own, needs the event-identity check above as its stop condition, and is worth shipping ahead of this slice;
    - read prefs through `readPluginPref` and re-read them on change;
    - bind the token to its (homeserver, room) pair;
    - remove `migrateEventNamespace`, a one-time data migration gated only by a device-local flag that a new device lacks. It is a no-op today: 0 rows pending and 1,402 already migrated on the owner's tab replica **[measured]**. Removed, it can never fire from the host. `migrateLegacyConfig`, the other flag-gated one-time step, only sets its flag on a device without the legacy blob;
    - read the app origin from a constant instead of `window.location`.
 
-   Then reinstall the extension, re-approve it in tabs, allowlist it, and hand ingest over ([§7](#one-writer)). The acceptance test is a handoff with one message sent in the gap, a replay of a deleted older message, and a replay against a deleted day container. Two costs are still unmeasured, and together they decide whether this fits beside the host under the target's OOM policy:
+   Then reinstall the extension, re-approve it in tabs, allowlist it, and hand ingest over ([§7](#one-writer)). The acceptance tests are:
+   - a handoff with one message sent in the gap;
+   - a replay of a deleted older message;
+   - a replay against a deleted day container;
+   - the two-replica exact-tree test. Two costs are still unmeasured, and together they decide whether this fits beside the host under the target's OOM policy:
    - Loading the extension and its `@/` imports cost about 290 MB RSS over a bare vite-node process on a laptop, with the SDK stubbed **[measured]**. The marginal cost over a running host is not measured.
    - Whether the es2024 browser-target SDK bundle runs under Node, and what it costs there, is not verified.
 
