@@ -142,8 +142,8 @@ const MARK_CSS = [
  *
  *  It runs before any of the source is parsed, so what it reads off
  *  `Document.prototype` there is the real thing; read later off `document`,
- *  a named element (`<form name="body">`) could stand in for it. A boundary
- *  point between nodes moves into text: a start forward, an end back. */
+ *  a named element (`<form name="body">`) could stand in for it. Selection
+ *  boundaries move inward to the text they cover. */
 export const FRAME_SCRIPT = `(function () {
   var app = parent.parent
   var post = function (message) { app.postMessage(message, '*') }
@@ -194,21 +194,32 @@ export const FRAME_SCRIPT = `(function () {
   var pointIn = function (list, container, offset, forward) {
     if (container.nodeType === Node.TEXT_NODE) {
       var at = list.indexOf(container)
-      return at < 0 ? null : pointAt(list, at, offset)
+      return at < 0 ? null : {index: at, offset: offset}
     }
     var probe = createRange.call(document)
     probe.setStart(container, offset)
     var i
     if (forward) {
       for (i = 0; i < list.length; i++) {
-        if (probe.comparePoint(list[i], 0) >= 0) return pointAt(list, i, 0)
+        if (probe.comparePoint(list[i], 0) >= 0) return {index: i, offset: 0}
       }
     } else {
       for (i = list.length - 1; i >= 0; i--) {
-        if (probe.comparePoint(list[i], list[i].length) <= 0) return pointAt(list, i, list[i].length)
+        if (probe.comparePoint(list[i], list[i].length) <= 0) return {index: i, offset: list[i].length}
       }
     }
     return null
+  }
+  // A paragraph selection can include the collapsed source whitespace before
+  // the next paragraph. Keep whitespace that occupies space or is preserved by CSS.
+  var hasSelectedText = function (node, from, to) {
+    if (from === to) return false
+    if (${/[^ \t\n\f\r]/}.test(node.data.slice(from, to))) return true
+    if (getComputedStyle(node.parentElement).whiteSpaceCollapse !== 'collapse') return true
+    var edge = createRange.call(document)
+    edge.setStart(node, from)
+    edge.setEnd(node, to)
+    return Array.from(edge.getClientRects()).some(function (rect) { return rect.width > 0 && rect.height > 0 })
   }
   var selected = function () {
     var selection = getSelection.call(document)
@@ -217,11 +228,19 @@ export const FRAME_SCRIPT = `(function () {
     var list = texts()
     var start = pointIn(list, range.startContainer, range.startOffset, true)
     var end = pointIn(list, range.endContainer, range.endOffset, false)
-    if (!start || !end) return null
+    if (!start || !end || start.index > end.index) return null
+    while (start.index < end.index && !hasSelectedText(list[start.index], start.offset, list[start.index].length)) {
+      start = {index: start.index + 1, offset: 0}
+    }
+    while (start.index < end.index && !hasSelectedText(list[end.index], 0, end.offset)) {
+      var previous = end.index - 1
+      end = {index: previous, offset: list[previous].length}
+    }
+    if (start.index === end.index && start.offset >= end.offset) return null
     var box = range.getBoundingClientRect()
     return {
-      start: start,
-      end: end,
+      start: pointAt(list, start.index, start.offset),
+      end: pointAt(list, end.index, end.offset),
       rect: {top: box.top, left: box.left, bottom: box.bottom, right: box.right},
       digest: digestOf(list)
     }

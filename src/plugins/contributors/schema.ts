@@ -1,6 +1,7 @@
 import {ChangeScope, seedProperty, seedType, type BlockData} from '@/data/api'
 import {USER_TYPE} from '@/data/blockTypes'
 import {hasBlockType} from '@/data/properties'
+import {MEDIA_TYPE} from '@/plugins/attachments/mediaBlock'
 
 export const CONTRIBUTOR_TYPE = 'contributor:profile'
 
@@ -45,6 +46,16 @@ export const contributorForProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+export const contributorPictureProp = seedProperty({
+  seedKey: 'system:contributors/property/contributor-picture',
+  revision: 1,
+  name: 'contributor:picture',
+  preset: 'optional-ref',
+  config: {targetTypes: [MEDIA_TYPE]},
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // Lists allow hand-recorded coauthorship; automatic creation adds one contributor.
 export const attributionCreatorsProp = seedProperty({
   seedKey: 'system:contributors/property/attribution-creators',
@@ -75,5 +86,5 @@ export const contributorProfileType = seedType({
   revision: 1,
   id: CONTRIBUTOR_TYPE,
   label: 'Contributor profile',
-  properties: [contributorKindProp, contributorRoleProp, contributorForProp],
+  properties: [contributorKindProp, contributorRoleProp, contributorForProp, contributorPictureProp],
 })
