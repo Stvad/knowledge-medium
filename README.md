@@ -64,12 +64,20 @@ npx supabase projects create knowledge-medium --org-id <org-id> --region us-west
 npx supabase link --project-ref <project-ref> --password <db-password>
 ```
 
-4. Push the committed schema and auth config:
+4. Push the committed schema, auth config, and edge functions:
 
 ```bash
 npx supabase db push
 npx supabase config push
+npx supabase functions deploy
 ```
+
+   Re-run `functions deploy` whenever `supabase/functions/` changes; the Pages
+   deploy doesn't publish them. Without `cors-proxy`, anything that reads other
+   sites through `proxyFetch` fails with an `unreachable` error. Served from an
+   origin other than `https://stvad.github.io`, set it for the proxy:
+   `npx supabase secrets set CORS_PROXY_ALLOWED_ORIGINS=https://<your-origin>`
+   (comma-separated for several).
 
 5. Fill client env vars:
    - `VITE_SUPABASE_URL`: Supabase project URL
