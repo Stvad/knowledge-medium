@@ -1,1 +1,1 @@
-export{dh as commentLinkNavigationContribution,fh as goToComment,ph as outlineLinkedBlocks}from"../../../chunks/app-8Z8bRG5f.js";
+export{dh as commentLinkNavigationContribution,fh as goToComment,ph as outlineLinkedBlocks}from"../../../chunks/app-BR_olI5D.js";
