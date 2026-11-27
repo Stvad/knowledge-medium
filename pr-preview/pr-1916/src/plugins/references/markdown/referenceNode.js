@@ -1,1 +1,1 @@
-export{BS as EmbedComponent,VS as referenceTargetOf}from"../../../../chunks/app-COXBhNBn.js";
+export{BS as EmbedComponent,VS as referenceTargetOf}from"../../../../chunks/app-CQ6NE-ie.js";

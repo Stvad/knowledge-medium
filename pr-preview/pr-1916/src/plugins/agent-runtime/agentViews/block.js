@@ -1,1 +1,1 @@
-export{By as buildBlockView,Vy as renderBlockView}from"../../../../chunks/app-COXBhNBn.js";
+export{By as buildBlockView,Vy as renderBlockView}from"../../../../chunks/app-CQ6NE-ie.js";

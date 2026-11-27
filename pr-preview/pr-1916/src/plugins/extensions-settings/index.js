@@ -1,1 +1,1 @@
-export{hv as extensionsOverridesProp,gv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-COXBhNBn.js";
+export{hv as extensionsOverridesProp,gv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-CQ6NE-ie.js";
