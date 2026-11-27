@@ -1,0 +1,1 @@
+export{Z2 as annotationMarginOpenProp,Q2 as annotationMarginShareProp}from"../../../chunks/app-BOLAAXfv.js";

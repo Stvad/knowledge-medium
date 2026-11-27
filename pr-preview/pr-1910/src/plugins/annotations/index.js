@@ -1,0 +1,1 @@
+export{jm as annotationsPlugin}from"../../../chunks/app-BOLAAXfv.js";

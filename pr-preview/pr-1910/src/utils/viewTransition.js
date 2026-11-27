@@ -1,0 +1,1 @@
+export{BJ as withMoveTransition}from"../../chunks/app-BOLAAXfv.js";

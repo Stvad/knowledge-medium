@@ -1,0 +1,1 @@
+export{mc as propertyReadContentContribution}from"../../../chunks/app-BOLAAXfv.js";

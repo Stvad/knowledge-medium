@@ -1,0 +1,1 @@
+export{$O as plainOutlinerPlugin}from"../../../chunks/app-BOLAAXfv.js";
