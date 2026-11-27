@@ -1,0 +1,1 @@
+export{mvt as normalizeReferences}from"../../../chunks/app-T-CMrhtE.js";

@@ -1,0 +1,1 @@
+export{zc as propertiesMigrationPlugin}from"../../../chunks/app-T-CMrhtE.js";

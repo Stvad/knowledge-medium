@@ -1,0 +1,1 @@
+export{Oj as useMinuteClock}from"../../chunks/app-T-CMrhtE.js";

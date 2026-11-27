@@ -1,0 +1,1 @@
+export{vJ as isIOS,yJ as isMacPlatform}from"../../chunks/app-T-CMrhtE.js";

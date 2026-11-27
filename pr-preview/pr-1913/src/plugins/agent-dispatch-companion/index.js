@@ -1,0 +1,1 @@
+export{S_ as agentDispatchCompanionPlugin}from"../../../chunks/app-T-CMrhtE.js";

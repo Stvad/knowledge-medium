@@ -1,0 +1,1 @@
+export{UY as appRuntimeUpdateEvent,WY as refreshAppRuntime}from"../../chunks/app-T-CMrhtE.js";

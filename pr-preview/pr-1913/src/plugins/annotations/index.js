@@ -1,0 +1,1 @@
+export{jm as annotationsPlugin}from"../../../chunks/app-T-CMrhtE.js";
