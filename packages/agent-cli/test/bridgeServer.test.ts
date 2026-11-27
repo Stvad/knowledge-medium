@@ -92,10 +92,11 @@ const bridgeSpawnSpec = (port: number, env: Record<string, string>) => ({
  *  shared server's fixed-at-startup env can't apply without a restart. */
 const spawnBridgeServer = async (
   env: Record<string, string>,
+  nodeArgs: string[] = [],
 ): Promise<{baseUrl: string, stop: () => Promise<void>}> => {
   const port = await pickPort()
   const spec = bridgeSpawnSpec(port, env)
-  const proc = spawn(process.execPath, spec.args, {env: {...process.env, ...spec.env}, stdio: [...spec.stdio]})
+  const proc = spawn(process.execPath, [...nodeArgs, ...spec.args], {env: {...process.env, ...spec.env}, stdio: [...spec.stdio]})
   await waitForReady(port)
   return {
     baseUrl: `http://127.0.0.1:${port}`,
@@ -349,13 +350,17 @@ describe('agent runtime bridge', () => {
       status: string, result?: {ok: boolean, value?: unknown, error?: {message: string}},
     }
 
-  // Each case waits for a one-second TTL on a relay with no other traffic.
-  it.each(['pending', 'delivered'] as const)('wakes a status reader when an idle %s command expires', async phase => {
+  const expiryMs = 1000
+  it.each([
+    {phase: 'pending', waitMs: 60_000, expected: 'ClientGone'},
+    {phase: 'delivered', waitMs: 60_000, expected: '404'},
+    {phase: 'pending', waitMs: expiryMs, expected: 'pending'},
+  ] as const)('answers $expected after an early expiry wake for a $phase command (wait $waitMs ms)', async ({phase, waitMs, expected}) => {
     const server = await spawnBridgeServer({
       AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
-      AGENT_RUNTIME_CLIENT_TTL_MS: '1000',
-      AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS: '1000',
-    })
+      AGENT_RUNTIME_CLIENT_TTL_MS: String(expiryMs),
+      AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS: String(expiryMs),
+    }, ['--import', fileURLToPath(new URL('./bridgeEarlyWake.mjs', import.meta.url))])
     try {
       await registerClient('alice-tab', {tokens: [{token: 'TOKEN-A'}]}, server.baseUrl)
       const headers = {authorization: 'Bearer TOKEN-A'}
@@ -368,14 +373,15 @@ describe('agent runtime bridge', () => {
         const next = await fetch(`${server.baseUrl}/runtime/commands/next?clientId=alice-tab`, {headers: bridgeHeaders})
         expect((await next.json()).commandId).toBe(id)
       }
-      expect((await statusOf(id, server.baseUrl)).status).toBe(phase)
-      const response = await fetch(`${server.baseUrl}/runtime/commands/${id}?timeoutMs=60000`, {
+      const response = await fetch(`${server.baseUrl}/runtime/commands/${id}?timeoutMs=${waitMs}`, {
         headers, signal: AbortSignal.timeout(5000),
       })
-      if (phase === 'pending') {
+      if (expected === 'ClientGone') {
         expect(await response.json()).toMatchObject({status: 'failed', result: {error: {name: 'ClientGone'}}})
-      } else {
+      } else if (expected === '404') {
         expect(response.status).toBe(404)
+      } else {
+        expect(await response.json()).toMatchObject({status: 'pending', result: null})
       }
     } finally {
       await server.stop()
