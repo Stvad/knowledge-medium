@@ -13,13 +13,13 @@ const SYNC_SCRIPT = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.ur
  * Resolve the main repository from any checkout. The sync owns its DB and
  * locking policy; this probe only chooses the shared log location.
  */
-export const resolveMainRepoRoot = ({ cwd = process.cwd() } = {}) => {
+export const resolveMainRepoRoot = ({ cwd = process.cwd(), probeTimeout = PROBE_TIMEOUT } = {}) => {
   try {
     const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: PROBE_TIMEOUT,
+      timeout: probeTimeout,
     })
     if (result?.error || result?.status !== 0) return null
     const commonDir = String(result.stdout ?? '').trim()
@@ -42,13 +42,14 @@ export const launchSessionEndSync = ({
   cwd = process.cwd(),
   syncScript = SYNC_SCRIPT,
   spawnImpl = spawn,
+  probeTimeout,
 } = {}) => {
   let root
   let logPath
   let logFd
 
   try {
-    root = resolveMainRepoRoot({ cwd })
+    root = resolveMainRepoRoot({ cwd, probeTimeout })
     if (!root) throw new Error(`could not resolve the main Git repository from ${cwd}`)
 
     logPath = syncLogPath(root)

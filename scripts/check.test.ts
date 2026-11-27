@@ -508,6 +508,9 @@ describe('loadVerdict', () => {
   it.each([
     ['tree row', ' ❯ |shared| b.test.ts (2 tests | 1 failed) 3ms'],
     ['FAIL row', ' FAIL  |shared| b.test.ts > it'],
+    // In colour (CI) vitest drops the pipes and prints the label as a badge.
+    ['coloured tree row', ' \x1b[31m❯\x1b[39m \x1b[30m\x1b[42m shared \x1b[49m\x1b[39m b.test.ts \x1b[2m(2 tests | \x1b[22m\x1b[31m1 failed\x1b[39m\x1b[2m)\x1b[22m 3ms'],
+    ['coloured FAIL row', '\x1b[41m\x1b[1m FAIL \x1b[22m\x1b[49m \x1b[30m\x1b[42m shared \x1b[49m\x1b[39m b.test.ts\x1b[2m > \x1b[22mit'],
   ])('reads a failing file behind the project label on a %s', (_row, line) => {
     const output = [line, ' Test Files  1 failed | 1 passed (2)'].join('\n')
     expect(loadVerdict(failed, { code: 1, output })).toBe('fails alone too: b.test.ts; passed alone: a.test.ts')
