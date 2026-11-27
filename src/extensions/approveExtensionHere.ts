@@ -47,7 +47,7 @@ export const approveExtensionHere = async (
         await approveExtension(blockId, pinned.source, undefined, pinned.vendored)
       } catch (error) {
         refreshAppRuntime()
-        throw new Error(`Imports were pinned, but the device approval failed: ${error instanceof Error ? error.message : error}`)
+        throw new Error(`Imports were pinned, but the device approval failed: ${error instanceof Error ? error.message : error}`, {cause: error})
       }
     } else {
       await approveExtension(blockId, liveSource)

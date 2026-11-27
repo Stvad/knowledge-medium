@@ -146,6 +146,17 @@ describe('pinned import approvals', () => {
     }
   })
 
+  it('rechecks same-source approval when its compiler version is stale', async () => {
+    const store = new InMemoryCompiledModuleCache()
+    const source = 'export default import.meta.env'
+    await store.write('old', {
+      compilerVersion: '4', approvedSource: source, sourceHash: await hashExtensionSource(source),
+      compiled: 'export default 1', approvedAt: 1,
+    })
+    await expect(approveExtension('old', source, store)).rejects.toThrow(/import.meta.url/)
+    expect((await store.read('old'))?.compilerVersion).toBe('4')
+  })
+
   it('rechecks version 4 approved source before instantiating old compiled output', async () => {
     const instantiate = vi.fn()
     const restore = setExtensionCompilePlatform({instantiate, allowUnpinnedLive: true})
