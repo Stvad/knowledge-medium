@@ -1,1 +1,0 @@
-export{bZ as staticDataExtensions}from"../../chunks/app-CRxnbHRN.js";

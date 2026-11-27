@@ -1,1 +1,0 @@
-export{d_ as contributorsPlugin}from"../../../chunks/app-CRxnbHRN.js";

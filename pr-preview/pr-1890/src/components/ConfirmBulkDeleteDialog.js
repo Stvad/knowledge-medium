@@ -1,1 +1,0 @@
-export{UB as ConfirmBulkDeleteDialog}from"../../chunks/app-CRxnbHRN.js";

@@ -1,1 +1,0 @@
-export{k1 as codeMirrorExtensionsFacet}from"../../chunks/app-CRxnbHRN.js";

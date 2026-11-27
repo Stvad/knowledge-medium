@@ -1,1 +1,0 @@
-export{BS as EmbedComponent,VS as referenceTargetOf}from"../../../../chunks/app-CRxnbHRN.js";

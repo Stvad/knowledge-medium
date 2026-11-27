@@ -1,1 +1,0 @@
-export{m1 as matchCharTrigger}from"../../chunks/app-CRxnbHRN.js";

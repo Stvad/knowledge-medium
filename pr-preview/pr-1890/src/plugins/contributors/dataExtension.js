@@ -1,1 +1,0 @@
-export{C4 as contributorsDataExtension}from"../../../chunks/app-CRxnbHRN.js";

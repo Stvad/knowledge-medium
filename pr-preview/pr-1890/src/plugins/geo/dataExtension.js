@@ -1,1 +1,0 @@
-export{P$ as geoDataExtension}from"../../../chunks/app-CRxnbHRN.js";

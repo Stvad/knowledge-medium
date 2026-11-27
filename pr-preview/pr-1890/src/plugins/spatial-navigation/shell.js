@@ -1,1 +1,0 @@
-export{wD as spatialNavigationShellDecorator}from"../../../chunks/app-CRxnbHRN.js";
