@@ -1,1 +1,1 @@
-export{$$ as geoDataExtension}from"../../../chunks/app-De-lIFbD.js";
+export{$$ as geoDataExtension}from"../../../chunks/app-CMoUDNkU.js";

@@ -1,1 +1,1 @@
-export{r6 as pluginPrefsExtension,i6 as pluginUIStateExtension}from"../../chunks/app-De-lIFbD.js";
+export{r6 as pluginPrefsExtension,i6 as pluginUIStateExtension}from"../../chunks/app-CMoUDNkU.js";

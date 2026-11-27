@@ -1,1 +1,1 @@
-export{iX as propertyShapeLabel}from"../../../chunks/app-De-lIFbD.js";
+export{iX as propertyShapeLabel}from"../../../chunks/app-CMoUDNkU.js";

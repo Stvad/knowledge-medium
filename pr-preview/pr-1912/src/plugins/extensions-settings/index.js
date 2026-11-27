@@ -1,1 +1,1 @@
-export{gv as extensionsOverridesProp,_v as extensionsPrefsType,Br as extensionsSettingsPlugin}from"../../../chunks/app-De-lIFbD.js";
+export{gv as extensionsOverridesProp,_v as extensionsPrefsType,Br as extensionsSettingsPlugin}from"../../../chunks/app-CMoUDNkU.js";

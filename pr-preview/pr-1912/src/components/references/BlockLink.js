@@ -1,1 +1,1 @@
-export{XN as BlockLink}from"../../../chunks/app-De-lIFbD.js";
+export{XN as BlockLink}from"../../../chunks/app-CMoUDNkU.js";

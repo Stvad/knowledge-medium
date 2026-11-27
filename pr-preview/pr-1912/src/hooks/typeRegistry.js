@@ -1,1 +1,1 @@
-export{kq as useTypes}from"../../chunks/app-De-lIFbD.js";
+export{kq as useTypes}from"../../chunks/app-CMoUDNkU.js";

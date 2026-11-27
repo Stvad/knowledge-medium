@@ -1,1 +1,1 @@
-export{WR as dynamicExtensionsExtension}from"../../chunks/app-De-lIFbD.js";
+export{WR as dynamicExtensionsExtension}from"../../chunks/app-CMoUDNkU.js";

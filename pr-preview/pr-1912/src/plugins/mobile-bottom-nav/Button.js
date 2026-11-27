@@ -1,1 +1,1 @@
-export{UO as MobileBottomNavButton}from"../../../chunks/app-De-lIFbD.js";
+export{UO as MobileBottomNavButton}from"../../../chunks/app-CMoUDNkU.js";
