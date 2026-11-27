@@ -1,1 +1,1 @@
-export{Irt as mergeProperties}from"../../chunks/app-DgVpU5wt.js";
+export{Irt as mergeProperties}from"../../chunks/app-D8pVVXMQ.js";

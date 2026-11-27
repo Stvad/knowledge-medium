@@ -1,1 +1,1 @@
-export{k8 as SYNCED_TABLES,O8 as guardSyncedTableWrites,A8 as syncedWriteTarget,j8 as writeTargets}from"../../chunks/app-DgVpU5wt.js";
+export{k8 as SYNCED_TABLES,O8 as guardSyncedTableWrites,A8 as syncedWriteTarget,j8 as writeTargets}from"../../chunks/app-D8pVVXMQ.js";

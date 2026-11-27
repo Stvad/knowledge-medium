@@ -1,1 +1,1 @@
-export{Ftt as loadTypeIdsByBlock}from"../../chunks/app-DgVpU5wt.js";
+export{Ftt as loadTypeIdsByBlock}from"../../chunks/app-D8pVVXMQ.js";

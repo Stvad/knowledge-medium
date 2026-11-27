@@ -1,1 +1,1 @@
-export{RR as ClientLocalSettings,zR as clientLocalSettings}from"../../chunks/app-DgVpU5wt.js";
+export{RR as ClientLocalSettings,zR as clientLocalSettings}from"../../chunks/app-D8pVVXMQ.js";
