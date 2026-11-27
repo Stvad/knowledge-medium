@@ -1,1 +1,1 @@
-export{FF as commandPaletteToggle}from"../../../chunks/app-B132I0iU.js";
+export{FF as commandPaletteToggle}from"../../../chunks/app-AWmcPxAI.js";
