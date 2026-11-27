@@ -759,6 +759,47 @@ describe.each(selectedEngines())('%s', engine => {
       expect(sourceOf(source, await latestSelection())).toBe('target')
     })
 
+    it.each(['h1', 'p'])('anchors a triple-clicked %s in a running document', async tag => {
+      const source = `<${tag} id="target">The first line</${tag}>\n<p>Second line</p>\n<p id="out"></p>` +
+        script(`document.getElementById('out').textContent = 'added'`) + script(ARMED)
+      await mount(host, 'sandboxed', source)
+      await untilReported(host, 'armed')
+      await documentFrame(host).locator('#target').click({clickCount: 3, position: {x: 20, y: 8}})
+      await vi.waitFor(async () => {
+        const selection = await host.page.evaluate(() => window.selections.at(-1))
+        expect(selection).toBeTruthy()
+        expect(selection!.digest).not.toBe(digestOf(source))
+        expect(sourceOf(source, selection!)).toBe('The first line')
+      }, {timeout: 5_000, interval: 25})
+    })
+
+    it('anchors only the selected text when the range touches adjacent text nodes', async () => {
+      const source = '<p>Before</p><p>Selected</p><p>After</p>'
+      await mountHeld(host, source)
+      await documentFrame(host).locator('p').last().evaluate(after => {
+        const before = after.previousElementSibling!.previousElementSibling!.firstChild as Text
+        const range = new Range()
+        range.setStart(before, before.length)
+        range.setEnd(after.firstChild!, 0)
+        getSelection()!.addRange(range)
+      })
+      expect(sourceOf(source, await latestSelection())).toBe('Selected')
+    })
+
+    it.each([
+      ['a visible inline space', '<p><span>word</span><span id="edge"> </span><span>next</span></p>', 'word</span><span id="edge"> '],
+      ['a preserved newline', '<pre><span>word</span><span id="edge">\n</span><span>next</span></pre>', 'word</span><span id="edge">\n'],
+    ])('keeps %s at the edge of a selection', async (_label, source, expected) => {
+      await mountHeld(host, source)
+      await documentFrame(host).locator('#edge').evaluate(edge => {
+        const range = new Range()
+        range.setStart(edge.previousElementSibling!.firstChild!, 0)
+        range.setEnd(edge.firstChild!, 1)
+        getSelection()!.addRange(range)
+      })
+      expect(sourceOf(source, await latestSelection())).toBe(expected)
+    })
+
     it('refuses text a running script repeated, rather than guess which copy', async () => {
       const prepend = script(`const copy = document.createElement('p'); copy.textContent = 'same'; document.body.prepend(copy)`)
       const source = `<p id="first">same</p><p>same</p>${prepend}${script(ARMED)}`
