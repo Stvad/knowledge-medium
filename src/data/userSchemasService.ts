@@ -10,6 +10,7 @@
  *  and the distinct public surface — `addSchema` / `appendUserSchema`
  *  and the `getSchemaBlockId` / `getSchemaForBlockId` lookups. */
 
+import {v5 as uuidv5} from 'uuid'
 import {
   ChangeScope,
   normalizePresetDefault,
@@ -20,6 +21,8 @@ import {
   type Tx,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
+import {promotedPropertyDefinitionId} from '@/data/derivedIds'
+import {derivedIdNamespaceInTx, resolveDerivedIdNamespace} from '@/data/workspaceIdNamespace'
 import type { DefinitionBlockProjector } from '@/data/projectorRuntime'
 import {
   parsePropertyDefinitionMetadata,
@@ -247,6 +250,23 @@ export const buildSchemaOrNull = (
   metadata: PropertyDefinitionMetadata,
 ): AnyPropertySchema | null => definitionSchema(row, presets, metadata).schema
 
+const projectDefinition = (row: BlockData, repo: Repo): ProjectedPropertyDefinition => {
+  const metadata = parsePropertyDefinitionMetadata(row)
+  if (!metadata) {
+    return {unparseable: {fieldId: row.id, workspaceId: row.workspaceId}}
+  }
+  let schema: AnyPropertySchema | null = null
+  try {
+    schema = tryBuildSchema(row, repo.valuePresetCores, metadata)
+  } catch (error) {
+    console.warn(
+      `[UserSchemasService] schema block ${row.id} behavior failed; publishing metadata only`,
+      error,
+    )
+  }
+  return {metadata, ...(schema ? {schema} : {})}
+}
+
 /** Descriptor wiring the schema bridge into the shared projector
  *  lifecycle. Raw `BlockData` rows (no hydrate — see `peekRowProperty`);
  *  re-resolves on `onValuePresetsChange` so a schema skipped for an
@@ -260,22 +280,7 @@ export const userSchemasProjector: DefinitionBlockProjector<
   targetFacet: projectedPropertyDefinitionsFacet,
   sourceId: USER_DATA_SOURCE_ID,
   keyOf: projectedPropertyDefinitionFieldId,
-  project: (row, ctx) => {
-    const metadata = parsePropertyDefinitionMetadata(row)
-    if (!metadata) {
-      return {unparseable: {fieldId: row.id, workspaceId: row.workspaceId}}
-    }
-    let schema: AnyPropertySchema | null = null
-    try {
-      schema = tryBuildSchema(row, ctx.repo.valuePresetCores, metadata)
-    } catch (error) {
-      console.warn(
-        `[UserSchemasService] schema block ${row.id} behavior failed; publishing metadata only`,
-        error,
-      )
-    }
-    return {metadata, ...(schema ? {schema} : {})}
-  },
+  project: (row, ctx) => projectDefinition(row, ctx.repo),
   secondarySignal: (repo, rebuild) => repo.onValuePresetsChange(rebuild),
 }
 
@@ -287,6 +292,28 @@ export interface AddSchemaArgs {
    *  `preset.defaultConfig` — `null` is a real (typically invalid)
    *  value that's passed through to the codec so it can reject. */
   config?: unknown
+}
+
+const PROMOTION_NAMESPACE = {
+  label: 'km/property-promotion-ns/v1',
+  plaintextNamespace: uuidv5('urn:knowledge-medium:property-promotion:v1', uuidv5.URL),
+}
+
+type OnSchemaCreate = (tx: Tx, fieldId: string) => Promise<void>
+
+const promotionSlot = async (tx: Tx, workspaceId: string, name: string) => {
+  // A live same-name definition at the derived id is reused with its stored codec, including before projection.
+  // A legacy random-id claimant owns the name on exactly the same terms and keeps all of its field rows.
+  const holders = (await tx.livePropertyDefinitionNames(workspaceId, [name])).get(name)
+  if (holders) return {existing: await tx.liveRowsForIds(workspaceId, holders)} as const
+
+  const namespace = await derivedIdNamespaceInTx(tx, tx.meta.user.id, workspaceId, PROMOTION_NAMESPACE)
+  for (let slot = 0; ; slot++) {
+    const id = promotedPropertyDefinitionId(namespace, workspaceId, name, slot)
+    // A tombstone reserves its slot so promotion preserves the deletion and its history.
+    // A renamed definition reserves its slot so every writer with that history advances without rebinding its fields.
+    if (await tx.get(id) === null) return {id} as const
+  }
 }
 
 /** Thin facade over the `'user-schemas'` projector. Projector lifecycle,
@@ -349,7 +376,15 @@ export class UserSchemasService {
    *  projector rebuilds each definition's behavior object per tick, and the
    *  boundary admits a plain schema only as the object it currently
    *  publishes. */
-  async addSchema(args: AddSchemaArgs, onCreate?: (tx: Tx, fieldId: string) => Promise<void>): Promise<AnyResolvedPropertySchema> {
+  addSchema(args: AddSchemaArgs, onCreate?: OnSchemaCreate): Promise<AnyResolvedPropertySchema> {
+    return this.createSchema(args, onCreate)
+  }
+
+  ensurePromotedSchema(args: AddSchemaArgs): Promise<AnyResolvedPropertySchema> {
+    return this.createSchema(args, 'promotion')
+  }
+
+  private async createSchema(args: AddSchemaArgs, creation?: OnSchemaCreate | 'promotion'): Promise<AnyResolvedPropertySchema> {
     const name = args.name.trim()
     const rejection = propertySchemaNameRejection(name)
     if (rejection) throw new Error(`[addSchema] ${rejection}`)
@@ -452,15 +487,22 @@ export class UserSchemasService {
         throw error
       }
       assertGeneration('creation')
-      assertNameAvailable()
+      if (creation === 'promotion') {
+        await resolveDerivedIdNamespace(this.repo, workspaceId, PROMOTION_NAMESPACE)
+      } else {
+        assertNameAvailable()
+      }
 
-      const childId = await this.repo.tx(async tx => {
+      const result = await this.repo.tx(async tx => {
         // Recheck after acquiring the write transaction and immediately before
         // return. A queued write must not commit against a projector generation
         // or seed/name registry that changed after the optimistic preflight.
         assertGeneration('creation')
+        const slot = creation === 'promotion' ? await promotionSlot(tx, workspaceId, name) : undefined
+        if (slot?.existing) return {existing: slot.existing}
         assertNameAvailable()
         const id = await tx.run(createChildMutator, {
+          id: slot?.id,
           parentId: propertiesPageId,
           position: {kind: 'last'},
         })
@@ -472,20 +514,23 @@ export class UserSchemasService {
         await tx.setProperty(id, propertyNameProp, name)
         await tx.setProperty(id, presetIdProp, args.presetId)
         await tx.setProperty(id, presetConfigProp, persistConfig as Record<string, unknown>)
-        await onCreate?.(tx, id)
+        if (typeof creation === 'function') await creation(tx, id)
         assertGeneration('creation')
         assertNameAvailable()
-        return id
+        return {id}
       }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
 
       assertGeneration('registration')
-      this.appendUserSchema(newSchema, childId, workspaceId)
-      const resolution = this.repo
-        .propertySchemaResolverFor(workspaceId)
-        .resolveField(childId)
+      if (result.existing) {
+        for (const row of result.existing) handle.upsert(projectDefinition(row, this.repo), row.id, workspaceId)
+      } else {
+        this.appendUserSchema(newSchema, result.id, workspaceId)
+      }
+      const resolver = this.repo.propertySchemaResolverFor(workspaceId)
+      const resolution = result.existing ? resolver.resolve(name) : resolver.resolveField(result.id)
       if (resolution.status !== 'resolved') {
         throw new Error(
-          `[addSchema] definition block ${childId} for ${JSON.stringify(name)} ` +
+          `[addSchema] definition for ${JSON.stringify(name)} ` +
           `does not resolve after registration (${resolution.reason})`,
         )
       }
