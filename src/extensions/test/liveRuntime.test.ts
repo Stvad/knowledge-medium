@@ -141,18 +141,21 @@ describe('LiveRuntimeHandle', () => {
 })
 
 /** Build a runtime carrying the given effects + an optional `labels`
- *  static value, so the reconciler can `read(appEffectsFacet)`. */
+ *  static value, so the caller can select effects from the facet. */
 const runtimeWith = (effects: readonly AppEffect[], label?: string) =>
   resolveFacetRuntimeSync([
     ...(label === undefined ? [] : [labels.of(label)]),
     ...effects.map(effect => appEffectsFacet.of(effect)),
   ])
 
+const reconcile = (reconciler: EffectReconciler, runtime: FacetRuntime, workspaceId: string, safeMode: boolean) =>
+  reconciler.reconcile(repo, runtime, workspaceId, safeMode, runtime.read(appEffectsFacet))
+
 describe('EffectReconciler', () => {
   it('starts every effect on first reconcile', () => {
     const start = vi.fn()
     const r = new EffectReconciler()
-    r.reconcile(repo, runtimeWith([{ id: 'a', start }, { id: 'b', start }]), 'ws', false)
+    reconcile(r, runtimeWith([{ id: 'a', start }, { id: 'b', start }]), 'ws', false)
     expect(start).toHaveBeenCalledTimes(2)
   })
 
@@ -163,8 +166,8 @@ describe('EffectReconciler', () => {
     const effect: AppEffect = { id: 'kept', start }
     const r = new EffectReconciler()
 
-    r.reconcile(repo, runtimeWith([effect]), 'ws', false)
-    r.reconcile(repo, runtimeWith([effect]), 'ws', false) // new runtime, same ctx
+    reconcile(r, runtimeWith([effect]), 'ws', false)
+    reconcile(r, runtimeWith([effect]), 'ws', false) // new runtime, same ctx
 
     expect(start).toHaveBeenCalledTimes(1) // NOT restarted
     expect(cleanup).not.toHaveBeenCalled()
@@ -176,10 +179,10 @@ describe('EffectReconciler', () => {
     const newStart = vi.fn()
     const r = new EffectReconciler()
 
-    r.reconcile(repo, runtimeWith([{ id: 'e', start: oldStart }]), 'ws', false)
+    reconcile(r, runtimeWith([{ id: 'e', start: oldStart }]), 'ws', false)
     // Same id, different contribution object (e.g. a live-edited plugin
     // recompiled to a new module): tear the old impl down and start the new.
-    r.reconcile(repo, runtimeWith([{ id: 'e', start: newStart }]), 'ws', false)
+    reconcile(r, runtimeWith([{ id: 'e', start: newStart }]), 'ws', false)
 
     expect(oldStart).toHaveBeenCalledTimes(1)
     expect(oldCleanup).toHaveBeenCalledTimes(1) // old impl torn down
@@ -194,8 +197,8 @@ describe('EffectReconciler', () => {
     const kept: AppEffect = { id: 'kept', start: keptStart }
 
     const r = new EffectReconciler()
-    r.reconcile(repo, runtimeWith([kept, { id: 'removed', start: removedStart }]), 'ws', false)
-    r.reconcile(repo, runtimeWith([kept, { id: 'added', start: addedStart }]), 'ws', false)
+    reconcile(r, runtimeWith([kept, { id: 'removed', start: removedStart }]), 'ws', false)
+    reconcile(r, runtimeWith([kept, { id: 'added', start: addedStart }]), 'ws', false)
 
     expect(keptStart).toHaveBeenCalledTimes(1) // survived
     expect(removedCleanup).toHaveBeenCalledTimes(1) // torn down
@@ -209,8 +212,8 @@ describe('EffectReconciler', () => {
     const effect: AppEffect = { id: 'e', start }
     const r = new EffectReconciler()
 
-    r.reconcile(repo, runtimeWith([effect]), 'ws-1', false)
-    r.reconcile(repo, runtimeWith([effect]), 'ws-2', false) // workspace switch
+    reconcile(r, runtimeWith([effect]), 'ws-1', false)
+    reconcile(r, runtimeWith([effect]), 'ws-2', false) // workspace switch
 
     expect(start).toHaveBeenCalledTimes(2)
     expect(cleanup).toHaveBeenCalledTimes(1)
@@ -219,7 +222,7 @@ describe('EffectReconciler', () => {
   it('dispose stops every running effect', () => {
     const cleanup = vi.fn()
     const r = new EffectReconciler()
-    r.reconcile(repo, runtimeWith([{ id: 'e', start: () => cleanup }]), 'ws', false)
+    reconcile(r, runtimeWith([{ id: 'e', start: () => cleanup }]), 'ws', false)
     r.dispose()
     expect(cleanup).toHaveBeenCalledTimes(1)
   })
@@ -234,22 +237,22 @@ describe('EffectReconciler', () => {
     const effect: AppEffect = { id: 'e', start }
     const r = new EffectReconciler()
 
-    r.reconcile(repo, runtimeWith([effect]), 'ws', false)
+    reconcile(r, runtimeWith([effect]), 'ws', false)
     r.dispose() // workspace cleared
     expect(cleanup).toHaveBeenCalledTimes(1)
 
-    r.reconcile(repo, runtimeWith([effect]), 'ws', false) // workspace restored
+    reconcile(r, runtimeWith([effect]), 'ws', false) // workspace restored
     expect(start).toHaveBeenCalledTimes(2) // started fresh, not resumed
   })
 
-  // The cold-vs-warm latch AppRuntimeProvider consults to decide whether to
+  // The cold-vs-warm latch AppRuntimeController consults to decide whether to
   // commit the sync base runtime (cold) or hold the current one for a
   // same-context reload (warm). Pinning the transition keeps the provider's
   // gating and the reconciler's restart-vs-diff decision from drifting apart.
   it('isColdFor: cold until a context is reconciled, warm on a same-context reload', () => {
     const r = new EffectReconciler()
     expect(r.isColdFor(repo, 'ws', false)).toBe(true) // never reconciled
-    r.reconcile(repo, runtimeWith([]), 'ws', false)
+    reconcile(r, runtimeWith([]), 'ws', false)
     expect(r.isColdFor(repo, 'ws', false)).toBe(false) // same context → warm
     expect(r.isColdFor(repo, 'ws', true)).toBe(true) // safeMode differs → cold
     expect(r.isColdFor(repo, 'ws-2', false)).toBe(true) // workspace differs → cold
@@ -263,7 +266,7 @@ describe('EffectReconciler', () => {
     const lastStart = vi.fn()
     const r = new EffectReconciler()
 
-    r.reconcile(repo, runtimeWith([
+    reconcile(r, runtimeWith([
       { id: 'dup', start: firstStart },
       { id: 'dup', start: lastStart },
     ]), 'ws', false)
@@ -280,8 +283,8 @@ describe('EffectReconciler', () => {
     const start = vi.fn(() => new Promise<() => void>(res => { resolveStart = res }))
     const r = new EffectReconciler()
 
-    r.reconcile(repo, runtimeWith([{ id: 'async', start }]), 'ws', false)
-    r.reconcile(repo, runtimeWith([]), 'ws', false) // removed before start resolved → stopped
+    reconcile(r, runtimeWith([{ id: 'async', start }]), 'ws', false)
+    reconcile(r, runtimeWith([]), 'ws', false) // removed before start resolved → stopped
 
     resolveStart(cleanup)
 
@@ -293,7 +296,7 @@ describe('EffectReconciler', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const order: string[] = []
     const r = new EffectReconciler()
-    r.reconcile(repo, runtimeWith([
+    reconcile(r, runtimeWith([
       { id: 'a', start: () => () => { order.push('a') } },
       { id: 'b', start: () => () => { order.push('b'); throw new Error('boom') } },
     ]), 'ws', false)
@@ -317,11 +320,11 @@ describe('EffectReconciler', () => {
 
     const r = new EffectReconciler()
     const first = runtimeWith([mirror], 'a')
-    r.reconcile(repo, first, 'ws', false)
+    reconcile(r, first, 'ws', false)
     expect(first.read(out)).toBe('a')
 
     const second = runtimeWith([mirror], 'b')
-    r.reconcile(repo, second, 'ws', false)
+    reconcile(r, second, 'ws', false)
 
     expect(second.read(out)).toBe('b') // re-synced to the live runtime
     expect(start).toHaveBeenCalledTimes(1) // and it was NOT restarted
