@@ -32,6 +32,23 @@ describe('parseConfig', () => {
     },
   )
 
+  const configWithPlugin = (plugin: string) => ({
+    workspaceId: 'ws-test',
+    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', runner: {executor: 'claude', allowedPlugins: [plugin]}}],
+  })
+
+  it.each(['', 'guard', 'guard@', '@local', 'guard@local@x', 'guard @local'])('rejects %j as a plugin id', plugin => {
+    const result = configSchema.safeParse(configWithPlugin(plugin))
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues).toEqual([
+      expect.objectContaining({path: ['watchers', 0, 'runner', 'allowedPlugins', 0], message: expect.stringMatching(/name@marketplace/)}),
+    ])
+  })
+
+  it('keeps a trimmed plugin id', () => {
+    expect(parseConfig(configWithPlugin(' guard@local ')).watchers[0].runner).toMatchObject({allowedPlugins: ['guard@local']})
+  })
+
   it('refuses the retired quietMs rather than ignoring a meaning that changed', () => {
     expect(() => parseConfig({
       workspaceId: 'ws-test',

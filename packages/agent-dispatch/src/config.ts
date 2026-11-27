@@ -102,6 +102,13 @@ const claudeRunnerSchema = z.strictObject({
    *  defaultAllowedTools. Empty by default, so mention tasks add no Bash
    *  and are graph-only when defaultAllowedTools is empty. */
   allowedTools: claudeToolRulesSchema.default([]),
+  /** Non-builtin plugins this watcher's runs may load, as the
+   *  `name@marketplace` source Claude reports (the `enabledPlugins` key in
+   *  runner.cwd's settings). Their tools and MCP servers still need
+   *  allowedTools / the dispatch MCP config like any other. */
+  allowedPlugins: z.array(z.string().trim().regex(/^[^@\s]+@[^@\s]+$/, {
+    message: 'Expected a plugin id as name@marketplace, such as code-guard@team-plugins.',
+  })).default([]),
 })
 
 const codexSandboxSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access'])
