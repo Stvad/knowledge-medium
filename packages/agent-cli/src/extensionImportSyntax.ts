@@ -128,6 +128,12 @@ export function readModuleIntegrity(node: StaticModuleReference): string | undef
   return integrity
 }
 
+export function recordImportPin(pins: Map<string, string>, url: string, integrity: string): void {
+  const previous = pins.get(url)
+  if (previous && previous !== integrity) throw new Error(`Conflicting integrity values for ${url}`)
+  pins.set(url, integrity)
+}
+
 export function sourcePinnedImports(ast: unknown): Map<string, string> {
   const pins = new Map<string, string>()
   for (const reference of staticModuleReferences(ast)) {
@@ -135,9 +141,7 @@ export function sourcePinnedImports(ast: unknown): Map<string, string> {
     if (!isHttpsModuleSpecifier(url) || isTypeOnlyModuleReference(reference)) continue
     const integrity = readModuleIntegrity(reference)
     if (!integrity) continue
-    const previous = pins.get(url)
-    if (previous && previous !== integrity) throw new Error(`Conflicting integrity values for ${url}`)
-    pins.set(url, integrity)
+    recordImportPin(pins, url, integrity)
   }
   return pins
 }
@@ -145,4 +149,9 @@ export function sourcePinnedImports(ast: unknown): Map<string, string> {
 /** Load the parser on demand so warm approvals without pins need no compiler. */
 export async function extensionModuleParser() {
   return (await import('@babel/parser')).parse
+}
+
+export async function parseExtensionSource(source: string, tokens = false) {
+  const parse = await extensionModuleParser()
+  return parse(source, {sourceType: 'module', plugins: ['typescript', 'jsx'], createImportExpressions: true, tokens})
 }

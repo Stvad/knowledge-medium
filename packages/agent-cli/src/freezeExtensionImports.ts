@@ -6,6 +6,8 @@ import {
   isTypeOnlyModuleReference,
   isUnsupportedImportMeta,
   literalModuleSpecifier,
+  parseExtensionSource,
+  recordImportPin,
   readModuleIntegrity,
   staticModuleReferences,
   visitModuleSyntax,
@@ -72,10 +74,9 @@ async function parseModule(bytes: Uint8Array<ArrayBuffer>) {
 
 type ModuleAst = Awaited<ReturnType<typeof parseModule>>
 
-// esm.sh's entry may forward all exports and explicitly forward the default.
-// Following anything more general could change what the original import runs.
-function esmShForwardingTarget(ast: ModuleAst, url: URL): URL | undefined {
-  if (url.origin !== 'https://esm.sh' || ast.program.directives.length > 0) return
+// Only a pure forwarding entry can be replaced without dropping initialization or changing named exports.
+function forwardingTarget(ast: ModuleAst, url: URL): {url: URL, forwardsDefault: boolean} | undefined {
+  if (ast.program.directives.length > 0) return
   const statements = ast.program.body
   const [all, named] = statements
   if (statements.length > 2 || all?.type !== 'ExportAllDeclaration' || all.attributes?.length) return
@@ -84,16 +85,25 @@ function esmShForwardingTarget(ast: ModuleAst, url: URL): URL | undefined {
     named.specifiers[0].type !== 'ExportSpecifier' || named.specifiers[0].local.type !== 'Identifier' ||
     named.specifiers[0].local.name !== 'default' ||
     named.specifiers[0].exported.type !== 'Identifier' || named.specifiers[0].exported.name !== 'default')) return
+  if (!/^(?:https:\/\/|\.{0,2}\/)/i.test(all.source.value)) return
   const target = new URL(all.source.value, url)
-  if (target.origin === url.origin && !target.username && !target.password && target.href !== url.href &&
-    all.source.value.startsWith('/') && target.pathname.endsWith('.mjs')) return target
+  if (target.origin === url.origin && !target.username && !target.password && target.href !== url.href) {
+    return {url: target, forwardsDefault: named !== undefined}
+  }
+}
+
+function exportsDefault(ast: ModuleAst): boolean {
+  return ast.program.body.some(node => node.type === 'ExportDefaultDeclaration' ||
+    (node.type === 'ExportNamedDeclaration' && node.specifiers.some(specifier =>
+      specifier.type === 'ExportSpecifier' &&
+      (specifier.exported.type === 'Identifier' ? specifier.exported.name : specifier.exported.value) === 'default')))
 }
 
 function assertSelfContained(ast: ModuleAst, url: URL): void {
   visitModuleSyntax(ast, (node, parent) => {
     if (node.type === 'ImportExpression' || isStaticModuleReference(node)) {
-      const canonical = esmShForwardingTarget(ast, url)
-      const suggestion = canonical ? ` Pin the canonical module URL (${canonical.href}).` : ''
+      const canonical = forwardingTarget(ast, url)
+      const suggestion = canonical ? ` Pin the canonical module URL (${canonical.url.href}).` : ''
       throw new Error(`${url.href} is not self-contained.${suggestion}`)
     }
     if (isUnsupportedImportMeta(node, parent)) {
@@ -140,22 +150,27 @@ export async function verifyFrozenExtensionImport(
 }
 
 async function pinModule(specifier: string) {
-  const url = httpsModuleUrl(specifier)
-  if (url.origin !== 'https://esm.sh' || url.pathname.endsWith('.mjs')) return freezeExtensionImport(url.href)
-  if (!url.searchParams.has('target')) url.search += url.search ? '&target=es2024' : '?target=es2024'
-  const bytes = await fetchModule(url)
-  const ast = await parseModule(bytes)
-  const canonical = esmShForwardingTarget(ast, url)
-  if (canonical) return freezeExtensionImport(canonical.href)
+  let url = httpsModuleUrl(specifier)
+  if (url.origin === 'https://esm.sh' && !url.pathname.endsWith('.mjs') && !url.searchParams.has('target')) {
+    url.search += url.search ? '&target=es2024' : '?target=es2024'
+  }
+  let bytes = await fetchModule(url)
+  let ast = await parseModule(bytes)
+  const canonical = forwardingTarget(ast, url)
+  if (canonical) {
+    url = canonical.url
+    bytes = await fetchModule(url)
+    ast = await parseModule(bytes)
+  }
   assertSelfContained(ast, url)
+  if (canonical && canonical.forwardsDefault !== exportsDefault(ast)) {
+    throw new Error(`Pinning ${specifier} to ${url.href} would change whether it exports default`)
+  }
   return {url: url.href, integrity: await moduleIntegrity(bytes), bytes}
 }
 
 export async function pinExtensionImports(source: string): Promise<{source: string, vendored: VendoredExtensionModules}> {
-  const {parse} = await import('@babel/parser')
-  const ast = parse(source, {
-    sourceType: 'module', plugins: ['typescript', 'jsx'], createImportExpressions: true, tokens: true,
-  })
+  const ast = await parseExtensionSource(source, true)
   visitModuleSyntax(ast, node => {
     if (node.type !== 'ImportExpression') return
     const specifier = literalModuleSpecifier(node.source)
@@ -164,6 +179,7 @@ export async function pinExtensionImports(source: string): Promise<{source: stri
     }
   })
   const modules = new Map<string, Awaited<ReturnType<typeof freezeExtensionImport>>>()
+  const pins = new Map<string, string>()
   const vendored: VendoredExtensionModules = {}
   const edits: {start: number, end: number, replacement: string}[] = []
   const tokens = ast.tokens?.filter(token => typeof token.type !== 'string') ?? []
@@ -178,6 +194,7 @@ export async function pinExtensionImports(source: string): Promise<{source: stri
       module = existingIntegrity ? await freezeExtensionImport(specifier, existingIntegrity) : await pinModule(specifier)
       modules.set(key, module)
     }
+    recordImportPin(pins, module.url, module.integrity)
     vendored[module.integrity] = module.bytes
     if (existingIntegrity) continue
     const {start, end} = node.source

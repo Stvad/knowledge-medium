@@ -926,6 +926,26 @@ describe('dynamicExtensionsExtension — gate 2 (device-local trust / #67)', () 
     }
   })
 
+  it('offers Pin imports even when the live module fails to link', async () => {
+    const source = "import 'https://cdn.example/fixture.mjs'"
+    const block = blockData({id: 'offline-import', content: source})
+    const approvalStatusReporter = vi.fn()
+    const errorReporter = vi.fn()
+    const restore = setExtensionCompilePlatform({allowUnpinnedLive: true, instantiate: async () => {
+      throw new Error('fixture offline')
+    }})
+    try {
+      await approveExtension(block.id, source, persistent)
+      await resolveFacetRuntime(loadExtensions([block], {
+        overrides: enableBlocks([block]), approvalStatusReporter, errorReporter,
+      }))
+      expect(errorReporter).toHaveBeenCalledWith(block.id, expect.objectContaining({message: 'fixture offline'}))
+      expect(approvalStatusReporter).toHaveBeenCalledWith(block.id, expect.objectContaining({kind: 'imports-unpinned'}))
+    } finally {
+      restore()
+    }
+  })
+
   it('verifyLiveSource compiles the live source directly, bypassing the approval gate', async () => {
     const restore = stubCompileByBlockId({
       'src-verify': {default: labelsFacet.of('verified')},

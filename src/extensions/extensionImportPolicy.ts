@@ -1,5 +1,5 @@
 import {
-  isHttpsModuleSpecifier, isStaticModuleReference, isTypeOnlyModuleReference, isUnsupportedImportMeta, readModuleIntegrity,
+  isHttpsModuleSpecifier, isStaticModuleReference, isTypeOnlyModuleReference, isUnsupportedImportMeta, readModuleIntegrity, recordImportPin,
   literalModuleSpecifier, moduleReference, visitModuleSyntax, type Node,
 } from '@knowledge-medium/agent-cli/extensionImportSyntax'
 
@@ -90,9 +90,7 @@ export function createExtensionImportTransform() {
               node.source.value = rewriteLive(url)
               return
             }
-            const previous = pinnedImports.get(url)
-            if (previous && previous !== integrity) throw new Error(`Conflicting integrity values for ${url}`)
-            pinnedImports.set(url, integrity)
+            recordImportPin(pinnedImports, url, integrity)
             node.source.value = vendoredImportSpecifier(integrity)
             node.attributes = []
           }

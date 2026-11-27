@@ -43,7 +43,12 @@ export const approveExtensionHere = async (
         return true
       }, {scope: ChangeScope.BlockDefault, description: 'Pin extension imports'})
       if (!written) return changed()
-      await approveExtension(blockId, pinned.source, undefined, pinned.vendored)
+      try {
+        await approveExtension(blockId, pinned.source, undefined, pinned.vendored)
+      } catch (error) {
+        refreshAppRuntime()
+        throw new Error(`Imports were pinned, but the device approval failed: ${error instanceof Error ? error.message : error}`)
+      }
     } else {
       await approveExtension(blockId, liveSource)
     }

@@ -14,7 +14,8 @@ const makeRepo = (load: Repo['load']): Repo => ({load}) as unknown as Repo
 const revision = {kind: 'needs-approval' as const, name: 'Ext', liveSource: 'SRC', liveHash: 'HASH'}
 const pinExtensionImports = vi.hoisted(() => vi.fn())
 vi.mock('@knowledge-medium/agent-cli/freezeExtensionImports', () => ({pinExtensionImports}))
-vi.mock('@/facets/runtimeEvents.js', () => ({refreshAppRuntime: vi.fn()}))
+const refreshAppRuntime = vi.hoisted(() => vi.fn())
+vi.mock('@/facets/runtimeEvents.js', () => ({refreshAppRuntime}))
 
 describe('approveExtensionHere', () => {
   beforeEach(() => {
@@ -93,6 +94,21 @@ describe('approveExtensionHere', () => {
     expect(await approveExtensionHere(repo, 'ext', {...revision, kind: 'imports-unpinned'})).toBe(false)
     expect(update).not.toHaveBeenCalled()
     expect(approveExtension).not.toHaveBeenCalled()
+  })
+
+  it('refreshes the written source when the device cannot save its approval', async () => {
+    const update = vi.fn()
+    const tx = {get: async () => ({content: 'SRC'}), update}
+    const repo = {
+      load: async () => ({content: 'SRC'}),
+      tx: (write: (arg: typeof tx) => unknown) => write(tx),
+    } as unknown as Repo
+    pinExtensionImports.mockResolvedValue({source: 'PINNED', vendored: {}})
+    approveExtension.mockRejectedValueOnce(new Error('quota exceeded'))
+    expect(await approveExtensionHere(repo, 'ext', {...revision, kind: 'imports-unpinned'})).toBe(false)
+    expect(update).toHaveBeenCalledWith('ext', {content: 'PINNED'})
+    expect(refreshAppRuntime).toHaveBeenCalledOnce()
+    expect(showError).toHaveBeenCalledWith(expect.stringContaining('Imports were pinned'))
   })
 
   it('returns false + toasts when the block is missing', async () => {

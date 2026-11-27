@@ -10,7 +10,7 @@
  * diagnostic reads this singleton.
  *
  * `pendingExtensionPrompts` is the pure reducer both surfaces share. It emits
- * EVERY pending (enabled-but-not-running) extension, tagged with whether the
+ * every pending extension approval, tagged with whether the
  * user has `dismissed` its prompt for the current source version. The two
  * surfaces then read that flag differently, which is the whole dismiss model:
  *   - the toast shows only the NON-dismissed prompts (dismiss silences the nag)
@@ -22,16 +22,8 @@ import {CallbackSet} from '@/utils/callbackSet.js'
 import type {ExtensionApprovalStatus, ExtensionApprovalStatusMap} from '@/extensions/extensionApprovalStatus.js'
 import type {DismissalMap} from './dismissals.js'
 
-export interface PendingExtensionPrompt {
+export type PendingExtensionPrompt = ExtensionApprovalStatus & {
   blockId: string
-  name: string
-  kind: ExtensionApprovalStatus['kind']
-  liveSource: string
-  /** The live source hash this prompt is about — the key a dismissal pins
-   *  to, so a later source change re-surfaces the prompt. */
-  liveHash: string
-  /** Whether the user dismissed THIS prompt (this blockId + this liveHash).
-   *  Keyed per blockId: dismissing extension A never sets B's flag. */
   dismissed: boolean
 }
 
@@ -51,10 +43,7 @@ export const pendingExtensionPrompts = (
   for (const [blockId, status] of statuses) {
     out.push({
       blockId,
-      name: status.name,
-      kind: status.kind,
-      liveHash: status.liveHash,
-      liveSource: status.liveSource,
+      ...status,
       dismissed: dismissals[blockId] === status.liveHash,
     })
   }

@@ -187,15 +187,15 @@ export const dynamicExtensionsExtension = (
     // Run the PINNED approved output — never the (possibly drifted) live
     // content. This is the #67 guarantee: a synced source change can't
     // execute here until it's explicitly re-approved on this device.
-    const loaded = await loadApprovedExtension(block.id, approval, cache, persistent)
-    if (loaded.importsUnpinned && liveHash === approval.sourceHash) {
+    const loaded = await loadApprovedExtension(block.id, approval, cache, persistent, () => {
+      if (liveHash !== approval.sourceHash) return
       approvalStatusReporter?.(block.id, {
         kind: 'imports-unpinned',
         name: extensionDisplayName(block),
         liveSource: block.content,
         liveHash,
       })
-    }
+    })
     return loaded.module
   }
 

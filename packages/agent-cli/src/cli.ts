@@ -1015,11 +1015,9 @@ cli
     options: {verify?: boolean, description?: string, allowPresetChange?: boolean},
   ) => {
     const source = await fs.readFile(file, 'utf8')
-    const [{parse}, {unpinnedExtensionImportUrls}] = await Promise.all([
-      import('@babel/parser'), import('./extensionImportSyntax.js'),
-    ])
+    const {parseExtensionSource, unpinnedExtensionImportUrls} = await import('./extensionImportSyntax.js')
     try {
-      if (unpinnedExtensionImportUrls(parse(source, {sourceType: 'module', plugins: ['typescript', 'jsx']})).length > 0) {
+      if (unpinnedExtensionImportUrls(await parseExtensionSource(source)).length > 0) {
         process.stderr.write('Warning: This extension has unpinned HTTPS imports. Run `kmagent pin-imports <file>` to pin them.\n')
       }
     } catch (error) {

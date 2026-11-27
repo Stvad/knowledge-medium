@@ -29,6 +29,7 @@
  * is exercised directly in tests via `fake-indexeddb`.
  */
 
+import type {VendoredExtensionModules} from '@knowledge-medium/agent-cli/freezeExtensionImports'
 import {IdbKeyedStore} from '@/utils/idbKeyedStore.js'
 
 export interface CompiledRecord {
@@ -47,7 +48,7 @@ export interface CompiledRecord {
   /** Transpiled JS string (Babel output) of `approvedSource`, ready for
    *  blob-URL import. This is what actually runs — the pinned output. */
   compiled: string
-  vendored?: Record<string, Uint8Array<ArrayBuffer>>
+  vendored?: VendoredExtensionModules
   importsUnpinned?: boolean
   /** The `COMPILER_VERSION` the `compiled` string was produced under. A
    *  bump invalidates the cached output (forces a recompile from

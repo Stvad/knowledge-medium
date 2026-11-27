@@ -38,7 +38,7 @@ describe('HTTPS extension freezer', () => {
   })
 
   it('refuses a response whose bytes differ from the pin', async () => {
-    stubFetch(() => new Response(`${code}\n`))
+    stubFetch(() => new Response('invalid JS {}'))
     await expect(freezeExtensionImport(url, integrity)).rejects.toThrow('SHA-256 integrity mismatch')
   })
 
@@ -146,6 +146,16 @@ describe('pinning extension source', () => {
     ])
   })
 
+  it('refuses two different digests for the same canonical URL before returning edited source', async () => {
+    let canonicalReads = 0
+    stubFetch(request => {
+      if (request.href !== canonical) return new Response(`export * from '${canonicalPath}'`)
+      return new Response(++canonicalReads === 1 ? code + '\n' : code)
+    })
+    const source = `import '${packageUrl}'; import '${canonical}' with {integrity: '${integrity}'}`
+    await expect(pinExtensionImports(source)).rejects.toThrow('Conflicting integrity values')
+  })
+
   it('leaves existing pins and type-only imports intact', async () => {
     const fetch = stubFetch(() => new Response(code))
     const source = `import 'react'\nimport type {T} from '${packageUrl}'\nimport '${url}' with /* keep */ {'integrity': '${integrity}'}`
@@ -175,6 +185,28 @@ describe('pinning extension source', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
+  it('recognizes a default exported through a named export list', async () => {
+    stubFetch(requestUrl => new Response(requestUrl.href === canonical ? `const value = 42; export {value as 'default'};` :
+      `export * from '${canonicalPath}'; export {default} from '${canonicalPath}';`))
+    await expect(pinExtensionImports(`import value from '${packageUrl}'`)).resolves.toMatchObject({
+      source: expect.stringContaining(`'${canonical}' with`),
+    })
+  })
+
+  it.each([
+    ['would expose a new default export', false, 'export default 42;'],
+    ['would drop a required default export', true, code],
+  ])('refuses an esm.sh rewrite that %s', async (_label, forwardsDefault, targetCode) => {
+    stubFetch(requestUrl => {
+      if (requestUrl.href === canonical) return new Response(targetCode)
+      const star = `export * from '${canonicalPath}';`
+      const defaultExport = forwardsDefault ? ` export {default} from '${canonicalPath}';` : ''
+      return new Response(star + defaultExport)
+    })
+    await expect(pinExtensionImports(`import * as sdk from '${packageUrl}'`))
+      .rejects.toThrow('would change whether it exports default')
+  })
+
   it('refuses a stub that aliases an export', async () => {
     const fetch = stubFetch(() => new Response(`export * from '${canonicalPath}'; export {default as value} from '${canonicalPath}';`))
     await expect(pinExtensionImports(`import '${packageUrl}'`)).rejects.toThrow('is not self-contained')
@@ -185,6 +217,53 @@ describe('pinning extension source', () => {
     const fetch = stubFetch(() => new Response(`export * from '//another.example/entry.mjs';`))
     await expect(pinExtensionImports(`import '${packageUrl}'`)).rejects.toThrow('is not self-contained')
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['an entry directive', `'use client'; export * from '${canonicalPath}';`],
+    ['extra entry code', `export * from '${canonicalPath}'; export {default} from '${canonicalPath}'; console.log('entry');`],
+    ['a named-only entry', `export {answer} from '${canonicalPath}';`],
+    ['attributes on the star export', `export * from '${canonicalPath}' with {mode: 'raw'};`],
+    ['attributes on the default export', `export * from '${canonicalPath}'; export {default} from '${canonicalPath}' with {type: 'json'};`],
+    ['distinct export targets', `export * from '${canonicalPath}'; export {default} from '/another.mjs';`],
+    ['additional named export specifiers', `export * from '${canonicalPath}'; export {default, extra} from '${canonicalPath}';`],
+    ['a namespace instead of the default', `export * from '${canonicalPath}'; export * as default from '${canonicalPath}';`],
+    ['a different binding as the default', `export * from '${canonicalPath}'; export {answer as default} from '${canonicalPath}';`],
+    ['a target username', `export * from '//user@esm.sh${canonicalPath}';`],
+    ['a target password', `export * from '//:password@esm.sh${canonicalPath}';`],
+    ['a bare module specifier', "export * from 'some-package';"],
+  ])('refuses to rewrite an esm.sh stub with %s', async (_label, entry) => {
+    const fetch = stubFetch(() => new Response(entry))
+    await expect(pinExtensionImports(`import '${packageUrl}'`)).rejects.toThrow('is not self-contained')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not suggest the same URL as the canonical replacement for a self-forwarding stub', async () => {
+    stubFetch(() => new Response(`export * from '${canonicalPath}';`))
+    await expect(freezeExtensionImport(canonical)).rejects.toThrow(/^.* is not self-contained\.$/)
+  })
+
+  it('names and pins a relative self-contained target on another CDN', async () => {
+    const entry = 'https://cdn.example/entry'
+    const target = new URL('./implementation.js', entry).href
+    stubFetch(request => new Response(request.href === entry ? "export * from './implementation.js'" : code))
+    await expect(freezeExtensionImport(entry)).rejects.toThrow(target)
+    expect((await pinExtensionImports(`import '${entry}'`)).source).toBe(`import '${target}' with {integrity: '${integrity}'}`)
+  })
+
+  it('refuses a second-hop stub before comparing its default export', async () => {
+    stubFetch(requestUrl => new Response(requestUrl.href === canonical ?
+      `export * from '/other.mjs'; export default 42;` : `export * from '${canonicalPath}';`))
+    await expect(pinExtensionImports(`import '${packageUrl}'`)).rejects.toThrow('is not self-contained')
+  })
+
+  it.each([`${packageUrl}&target=es2022`, canonical])('keeps a direct esm.sh bundle or an explicit target unchanged (%s)', async entry => {
+    const source = `import {answer} from '${entry}';`
+    const fetch = stubFetch(() => new Response(code))
+    await expect(pinExtensionImports(source)).resolves.toMatchObject({
+      source: source.replace(';', ` with {integrity: '${integrity}'};`),
+    })
+    expect(fetch.mock.calls.map(([requestUrl]) => requestUrl.href)).toEqual([entry])
   })
 
   it('refuses literal dynamic HTTPS imports before fetching', async () => {

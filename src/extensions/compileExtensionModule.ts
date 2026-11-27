@@ -1,5 +1,5 @@
 import { hex } from '@scure/base'
-import {extensionModuleParser, sourcePinnedImports} from '@knowledge-medium/agent-cli/extensionImportSyntax'
+import {extensionModuleParser, parseExtensionSource, sourcePinnedImports} from '@knowledge-medium/agent-cli/extensionImportSyntax'
 import {
   getCompiledModuleCache,
   type CompiledModuleCache,
@@ -30,7 +30,6 @@ export interface CompileResult {
    *  compiler-version salt). For an approved load this is the APPROVED
    *  source hash (the pin), not the live block content's hash. */
   contentHash: string
-  importsUnpinned?: boolean
 }
 
 /**
@@ -298,8 +297,7 @@ export async function approveExtension(
 
 async function pinnedImports(source: string) {
   if (compileImplOverride) return new Map<string, string>()
-  const parse = await extensionModuleParser()
-  return sourcePinnedImports(parse(source, {sourceType: 'module', plugins: ['typescript', 'jsx']}))
+  return sourcePinnedImports(await parseExtensionSource(source))
 }
 
 async function prepareRecord(
@@ -326,7 +324,7 @@ async function instantiateRecord(blockId: string, record: CompiledRecord): Promi
   if (record.importsUnpinned && !platform.allowUnpinnedLive) throw new Error('Unpinned HTTPS import')
   const module = compileImplOverride ? await compileImplOverride(record.approvedSource)
     : await platform.instantiate(record, blockId)
-  return {module, contentHash: record.sourceHash, importsUnpinned: record.importsUnpinned}
+  return {module, contentHash: record.sourceHash}
 }
 
 /**
@@ -348,15 +346,17 @@ export async function loadApprovedExtension(
   approval: CompiledRecord,
   cache: CompileCache = defaultCache,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
+  reportUnpinned?: () => void,
 ): Promise<CompileResult> {
-  return resolveCachedModule(cache, approval.sourceHash, blockId, async () => {
-    if (approval.compilerVersion === COMPILER_VERSION || compileImplOverride) return instantiateRecord(blockId, approval)
-    const fresh = await prepareRecord(blockId, approval.approvedSource, approval.sourceHash,
-      approval.vendored)
-    fresh.approvedAt = approval.approvedAt
-    await persistApproval(persistent, blockId, fresh)
-    return instantiateRecord(blockId, fresh)
-  })
+  let record = approval
+  if (approval.compilerVersion !== COMPILER_VERSION && !compileImplOverride) {
+    record = await prepareRecord(blockId, approval.approvedSource, approval.sourceHash, approval.vendored)
+    record.approvedAt = approval.approvedAt
+    await persistApproval(persistent, blockId, record)
+  }
+  // Keep the pin action available even if the live CDN fails during module linking.
+  if (record.importsUnpinned) reportUnpinned?.()
+  return resolveCachedModule(cache, record.sourceHash, blockId, () => instantiateRecord(blockId, record))
 }
 
 /**
