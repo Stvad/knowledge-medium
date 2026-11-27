@@ -1,1 +1,1 @@
-export{fv as extensionApiCatalog,pv as extensionApiRuntimeExports}from"../../chunks/app-BijdSol0.js";
+export{fv as extensionApiCatalog,pv as extensionApiRuntimeExports}from"../../chunks/app-B_hd0DV3.js";

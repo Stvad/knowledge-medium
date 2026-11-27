@@ -1,1 +1,1 @@
-export{Kv as appendMarkdown,qv as contentEcho,Jv as createPage,Yv as editBlock,Xv as parseAgentMarkdown,Zv as renderAppendView}from"../../../chunks/app-BijdSol0.js";
+export{Kv as appendMarkdown,qv as contentEcho,Jv as createPage,Yv as editBlock,Xv as parseAgentMarkdown,Zv as renderAppendView}from"../../../chunks/app-B_hd0DV3.js";

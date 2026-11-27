@@ -1,1 +1,1 @@
-export{Ka as appendClientRecord,qa as clientGroupId,Ja as clientSeriesQuery,Ya as updateClientRecord}from"../../../chunks/app-BijdSol0.js";
+export{Ka as appendClientRecord,qa as clientGroupId,Ja as clientSeriesQuery,Ya as updateClientRecord}from"../../../chunks/app-B_hd0DV3.js";

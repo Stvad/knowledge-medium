@@ -1,1 +1,1 @@
-export{PB as BlockTypeBlockRenderer,FB as BlockTypeContentRenderer,IB as writeBlockTypeLabel}from"../../../chunks/app-BijdSol0.js";
+export{PB as BlockTypeBlockRenderer,FB as BlockTypeContentRenderer,IB as writeBlockTypeLabel}from"../../../chunks/app-B_hd0DV3.js";

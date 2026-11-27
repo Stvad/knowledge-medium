@@ -1,1 +1,1 @@
-export{UL as ExtensionPromptSurface,WL as extensionPromptsExtension}from"../../../chunks/app-BijdSol0.js";
+export{UL as ExtensionPromptSurface,WL as extensionPromptsExtension}from"../../../chunks/app-B_hd0DV3.js";

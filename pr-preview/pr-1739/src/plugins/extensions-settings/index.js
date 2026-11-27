@@ -1,1 +1,1 @@
-export{hv as extensionsOverridesProp,gv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-BijdSol0.js";
+export{hv as extensionsOverridesProp,gv as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-B_hd0DV3.js";

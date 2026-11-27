@@ -1,1 +1,1 @@
-export{wD as spatialNavigationShellDecorator}from"../../../chunks/app-BijdSol0.js";
+export{wD as spatialNavigationShellDecorator}from"../../../chunks/app-B_hd0DV3.js";
