@@ -1,1 +1,1 @@
-export{tF as shortcutHelpToggle}from"../../../chunks/app-Cp5fxwij.js";
+export{tF as shortcutHelpToggle}from"../../../chunks/app-CXpCqTt-.js";

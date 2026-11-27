@@ -1,1 +1,1 @@
-export{Lt as WorkspaceSyncGate}from"../../../chunks/app-Cp5fxwij.js";
+export{Lt as WorkspaceSyncGate}from"../../../chunks/app-CXpCqTt-.js";

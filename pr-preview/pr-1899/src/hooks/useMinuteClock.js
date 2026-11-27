@@ -1,1 +1,1 @@
-export{Oj as useMinuteClock}from"../../chunks/app-Cp5fxwij.js";
+export{Oj as useMinuteClock}from"../../chunks/app-CXpCqTt-.js";
