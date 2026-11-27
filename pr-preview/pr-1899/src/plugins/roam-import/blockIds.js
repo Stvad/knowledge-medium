@@ -1,1 +1,1 @@
-export{bm as ROAM_IMPORT_NS,xm as roamBlockId}from"../../../chunks/app-CLsqF8IN.js";
+export{bm as ROAM_IMPORT_NS,xm as roamBlockId}from"../../../chunks/app-B132I0iU.js";
