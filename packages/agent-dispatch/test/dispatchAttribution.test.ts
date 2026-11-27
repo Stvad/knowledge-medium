@@ -57,6 +57,8 @@ beforeEach(async () => {
 })
 
 const memoryState = (): StateStore => ({
+  getRowTasks: async () => null,
+  setRowTasks: async () => {},
   getCursor: async () => null,
   setCursor: async () => {},
   getBaseline: async () => 0,
@@ -111,6 +113,17 @@ const result = (overrides: Partial<AgentRunResult>): AgentRunResult => ({
 })
 
 describe('dispatch attribution', () => {
+  it('reads the subtree and writes task properties on the exact stored id', async () => {
+    const literal = `^${MENTION}`
+    await repo.tx(tx => tx.create({id: literal, workspaceId: WS, parentId: 'page', orderKey: 'a1', content: 'Literal'}), opts)
+    const graph = createGraph(inProcessClient())
+    expect((await graph.getBlock(literal))?.id).toBe(literal)
+    expect((await graph.getSubtree(literal))[0]?.id).toBe(literal)
+    await graph.setTaskProps(literal, {status: 'running', nowMs: 1})
+    expect((await repo.load(literal))?.properties[PROPS.status]).toBe('running')
+    expect((await repo.load(MENTION))?.properties[PROPS.status]).toBeUndefined()
+  })
+
   it('accepts activity writes when the app has no activity timestamp seed', async () => {
     context = createTestAgentContext(repo, WS, [
       staticDataExtensions.filter(extension => extension !== agentDispatchCompanionDataExtension),
@@ -182,13 +195,17 @@ describe('dispatch attribution', () => {
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
   })
 
-  it('leaves them untouched when clearing a cancel no run owns', async () => {
+  it('leaves them untouched when parking a stopped spawn mention after its run disappeared', async () => {
     await writeInTab({[PROPS.status]: 'running', [PROPS.cancel]: 'requested'})
     const runTask = vi.fn(async () => result({}))
 
-    await engineFor(runTask).tick()
+    const engine = engineFor(runTask)
+    await engine.tick()
+    await engine.drain()
 
-    expect((await repo.load(MENTION))?.properties[PROPS.cancel]).toBe('')
+    expect((await repo.load(MENTION))?.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: '',
+    })
     expect(runTask).not.toHaveBeenCalled()
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
   })

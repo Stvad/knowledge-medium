@@ -4,7 +4,7 @@
  * watchers (a source block without our status property is pending), so
  * a daemon restart re-derives the queue instead of trusting a cache.
  */
-import { MAX_RUN_TIMEOUT_MS, PROPS, type TaskStatus } from './config.js'
+import { MAX_RUN_TIMEOUT_MS, PROPS } from './config.js'
 
 /** The slice of a block the pending-decision needs. */
 export interface BlockView {
@@ -32,11 +32,9 @@ export interface PendingDecision {
 const prop = (block: BlockView | undefined, key: string): unknown =>
   block?.properties?.[key]
 
-const taskStatus = (block: BlockView | undefined): TaskStatus | null => {
-  const value = prop(block, PROPS.status)
-  return value === 'queued' || value === 'running' || value === 'done' || value === 'error'
-    ? value
-    : null
+export const isTerminalTask = (source: BlockView): boolean => {
+  const status = prop(source, PROPS.status)
+  return Boolean(prop(source, PROPS.reply)) || status === 'done' || status === 'error'
 }
 
 export const taskAttempts = (block: BlockView | undefined): number => {
@@ -48,7 +46,13 @@ export const taskAttempts = (block: BlockView | undefined): number => {
  *  re-queued on the next sweep. The daemon is the only writer of these
  *  properties, so a long-stale `running` can only mean a dead run: the
  *  window outlasts the longest allowed run plus its kill and final write. */
+// A stale row retry reads any partial edits the abandoned run left in its subtree.
 export const STALE_RUNNING_MS = MAX_RUN_TIMEOUT_MS + 5 * 60_000
+
+export const hasFreshRunningClaim = (source: BlockView, nowMs: number): boolean => {
+  const updatedAt = prop(source, PROPS.updatedAt)
+  return prop(source, PROPS.status) === 'running' && typeof updatedAt === 'number' && nowMs - updatedAt < STALE_RUNNING_MS
+}
 
 /** A task is re-claimed at most this many times before it's parked as
  *  `error` — caps the requeue loop (and its bill) when something keeps
@@ -97,24 +101,20 @@ export interface PendingArgs {
  * - wait out the settle window so an edit's last write isn't missed.
  */
 export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = null, editHoldMs = 0, baselineMs}: PendingArgs): PendingDecision => {
-  if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
-
-  const status = taskStatus(source)
-  if (status === 'running') {
-    const updatedAt = prop(source, PROPS.updatedAt)
-    const age = typeof updatedAt === 'number' ? nowMs - updatedAt : Number.POSITIVE_INFINITY
-    if (age < STALE_RUNNING_MS) return {pending: false, reason: 'already-processed'}
-    if (taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
-    return {pending: true, reason: 'stale-running'}
+  if (isTerminalTask(source)) {
+    return {pending: false, reason: prop(source, PROPS.reply) ? 'is-reply' : 'already-processed'}
   }
+
+  const status = prop(source, PROPS.status)
+  if (hasFreshRunningClaim(source, nowMs)) return {pending: false, reason: 'already-processed'}
+  if (status === 'running' && taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
   // `queued` is seen-but-unclaimed: it goes through every gate below.
-  if (status && status !== 'queued') return {pending: false, reason: 'already-processed'}
 
   // Baseline gate only for UNCLAIMED blocks (a claim implies the block
   // already passed it). Unknown edit time counts as old: every real row
   // carries updated_at, and firing on "can't tell" is the direction
   // that claims — and bills — a page's entire history.
-  if (typeof baselineMs === 'number'
+  if (status !== 'running' && typeof baselineMs === 'number'
     && !(typeof source.editedAtMs === 'number' && source.editedAtMs >= baselineMs)) {
     return {pending: false, reason: 'pre-baseline'}
   }
@@ -126,7 +126,7 @@ export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = 
   }
   if (editedAgoMs < settleMs) return {pending: false, reason: 'still-typing'}
 
-  return {pending: true, reason: 'pending'}
+  return {pending: true, reason: status === 'running' ? 'stale-running' : 'pending'}
 }
 
 /** Reference fields through which the app credits a block's contributors.

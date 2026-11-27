@@ -15,9 +15,9 @@ describe('dispatch activity writes', () => {
     await graph.setActivity('source', 'km: comments', 1_000)
     await graph.setActivity('source', 'km: comments', 31_000)
     expect(runCommand.mock.calls).toEqual([
-      [{type: 'update-block', id: 'source', contributorId: null, undoable: false,
+      [{type: 'update-block', id: 'source', contributorId: null, undoable: false, exactIds: true,
         properties: {'agent:activity': 'km: comments', 'agent:activity-at': 1_000}}, undefined],
-      [{type: 'update-block', id: 'source', contributorId: null, undoable: false,
+      [{type: 'update-block', id: 'source', contributorId: null, undoable: false, exactIds: true,
         properties: {'agent:activity': 'km: comments', 'agent:activity-at': 31_000}}, undefined],
     ])
   })
