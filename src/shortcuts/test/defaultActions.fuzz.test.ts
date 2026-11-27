@@ -8,9 +8,8 @@
  * harness (fake CodeMirror view, uiStateBlock wiring) this reuses.
  *
  * What this exercises that repoMutators.fuzz.test.ts (raw mutator
- * sequences) cannot: the HANDLER layer — structural-edit policy gating
- * (scope-root protection, canIndent/canOutdent/canMergeUp), visible-
- * block walks over collapse state, split-at-cursor case analysis,
+ * sequences) cannot: the HANDLER layer — structural edit boundaries,
+ * visible-block walks over collapse state, split-at-cursor case analysis,
  * focus handoff, and selection-state writes — dispatched through
  * `invokeAction` (the real choke point, actionDispatch.ts:46-49) with
  * deps synthesized the way the UI builds them.
@@ -56,13 +55,10 @@
  *  - scope-root protection: ROOT stays live and stays put —
  *    every structural handler must refuse to RELOCATE the scope root
  *    across the surface boundary: indent / outdent / merge-away
- *    (structuralEditPolicyForBlock; blockActions.ts indent/outdent
- *    guards, split_block_cm's isScopeRoot branch,
- *    delete_empty_block_cm's canMergeUp).
+ *    (`writeList` for indent and outdent, `insertDrawnBlock` for split,
+ *    `delete_empty_block_cm` for merge).
  *
- *    Explicit DELETE of the scope root is deliberately NOT in that set:
- *    it's the page-deletion gesture, and refusing it is the regression
- *    this oracle once encoded (see structuralEditPolicy's docblock).
+ *    Explicit Delete of the scope root is the page-deletion gesture.
  *    Deleting ROOT is legal but empties the seeded tree, leaving every
  *    later op in a sequence a no-op and the structural oracles nothing
  *    to check — so it's excluded from the op stream below, the same way
@@ -82,6 +78,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
+import { Text } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -195,13 +192,14 @@ const makeSelection = (from: number, to = from) => ({
 })
 
 const fakeEditorView = (content: string, cursor: number): EditorView => {
-  let text = content
+  let doc = Text.of(content.split('\n'))
   let selection = makeSelection(Math.min(cursor, content.length))
   const view = {
     dom: document.createElement('div'),
     dispatch: (spec: {changes?: {from: number; to: number; insert: string}; selection?: unknown}) => {
       if (spec.changes) {
-        text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
+        const {from, to, insert} = spec.changes
+        doc = doc.replace(from, to, Text.of(insert.split('\n')))
       }
       const next = spec.selection
       if (next && typeof next === 'object' && 'anchor' in next) {
@@ -213,11 +211,7 @@ const fakeEditorView = (content: string, cursor: number): EditorView => {
   Object.defineProperty(view, 'state', {
     get: () => ({
       selection,
-      doc: {
-        length: text.length,
-        toString: () => text,
-        sliceString: (from: number, to = text.length) => text.slice(from, to),
-      },
+      doc,
     }),
   })
   return view as unknown as EditorView

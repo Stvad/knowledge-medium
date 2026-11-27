@@ -93,6 +93,9 @@ export type FrozenPropertySeed = readonly [
 
 export type FrozenTypeSeed = readonly [seedKey: string, id: string]
 
+/** User-created day definitions persist this preset id and an optional ref value. */
+export const FROZEN_DAY_PRESET = {id: 'day', codecType: 'ref'} as const
+
 export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/activity', 'agent:activity', 'string', 'string'],
   ['system:agent-dispatch-companion/property/activity-at', 'agent:activity-at', 'number', 'number'],
@@ -125,6 +128,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:backlinks/property/daily-note-backlinks-predicates', 'dailyNotes:backlinksPredicates', 'backlinks:predicates', 'backlinks:predicates'],
   ['system:backlinks/property/predicates', 'backlinks:predicates', 'backlinks:predicates', 'backlinks:predicates'],
   ['system:block-tagging/property/tags-config', 'blockTagging:tagsConfig', 'blockTagging:tagsConfig', 'blockTagging:tagsConfig'],
+  ['system:character-counter/property/exclude', 'char:exclude', 'string', 'string'],
   ['system:character-counter/property/limit', 'char:limit', 'optional-number', 'number'],
   ['system:character-counter/property/profile', 'char:profile', 'optional-string', 'string'],
   ['system:character-counter/property/scope', 'char:scope', 'strict-enum', 'enum'],

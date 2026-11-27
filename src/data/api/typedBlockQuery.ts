@@ -135,10 +135,12 @@ export interface TypedBlockQuery {
   readonly exclude?: readonly BlockPredicate[]
   /** Defaults to creation time ascending. Outline order requires a direct
    *  parent. A named order reads a comparable property or a virtual field.
+   *  With `target`, property names a single ref and target names the comparable
+   *  property or virtual field on its live, same-workspace target.
    *  Scalar property order places missing and wrong-shaped values
    *  last in either direction, with block id ascending as the tiebreaker. */
   readonly order?: 'created-asc' | 'created-desc' | 'outline'
-    | {readonly property: string; readonly direction: 'asc' | 'desc'}
+    | {readonly property: string; readonly direction: 'asc' | 'desc'; readonly target?: string}
 }
 
 /** Historically the "post-default-resolution" shape used internally;

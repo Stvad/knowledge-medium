@@ -1763,40 +1763,59 @@ describe('live progress streaming', () => {
     }
   })
 
-  it('streamReply: placeholder, throttled text reconciles, then the terminal reconcile — all one keyed subtree', async () => {
-    const {graph, reconciles} = fakeGraph({
-      backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] write something long'}},
-    })
-    let clock = NOW
-    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, text?: string}) => void}) => {
-      options.onEvent?.({kind: 'text', text: 'Once up'}) // t+0: first write always allowed
-      clock += 500
-      options.onEvent?.({kind: 'text', text: 'Once upon a'}) // t+500: throttled, skipped
-      clock += 1_100
-      options.onEvent?.({kind: 'text', text: 'Once upon a time'}) // t+1600: past 1.5s, writes
-      return okRun({resultText: 'Once upon a time, the end.'})
-    })
-    const engine = engineWith({
-      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true, splitReply: false}]}),
-      graph,
-      runTask, now: () => clock,
-    })
+  it('streamReply publishes a complete short message during tool work and cancels pending text at run end', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    try {
+      const {graph, reconciles, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}],
+        blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      let beforeFlush: string[] = []
+      let duringTool: string[] = []
+      const engine = engineWith({
+        config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true, splitReply: false}]}),
+        graph,
+        now: Date.now,
+        runTask: async ({onEvent}) => {
+          const parser = createStreamJsonParser(onEvent)
+          const feed = (line: object) => parser.feed(`${JSON.stringify(line)}\n`)
+          const delta = (text: string) => feed({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'text_delta', text}}})
+          delta('H')
+          await vi.advanceTimersByTimeAsync(500)
+          delta('ang on while I look this up.')
+          feed({type: 'assistant', message: {content: [{type: 'tool_use', id: 'search', name: 'WebSearch'}]}})
+          await vi.advanceTimersByTimeAsync(999)
+          beforeFlush = reconciles.map(reply => reply.markdown)
+          await vi.advanceTimersByTimeAsync(1)
+          duringTool = reconciles.map(reply => reply.markdown)
+          await vi.advanceTimersByTimeAsync(39_000)
+          feed({type: 'stream_event', event: {type: 'message_start'}})
+          delta('I found the reference.')
+          await vi.advanceTimersByTimeAsync(1_500)
+          delta(' Here is the')
+          return okRun({resultText: 'I found the reference. Here is the answer.'})
+        },
+      })
 
-    await engine.tick()
-    await engine.drain()
+      await engine.tick()
+      await engine.drain()
+      await vi.advanceTimersByTimeAsync(1_500)
 
-    // Placeholder, then throttled streamed reconciles (t+500 skipped), then
-    // the terminal reconcile — every one the SAME keyed single-block subtree
-    // (splitReply off → shape 'block'), so the reply grows in place.
-    expect(reconciles.map(r => ({markdown: r.markdown, final: r.final}))).toEqual([
-      {markdown: '💭 Claude is working…', final: false},
-      {markdown: 'Once up', final: false},
-      {markdown: 'Once upon a time', final: false},
-      {markdown: 'Once upon a time, the end.', final: true},
-    ])
-    expect(new Set(reconciles.map(r => r.replyKey))).toEqual(new Set(['reply:b-1:1']))
-    expect(reconciles.every(r => r.shape === 'block')).toBe(true)
+      expect(duringTool).toEqual(['💭 Claude is working…', 'Hang on while I look this up.'])
+      expect(beforeFlush).toEqual(['💭 Claude is working…'])
+      expect(reconciles.map(({markdown, final}) => ({markdown, final}))).toEqual([
+        {markdown: '💭 Claude is working…', final: false},
+        {markdown: 'Hang on while I look this up.', final: false},
+        {markdown: 'I found the reference.', final: false},
+        {markdown: 'I found the reference. Here is the answer.', final: true},
+      ])
+      expect(new Set(reconciles.map(r => r.replyKey))).toEqual(new Set(['reply:b-1:1']))
+      expect(reconciles.every(r => r.shape === 'block')).toBe(true)
+      expect(propWrites.at(-1)?.status).toBe('done')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('default (non-stream) watcher: no streamed reconciles, a single terminal reconcile', async () => {

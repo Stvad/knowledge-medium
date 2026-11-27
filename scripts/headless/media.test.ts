@@ -80,6 +80,7 @@ class MemoryStorage implements BlobStore {
 
 const remote = (storage: MemoryStorage): HostMediaRemote => ({
   blobStore: storage,
+  getAccessToken: async () => 'test-token',
   readLiveWorkspace: async () => { throw new Error('An encrypted upload needs no live mode read') },
 })
 

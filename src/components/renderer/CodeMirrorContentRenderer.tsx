@@ -3,12 +3,14 @@ import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef
 import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
 import { useHandle } from '@/hooks/block'
 import { isFieldValueChild } from '@/data/propertyChildren'
-import { EditorSelection } from '@codemirror/state'
-import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
+import { EditorSelection, type ChangeSet } from '@codemirror/state'
+import { ViewPlugin, type ViewUpdate } from '@codemirror/view'
+import { ExternalChange, type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { showError } from '@/utils/toast.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
-import { editorSelection, focusBlock } from '@/data/properties.js'
+import { focusBlock } from '@/data/properties.js'
 import {
   pasteArmedCut,
   pasteChordIntent,
@@ -17,7 +19,7 @@ import {
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
-import { editorPasteRequest, readClipboardContent } from '@/paste/clipboard.js'
+import { editorPasteRequest, readClipboardContent, readPasteCaret } from '@/paste/clipboard.js'
 import { flushEditorContent } from '@/editor/contentFlush.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -26,6 +28,14 @@ import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
 import { useGutterText } from './BlockGutter.js'
+
+/** Map pending paste inverses through typing so a failed write rolls back only the paste. */
+const pasteEdits = ViewPlugin.fromClass(class {
+  readonly pending = new Set<{inverse: ChangeSet}>()
+  update(update: ViewUpdate) {
+    for (const paste of this.pending) paste.inverse = paste.inverse.map(update.changes)
+  }
+})
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
@@ -62,7 +72,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, propertyValueSchema,
       childBacked: propertyDisplay.childBacked, disablePropertyFieldCompletion: blockContext.disablePropertyFieldCompletion,
       renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
-    return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
+    return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension, pasteEdits])
   }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, blockContext.disablePropertyFieldCompletion, propertyDisplay.childBacked, propertyValueSchema])
 
   // Latch the paste chord's Shift state before the paste event fires
@@ -95,48 +105,41 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // fires first; the editor always takes over the paste.
     e.preventDefault()
 
-    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`)
-    // and keys on this snapshot. Anything that awaits before the insertion (the
-    // cut check, a media capture) is followed by a re-read of the live caret
-    // below, so text lands where the caret is when it is inserted.
-    const editorView = editorRef.current?.view
-    if (!editorView) return
-    const selection = editorView.state.selection.main
-    const caret = {
-      line: editorView.state.doc.lineAt(selection.from).number,
-      lineCount: editorView.state.doc.lines,
-      from: selection.from,
-      to: selection.to,
-    }
+    const viewAtPaste = editorRef.current?.view
+    if (!viewAtPaste) return
     const renderScopeId = typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
       : undefined
-    const request = editorPasteRequest(content, block, intent, caret)
+    const surface = {scopeRootId: blockContext.scopeRootId, propertyDisplay, renderScopeId}
+
+    // The stored row lags the view by the content debounce. Both writes below
+    // need it current: the cut move reads it (a blank target is replaced), and
+    // undoing a multi-line paste restores it. Every chord, since the decision
+    // verb may split a ⌘⇧V paste; the flush takes the write lock ahead of
+    // either tx.
+    flushEditorContent(viewAtPaste)
 
     // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
     // its target's content; ⌘⇧V still asks for its plain text.
     if (intent === 'split') {
-      // The stored row lags the view by the content debounce. The move reads
-      // the stored row (a blank target is replaced), so persist the live text
-      // first: the flush takes the write lock ahead of the move's tx.
-      flushEditorContent(editorView)
-      const cutPaste = await pasteArmedCut(content.text, block, repo, {
-        scopeRootId: blockContext.scopeRootId,
-        propertyDisplay,
-      })
+      const cutPaste = await pasteArmedCut(content.text, block, repo, surface)
       if (cutPaste) {
         if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
           void focusBlock(uiStateBlock, cutPaste.blocks[0].id, {renderScopeId})
         }
         return
       }
-      if (!editorRef.current?.view) return
     }
+
+    // The cut check may have awaited. Read the destination for text paste now.
+    const editorView = editorRef.current?.view
+    if (!editorView) return
+    const request = editorPasteRequest(content, block, intent, readPasteCaret(editorView.state))
 
     // The paste verb decides how the clipboard lands; with no plugin
     // contributions this returns `defaultPasteDecision`, i.e. the previous
     // hardcoded behavior. It's a pure, synchronous policy — an override may key
-    // on the paste-time position (title line 1 vs body line 2+) but must decide
+    // on the insertion position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
     // Resolve the decision, capturing any pasted media first (async) — its `!((id))`
@@ -166,28 +169,46 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    const plan = planEditModeMultilinePaste(decision.blocks ?? pasteText, editorView.state.doc.toString(), {
+    const source = editorView.state.doc
+    const plan = planEditModeMultilinePaste(decision.blocks ?? pasteText, source.toString(), {
       from: insertAt.from,
       to: insertAt.to,
     })
     if (!plan) return
 
-    editorView.dispatch({
-      changes: {from: 0, to: editorView.state.doc.length, insert: plan.targetContent},
-      selection: EditorSelection.cursor(plan.focusOffsetInTarget),
-    })
+    // A media capture can let the editor accrue more text after the first flush.
+    flushEditorContent(editorView)
+    const edit = editorView.state.changes({from: insertAt.from, to: source.length, insert: plan.targetContent.slice(insertAt.from)})
+    const pending = {inverse: edit.invert(source)}
+    const tracker = editorView.plugin(pasteEdits)!
+    const accept = () => {
+      if (editorRef.current?.view !== editorView || editorView.state.doc !== source || !editorView.state.selection.main.eq(insertAt)) return false
+      editorView.dispatch({
+        changes: edit, selection: EditorSelection.cursor(plan.focusOffsetInTarget), annotations: ExternalChange.of(true),
+      })
+      tracker.pending.add(pending)
+      return true
+    }
+    let result
+    try {
+      result = await pasteEditModeMultilineText(plan, block, repo, surface, accept)
+    } finally {
+      if (tracker.pending.delete(pending) && !result) {
+        editorView.dispatch({changes: pending.inverse})
+        flushEditorContent(editorView)
+      }
+    }
+    if (!result) {
+      showError("Couldn't paste here. Try again.")
+      return
+    }
+    if (editorRef.current?.view !== editorView) return
 
-    const result = await pasteEditModeMultilineText(plan, block, repo, {
-      scopeRootId: blockContext.scopeRootId,
-      propertyDisplay,
+    await focusBlock(uiStateBlock, result.focusBlock.id, {
+      edit: true,
+      renderScopeId,
+      selection: {start: result.focusOffset},
     })
-    if (!result) return
-
-    await uiStateBlock.set(editorSelection, {
-      blockId: result.focusBlock.id,
-      start: result.focusOffset,
-    })
-    void focusBlock(uiStateBlock, result.focusBlock.id, {edit: true, renderScopeId})
   }
 
   return (

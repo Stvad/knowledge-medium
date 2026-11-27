@@ -19,7 +19,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
-import {readValuePresets} from '@/data/valuePresetRegistry'
+import {readValuePresets, resolveValuePresetPresentation} from '@/data/valuePresetRegistry'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import type {
@@ -73,7 +73,7 @@ const filterSuggestions = (
     if (!isPropertyPickerName(schema.name, schemas, uis, definitions)) continue
     if (q !== '' && !schema.name.toLowerCase().includes(q)) continue
     if (filterSchema && !filterSchema(schema)) continue
-    out.push({schema, preset: presets.get(schema.codec.type)})
+    out.push({schema, preset: resolveValuePresetPresentation(presets, schema)})
   }
   // Rank every match before cutting to the visible few, so a preferred name
   // is never lost to iteration order. The name typed exactly comes first:

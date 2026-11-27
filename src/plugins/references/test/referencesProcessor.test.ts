@@ -27,7 +27,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { EXTENSION_TYPE, hasSourceContent, HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, presetIdProp, propertyNameProp, typesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
@@ -275,6 +275,46 @@ describe('parseReferences — ref-typed properties', () => {
     env = await setup(refSchemaExtension)
   })
 
+  it('stamps each whole date link and its property cell in the pass that creates the note', async () => {
+    await env.h.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'none', 'children')`, [WS])
+    const owners = ['first', 'second']
+    await env.repo.tx(async tx => {
+      for (const id of owners) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: id, properties: {reviewer: 'previous'}})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    const values = await env.h.db.getAll<{id: string}>("SELECT id FROM blocks WHERE content = '((previous))'")
+    expect(values).toHaveLength(2)
+    expect(await env.read(dailyId('2026-02-03'))).toBeNull()
+    await env.repo.tx(async tx => {
+      for (const row of values) await tx.update(row.id, {content: '[[February 3rd, 2026]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    const target = dailyId('2026-02-03')
+    expect(await env.read(target)).toBeTruthy()
+    for (const row of values) {
+      expect(await env.h.db.get('SELECT reference_target_id FROM blocks WHERE id = ?', [row.id]))
+        .toEqual({reference_target_id: target})
+    }
+    for (const id of owners) expect(JSON.parse((await env.read(id))!.properties_json).reviewer).toBe(target)
+  })
+
+  it('stamps a pending date whose backlink already exists when the parse pass begins', async () => {
+    await env.repo.tx(tx => tx.create({id: 'date-source', workspaceId: WS, parentId: null, orderKey: 'a',
+      content: '[[February 3rd, 2026]]'}), {scope: ChangeScope.BlockDefault})
+    await flush()
+    const target = dailyId('2026-02-03')
+    expect(JSON.parse((await env.read('date-source'))!.references_json)).toEqual([{id: target, alias: 'February 3rd, 2026'}])
+    await env.h.db.execute('UPDATE blocks SET reference_target_id = NULL WHERE id = ?', ['date-source'])
+    await env.repo.tx(tx => tx.update('date-source', {properties: {flag: true}}), {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await env.h.db.get('SELECT reference_target_id FROM blocks WHERE id = ?', ['date-source']))
+      .toEqual({reference_target_id: target})
+  })
+
   it('projects ref and refList properties with sourceField without alias-target creation', async () => {
     await env.repo.tx(
       tx => tx.create({
@@ -474,6 +514,34 @@ describe('parseReferences — source content is not scanned for content refs', (
 })
 
 describe('parseReferences — schema-swap reprojection', () => {
+  it('retains both projected references when two retyped definitions swap names', async () => {
+    const {repo} = env
+    const names = ['first', 'second']
+    const options = {scope: ChangeScope.BlockDefault}
+    await repo.tx(async tx => {
+      for (const name of names) {
+        await tx.create({id: `definition-${name}`, workspaceId: WS, parentId: null, orderKey: name,
+          properties: {types: ['property-schema'], [propertyNameProp.name]: name, [presetIdProp.name]: 'string'}})
+      }
+    }, options)
+    await vi.waitFor(() => expect(names.map(name => repo.propertySchemas.get(name)?.codec.type)).toEqual(['string', 'string']))
+    await repo.tx(async tx => {
+      for (const [from, to] of [['first', 'second'], ['second', 'first']] as const) {
+        await tx.setProperty(`definition-${from}`, propertyNameProp, to)
+        await tx.setProperty(`definition-${from}`, presetIdProp, 'ref')
+      }
+      await tx.create({id: 'swap-source', workspaceId: WS, parentId: null, orderKey: 'source',
+        properties: {first: 'target-a', second: 'target-b'},
+        references: [
+          {id: 'target-a', alias: 'target-a', sourceField: 'first'},
+          {id: 'target-b', alias: 'target-b', sourceField: 'second'},
+        ]})
+    }, options)
+    await repo.awaitProcessors()
+    const references = JSON.parse((await env.read('swap-source'))!.references_json) as BlockReference[]
+    expect(references.map(ref => [ref.sourceField, ref.id]).sort()).toEqual([['first', 'target-a'], ['second', 'target-b']])
+  })
+
   const reviewerProp = refTestSeed('reviewer', 'ref')
   const approverProp = refTestSeed('approver', 'ref')
   // `reviewer` redefined with a NON-ref preset — the real "stopped being

@@ -20,7 +20,7 @@ import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
 import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
-import { mediaContentBase64, mimeFromFilename, readMediaFileBase64 } from './mediaFile.js'
+import { ADD_MEDIA_MIME_HELP, addMediaMime, mediaContentBase64, readMediaFileBase64 } from './mediaFile.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
   addCommentCommandSchema,
@@ -34,6 +34,7 @@ import {
   readMediaCommandSchema,
   readMediaResultSchema,
   TODO_WRITE_HELP,
+  DAY_PROPERTY_WRITE_HELP,
   toDisplayJson,
   WRITE_TARGET_HELP,
 } from './protocol.js'
@@ -62,7 +63,7 @@ The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_que
 
 Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, shown in notes as ((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them (if that name shows no Assets type, it is another page: select from block_types where type = 'media'), and backlinks shows where one is used.
 
-Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; content that links an id no live block of the workspace has is refused.
+Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; content that links an id no live block of the workspace has is refused. In create_block and update_block, calendar expressions can be used for properties that reference only daily notes. ${DAY_PROPERTY_WRITE_HELP}
 
 Contributor setup: use list_contributors and create_contributor to discover or create page-backed identities from a new MCP connection. These tools do not change this server's attribution choice; configure contributorId on GraphMcpServerOptions or AGENT_RUNTIME_CONTRIBUTOR_ID for writes.`
 
@@ -215,10 +216,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       filename: addMediaCommandSchema.shape.filename.describe(
         'The block\'s content. Required with content; a path defaults to the file\'s own name',
       ),
-      mime: addMediaCommandSchema.shape.mime.describe(
-        'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: image/svg+xml '
-        + 'for a .svg filename, else application/octet-stream, which shows as a download',
-      ),
+      mime: addMediaCommandSchema.shape.mime.describe(ADD_MEDIA_MIME_HELP),
       workspaceId: addMediaCommandSchema.shape.workspaceId,
     },
     // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
@@ -234,7 +232,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       throw new Error(`add_media needs an absolute path; got ${filePath}.`)
     }
     const name = filename || path.basename(filePath!)
-    const type = mime ?? mimeFromFilename(name)
+    const type = addMediaMime(name, mime)
     await beforeWrite({type: 'add_media', ...(filePath !== undefined ? {path: filePath} : {}), filename: name, mime: type, workspaceId})
     return json(await client.runCommand({
       type: 'add-media',

@@ -30,7 +30,11 @@ const description = seedProperty({
   seedKey: 'test:backlinks/property/description', revision: 1, name: 'backlinks-test:description',
   preset: 'string', changeScope: ChangeScope.BlockDefault,
 })
-const seeds = [related, members, description]
+const day = seedProperty({
+  seedKey: 'test:backlinks/property/day', revision: 1, name: 'backlinks-test:day',
+  preset: 'optional-ref', config: {targetTypes: ['daily-note']}, changeScope: ChangeScope.BlockDefault,
+})
+const seeds = [related, members, description, day]
 
 const scope = {scope: ChangeScope.BlockDefault}
 const args = {workspaceId: WS, id: TARGET}
@@ -184,6 +188,43 @@ describe('property value backlinks', () => {
       expect(await targetEdges()).toEqual(before)
       await vi.waitFor(() => {
         expect(list.peek()).toEqual([moved, OWNER])
+        expect(count.peek()).toBe(2)
+      })
+    } finally {
+      unsubscribeList()
+      unsubscribeCount()
+    }
+  })
+
+  it('deduplicates a day wikilink until the value is moved out of its field', async () => {
+    await repo.tx(async tx => {
+      await tx.setProperty(TARGET, aliasesProp, ['Sample target'])
+      await tx.setProperty(OWNER, day, TARGET)
+    }, scope)
+    const field = await fieldFor(day.seedKey)
+    const [legacyValue] = await childIds(field)
+    await repo.tx(tx => tx.create({
+      id: 'named-day', workspaceId: WS, parentId: field, orderKey: 'z1', content: '[[Sample target]]',
+    }), scope)
+    await repo.awaitProcessors()
+    expect((await repo.load('named-day'))?.referenceTargetId).toBe(TARGET)
+    expect((await rawMentions()).toSorted()).toEqual([legacyValue!, 'named-day', OWNER].sort())
+    const before = await targetEdges()
+
+    const list = repo.query['backlinks.forBlock'](args)
+    const count = repo.query['backlinks.countForBlock'](args)
+    const unsubscribeList = list.subscribe(() => {})
+    const unsubscribeCount = count.subscribe(() => {})
+    try {
+      await vi.waitFor(() => {
+        expect(list.peek()).toEqual([OWNER])
+        expect(count.peek()).toBe(1)
+      })
+      await repo.tx(tx => tx.move('named-day', {parentId: null, orderKey: 'a4'}), scope)
+      await repo.awaitProcessors()
+      expect(await targetEdges()).toEqual(before)
+      await vi.waitFor(() => {
+        expect(list.peek()).toEqual(['named-day', OWNER])
         expect(count.peek()).toBe(2)
       })
     } finally {

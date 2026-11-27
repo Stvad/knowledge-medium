@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import {describe, expect, it, vi} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {
   ChangeScope,
   codecs,
@@ -8,14 +8,87 @@ import {
   type AnyPropertySchema,
 } from '@/data/api'
 import type {Block} from '@/data/block'
-import {seedKeyProp, seedRevisionProp} from '@/data/properties'
+import {presetIdProp, propertyChangeScopeProp, seedKeyProp, seedRevisionProp} from '@/data/properties'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
+import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
+import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
+import {createTestRepo} from '@/data/test/createTestRepo'
 import {
   addProperty,
   deleteProperty,
   writeProperty,
 } from './actions'
+
+describe('property panel writes through a retained editor', () => {
+  let database: TestDb
+  let block: Block
+  let schema: Awaited<ReturnType<Block['repo']['userSchemas']['addSchema']>>
+
+  beforeAll(async () => { database = await createTestDb() })
+  afterAll(async () => { await database.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(database.db)
+    await database.db.execute(
+      "INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, properties_migration) VALUES ('ws', 'Test', 'user', 1, 1, 'none', 'children')",
+    )
+    const {repo} = createTestRepo({db: database.db, extensions: [], newId: () => crypto.randomUUID()})
+    repo.setActiveWorkspaceId('ws')
+    await getOrCreatePropertiesPage(repo, 'ws')
+    schema = await repo.userSchemas.addSchema({name: 'test:value', presetId: 'string'})
+    await repo.tx(tx => tx.create({
+      id: 'owner', workspaceId: 'ws', parentId: null, orderKey: 'a0', content: 'Owner',
+    }), {scope: ChangeScope.BlockDefault})
+    block = repo.block('owner')
+    await block.set(schema, 'original')
+  })
+
+  it.each(['owner deleted', 'same definition retyped', 'scope drift', 'read-only repo'])(
+    'refuses a property write after %s', async stale => {
+      const {repo} = block
+      const definition = repo.block(schema.fieldId)
+      switch (stale) {
+        case 'owner deleted':
+          await repo.tx(tx => tx.delete(block.id), {scope: ChangeScope.BlockDefault})
+          expect(await database.db.get('SELECT deleted FROM blocks WHERE id = ?', [block.id]))
+            .toEqual({deleted: 1})
+          break
+        case 'same definition retyped':
+          await definition.set(presetIdProp, 'optional-string')
+          await vi.waitFor(() => expect(repo.propertySchemas.get(schema.name)?.codec).toBe(codecs.optionalString))
+          break
+        case 'scope drift':
+          await definition.set(propertyChangeScopeProp, ChangeScope.UserPrefs)
+          await vi.waitFor(() => expect(repo.propertySchemas.get(schema.name)?.changeScope).toBe(ChangeScope.UserPrefs))
+          break
+        case 'read-only repo':
+          repo.setReadOnly(true)
+          break
+      }
+
+      const before = await database.db.getAll('SELECT * FROM blocks ORDER BY id')
+      await expect(writeProperty(block, schema, 'replacement')).resolves.toBe(false)
+      expect(await database.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+    },
+  )
+
+  it('checks read-only policy again inside the write transaction', async () => {
+    const {repo} = block
+    const transact = repo.tx.bind(repo)
+    const transaction = vi.spyOn(repo, 'tx').mockImplementationOnce((write, options) =>
+      transact(async tx => {
+        repo.setReadOnly(true)
+        return write(tx)
+      }, options))
+    try {
+      await expect(writeProperty(block, schema, 'replacement')).resolves.toBe(false)
+      expect(transaction).toHaveBeenCalledOnce()
+    } finally {
+      transaction.mockRestore()
+    }
+    expect(await block.get(schema)).toBe('original')
+  })
+})
 
 describe('property panel action visibility guards', () => {
   it('refuses every mutation path for intrinsic seed provenance fields', async () => {
@@ -38,7 +111,7 @@ describe('property panel action visibility guards', () => {
       [seedRevisionProp.name]: 3,
     }
 
-    await writeProperty(block, seedKeyProp, 'tampered/property/key')
+    await expect(writeProperty(block, seedKeyProp, 'tampered/property/key')).resolves.toBe(false)
     await deleteProperty({
       block,
       properties,
@@ -130,6 +203,8 @@ describe('property panel action visibility guards', () => {
       name: staleSchema.name,
       presetId: staleSchema.codec.type,
     })).resolves.toBeUndefined()
+
+    await expect(writeProperty(block, staleSchema, {})).resolves.toBe(false)
 
     await deleteProperty({
       block,

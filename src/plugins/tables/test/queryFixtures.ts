@@ -43,6 +43,7 @@ const contentEncode = (operand: unknown) => {
 export const resolver: QueryResolver = {
   propertyByName: name => PROPERTIES.find(p => p.name === name),
   propertyById: id => PROPERTIES.find(p => p.fieldId === id),
+  refValueTarget: () => undefined,
   typeByLabel: label => TYPES.find(t => t.label.toLowerCase() === label.toLowerCase()),
   typeById: id => TYPES.find(t => t.id === id),
   field: name => name === 'created' || name === 'updated' ? {kind: 'instant'}

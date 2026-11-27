@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { childrenViewFacet, surfaceOwnerFacet } from '@/data/childrenView'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { isCollapsedProp } from '@/data/properties'
@@ -64,6 +67,106 @@ const childContents = async (parentId: string): Promise<string[]> => {
 }
 
 describe('pasteMultilineText', () => {
+  it('uses the target occurrence to distinguish a drawn child from a hidden one', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    await createBlock('child', 'Child', 'target', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      childrenViewFacet.of(({parent, surface}) => parent.id === 'target' && surface.renderScopeId !== 'outline'
+        ? {id: 'test.filtered', read: () => ({load: async () => []})}
+        : null),
+    ]))
+
+    const target = env.repo.block('target')
+    await pasteMultilineText('Child paste', target, env.repo, {scopeRootId: 'root', renderScopeId: 'outline'})
+    await pasteMultilineText('Sibling paste', target, env.repo, {scopeRootId: 'root', renderScopeId: 'filtered'})
+    await pasteMultilineText('Programmatic paste', target, env.repo, {scopeRootId: 'root'})
+
+    expect(await childContents('target')).toEqual(['Programmatic paste', 'Child paste', 'Child'])
+    expect(await childContents('root')).toEqual(['Target', 'Sibling paste', 'Next'])
+  })
+
+  it('keeps the paste unapplied if the target moves while its drawn list loads', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('old-parent', 'Old parent', 'root', 'a0')
+    await createBlock('new-parent', 'New parent', 'root', 'a1')
+    await createBlock('target', '', 'old-parent', 'a0')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      childrenViewFacet.of(({parent}) => parent.id === 'target'
+        ? {id: 'test.stale', read: () => ({load: async () => {
+          await env.repo.mutate.move({id: 'target', parentId: 'new-parent', position: {kind: 'first'}})
+          return []
+        }})}
+        : null),
+    ]))
+
+    const pasted = await pasteMultilineText('First\nSecond', env.repo.block('target'), env.repo,
+      {scopeRootId: 'root', renderScopeId: 'outline'})
+
+    expect(pasted).toHaveLength(0)
+    expect(await childContents('old-parent')).toEqual([])
+    expect(await childContents('new-parent')).toEqual([''])
+    expect(await childContents('target')).toEqual([])
+  })
+
+  it('refuses a paste when the target’s parent moves out of the projected result', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('projection', 'Projection', 'root', 'a0')
+    await createBlock('source', 'Source', 'root', 'a1')
+    await createBlock('result', 'Result', 'source', 'a0')
+    await createBlock('note-parent', 'Note parent', 'result', 'a0')
+    await createBlock('target', '', 'note-parent', 'a0')
+    const outline = outlineSurfaceOf({scopeRootId: 'root', renderScopeId: 'outline'})!
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      surfaceOwnerFacet.of(({renderScopeId}) => renderScopeId === 'projection-scope'
+        ? {blockId: 'projection', surface: outline}
+        : null),
+      childrenViewFacet.of(({parent}) => {
+        if (parent.id === 'projection') return {id: 'test.projection', read: () => ({load: async () => [
+          {kind: 'nested-surface', renderScopeId: 'projection-scope', members: ['result']},
+        ]})}
+        if (parent.id !== 'target') return null
+        return {id: 'test.stale', read: () => ({load: async () => {
+          await env.repo.mutate.move({id: 'note-parent', parentId: 'source', position: {kind: 'last'}})
+          return []
+        }})}
+      }),
+    ]))
+
+    const pasted = await pasteMultilineText('First\nSecond', env.repo.block('target'), env.repo,
+      {scopeRootId: 'result', renderScopeId: 'projection-scope'})
+
+    expect(pasted).toHaveLength(0)
+    expect(await childContents('source')).toEqual(['Result', 'Note parent'])
+    expect(await childContents('note-parent')).toEqual([''])
+  })
+
+  it('keeps a deleted target untouched when deletion lands during the drawn read', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', '', 'root', 'a0')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      childrenViewFacet.of(({parent}) => parent.id === 'target'
+        ? {id: 'test.deleted', read: () => ({load: async () => {
+          await env.repo.mutate.delete({id: 'target'})
+          return []
+        }})}
+        : null),
+    ]))
+
+    const pasted = await pasteMultilineText('Pasted', env.repo.block('target'), env.repo,
+      {scopeRootId: 'root', renderScopeId: 'outline'})
+
+    expect(pasted).toHaveLength(0)
+    expect(await childContents('root')).toEqual([])
+    expect(await env.h.db.getOptional('SELECT content, deleted FROM blocks WHERE id = ?', ['target']))
+      .toMatchObject({content: '', deleted: 1})
+  })
+
   it('uses an empty target block as the first pasted root', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('empty', '', 'root', 'a0')
@@ -410,6 +513,21 @@ describe('pasteResolvedDecision', () => {
 })
 
 describe('pasteEditModeMultilineText', () => {
+  it('keeps a newer stored edit when the editor paste was planned against old text', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Original', 'root', 'a0')
+    const target = env.repo.block('target')
+    const plan = planEditModeMultilinePaste('First\nSecond', 'Original', {from: 8})!
+    await target.setContent('New edit')
+
+    const result = await pasteEditModeMultilineText(plan, target, env.repo,
+      {scopeRootId: 'root', renderScopeId: 'outline'})
+
+    expect(result).toBeNull()
+    expect(await childContents('root')).toEqual(['New edit'])
+    expect(await childContents('target')).toEqual([])
+  })
+
   it('merges the first line at the caret and moves the suffix to the last pasted block', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'hello world', 'root', 'a0')

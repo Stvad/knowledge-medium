@@ -1,5 +1,5 @@
 import * as chrono from 'chrono-node'
-import { formatIsoDate, formatRoamDate } from '@/utils/dailyPage'
+import { formatIsoDate, formatRoamDate, isoFromRoamDate, parseIsoDay } from '@/utils/dailyPage'
 
 export interface ParsedRelativeDate {
   iso: string
@@ -119,20 +119,11 @@ export const relativeDateCandidates = (
  * pulled every historical `[[today]]` / `[[now]]` / `[[friday]]` into
  * the *current* day's backlinks after a re-import.
  *
- * Implementation: parse via `parseRelativeDate`, then verify the input
- * roundtrips through one of the two canonical formatters. Anything
- * that chrono *could* parse (relative or fuzzy) but that isn't already
- * in canonical form is rejected — including malformed-but-coercible
- * literals like "2026-13-01" (chrono would happily reinterpret).
+ * Both spellings must round-trip exactly so a typo cannot make an ordinary page a daily note.
  */
-export const parseLiteralDailyPageTitle = (
-  input: string,
-  now: Date = new Date(),
-): ParsedRelativeDate | null => {
-  const parsed = parseRelativeDate(input, now)
-  if (!parsed) return null
-  const trimmed = input.trim()
-  if (trimmed === parsed.iso) return parsed
-  if (trimmed === formatRoamDate(parsed.date)) return parsed
-  return null
+export const parseLiteralDailyPageTitle = (input: string): ParsedRelativeDate | null => {
+  const text = input.trim()
+  const iso = isoFromRoamDate(text) ?? text
+  const date = parseIsoDay(iso)
+  return date && (text === iso || text === formatRoamDate(date)) ? {iso, date} : null
 }

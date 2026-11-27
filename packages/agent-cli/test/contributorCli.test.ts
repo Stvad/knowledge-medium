@@ -77,7 +77,7 @@ const startStubBridge = async (): Promise<StubBridge> => {
         }
         return send(202, {id})
       }
-      const commandMatch = req.method === 'GET' && req.url?.match(/^\/runtime\/commands\/([^/]+)$/)
+      const commandMatch = req.method === 'GET' && new URL(req.url!, 'http://localhost').pathname.match(/^\/runtime\/commands\/([^/]+)$/)
       if (commandMatch) {
         const id = decodeURIComponent(commandMatch[1]!)
         return send(200, {
@@ -158,6 +158,18 @@ describe('compiled CLI contributor commands', {timeout: 120_000}, () => {
     const sent = bridge.commands.find(command => command.type === 'add-media')
     expect(sent).toMatchObject({base64: Buffer.from([1, 2, 255]).toString('base64'), filename: 'notes.txt', mime: 'text/plain', workspaceId: 'ws-1'})
     expect(stdout).toContain('((media-1))')
+  })
+
+  it('add-media types an .svg as an image without --mime', async () => {
+    const file = path.join(tempDir, 'pic.svg')
+    await fs.writeFile(file, '<svg/>')
+    await runCli(['--contributor', 'none', 'add-media', file])
+    await runCli(['--contributor', 'none', 'add-media', file, '--mime', 'text/plain'])
+
+    expect(bridge.commands.filter(command => command.type === 'add-media')).toMatchObject([
+      {filename: 'pic.svg', mime: 'image/svg+xml'},
+      {filename: 'pic.svg', mime: 'text/plain'},
+    ])
   })
 
   it('add-media refuses a --filename the parser has turned into a number', async () => {

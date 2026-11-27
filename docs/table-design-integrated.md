@@ -137,7 +137,7 @@ Engine additions on the typed query (read: none exists today):
 3. `propertyChildren: 'none'`, reusing `NOT_PROPERTY_ROW_SQL`. Smallish: that SQL is private to the kernel queries and its parameters must be threaded through the compiler.
 4. `limit` on the ids query.
 
-**What sorts in v1.** Columns whose codec is comparable in SQL: string, number, boolean, date, enum (by value, not option order) and url. Text sorts case-insensitively (`COLLATE NOCASE`); accented letters still sort by code point, after `z`. Reference, list and row-content columns do not sort until the engine learns them.
+**Sortable columns.** SQL compares strings, numbers, booleans, dates, enums (by stored value), and URLs. Text sorts case-insensitively (`COLLATE NOCASE`), with accented letters retaining code-point order. A single-valued reference can sort by a property contributed by its target type, such as the date of a daily note. When a reference allows several types, every type must contribute the same comparable property.
 
 v1 fetches every matching id up to a cap, with a visible "narrow the query" notice. At 5000 rows a SQL sort took 8 to 19 ms and a filter 4 to 6 ms with no index (measured, through plugin SQL, not through the engine).
 

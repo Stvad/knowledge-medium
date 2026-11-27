@@ -1,16 +1,17 @@
-import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { ChangeScope, propertyValue, type AnyPropertyAssignment, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
+import { prepareTypeTags } from '@/data/typeTagger'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
-import { aliasesProp, hasBlockType } from '@/data/properties'
+import { aliasesProp, getAliases, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
+import { createOrRestoreTargetBlock, partitionClaimableAliases, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
-import { decodeRowProperty } from '@/data/rowProperty'
-import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
+import { decodeRowProperty, safeDecodeRowProperty } from '@/data/rowProperty'
+import { formatRoamDate, formatIsoDate, isIsoDayShape, isValidIsoDay } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
 
 /** Build the indexable `Date` stored on `dailyNoteDateProp`. The
@@ -36,6 +37,9 @@ export const dailyNoteDateValue = (iso: string): Date => {
   }
   return d
 }
+
+export const dailyNoteTitle = (iso: string): string =>
+  formatRoamDate(dailyNoteDateValue(iso), 'UTC')
 
 // Namespace UUIDs — fixed constants so two clients computing the same
 // (workspaceId, isoDate) pair derive the same block id even before any
@@ -78,17 +82,9 @@ const dailyNoteCreatedAt = (iso: string): number => {
 }
 
 export const addDaysIso = (iso: string, days: number): string => {
-  const {year, month, day} = parseIsoParts(iso)
-  return formatIsoDate(new Date(year, month - 1, day + days))
-}
-
-// Build the Date used to render display aliases. Uses local-midnight
-// of the same calendar day so dailyPageAliases — which reads
-// .getDate() / .getMonth() in local TZ — produces "April 28th, 2026"
-// for iso="2026-04-28" regardless of the user's timezone.
-const dailyNoteLocalDate = (iso: string): Date => {
-  const {year, month, day} = parseIsoParts(iso)
-  return new Date(year, month - 1, day)
+  const date = dailyNoteDateValue(iso)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().split('T')[0]!
 }
 
 const stringListProperty = (value: unknown): string[] =>
@@ -99,7 +95,11 @@ const stringListProperty = (value: unknown): string[] =>
 const includesAll = (existing: readonly string[], expected: readonly string[]): boolean =>
   expected.every(value => existing.includes(value))
 
-const mergeStrings = (values: readonly string[]): string[] => Array.from(new Set(values))
+const appendMissing = (held: readonly string[], required: readonly string[]): string[] =>
+  [...held, ...required.filter(item => !held.includes(item))]
+
+const canExtendLiveAliases = (held: readonly string[], claimable: readonly string[]): boolean =>
+  claimable.length > held.length && includesAll(claimable, held)
 
 /** Get-or-create the workspace's Journal page.
  *
@@ -135,144 +135,96 @@ const dailyNoteOrderKey = (iso: string): string => {
   return `${reverseYear}-${reverseMonth}-${reverseDay}`
 }
 
-/** Get-or-create today's daily note. Two clients calling concurrently
- *  with the same (workspaceId, iso) write to the same row, so the
- *  daily note never duplicates even when both are offline at boot.
- *
- *  On a soft-deleted row we resurrect rather than recreate from
- *  scratch — the row's content + descendant subtree may carry edits
- *  the user wants back. We also re-link to the journal because the
- *  resurrected row's parent_id may have drifted; `tx.move` sets it
- *  cleanly.
- *
- *  Runs under `repo.undoGroup`: journal bootstrap + note create/repair
- *  can be two txs — one undo entry for the pair, for every caller
- *  (callers handing us their own group facade fold us into theirs).
- *
- *  NOT a kernel page, though it looks like one and the Journal above IS
- *  one. The difference is that this row has a SECOND writer at the same
- *  derived id: `ensureDailyNoteTarget` materialises it seat-shaped at
- *  workspace root (content = iso, aliases = [iso]) when a `[[2026-07-24]]`
- *  reference resolves before anyone opened the day. So the "repair" branch
- *  below is not maintenance — it is the promotion of a seat-shaped row into
- *  a note-shaped one, which is why it checks `parentId`/`orderKey` and
- *  MERGES aliases rather than replacing them. A kernel page has one writer
- *  and one shape and can never grow those checks, so folding this into
- *  `getOrCreateKernelPage` would park seat-reconciliation behind a flag its
- *  other callers can't reach. */
+const dailyNoteShape = (workspaceId: string, iso: string) => {
+  const date = dailyNoteDateValue(iso)
+  const title = dailyNoteTitle(iso)
+  return {id: dailyNoteBlockId(workspaceId, iso), date, title, aliases: [title, iso], orderKey: dailyNoteOrderKey(iso)}
+}
+
+type DailyNoteShape = ReturnType<typeof dailyNoteShape>
+
+const checkNoteWorkspace = (row: BlockData, workspaceId: string) => {
+  if (classifyOccupant(row, {workspaceId}).verdict === 'foreign') {
+    throw new DeterministicIdCrossWorkspaceError(row.id, row.workspaceId, workspaceId)
+  }
+}
+
+const noteIsReady = (row: BlockData, shape: DailyNoteShape, parentId: string | null) =>
+  row.parentId === parentId && row.orderKey === shape.orderKey &&
+  hasBlockType(row, PAGE_TYPE) && hasBlockType(row, DAILY_NOTE_TYPE) &&
+  includesAll(stringListProperty(row.properties[aliasesProp.name]), shape.aliases) &&
+  row.properties[dailyNoteDateProp.name] === shape.date.toISOString()
+
+/** A property write may precede eager Journal bootstrap. A note can live at
+ *  the root until navigation files it. Minting the shared Journal inside the
+ *  property edit would let undo remove a container used by other devices.
+ *  Undo can tombstone a newly created note with later synced children; reopening the day reveals them.
+ *  The canonical note can exist even when another page owns its date alias. */
+export const getOrCreateDailyNoteInTx = async (
+  tx: Tx, snapshot: TypeRegistrySnapshot, workspaceId: string, iso: string,
+): Promise<string> => {
+  const shape = dailyNoteShape(workspaceId, iso)
+  const {id, date, title, aliases, orderKey} = shape
+  const journal = await tx.get(journalBlockId(workspaceId))
+  if (journal) checkNoteWorkspace(journal, workspaceId)
+  const parentId = journal && !journal.deleted ? journal.id : null
+  const existing = await tx.get(id)
+  if (existing) {
+    checkNoteWorkspace(existing, workspaceId)
+    if (noteIsReady(existing, shape, parentId) && !existing.deleted) return id
+    const storedDate = existing.properties[dailyNoteDateProp.name]
+    if (storedDate !== undefined && storedDate !== date.toISOString()) {
+      throw new Error(`Cannot use the daily note for ${iso}: its stored date differs`)
+    }
+  }
+  if (existing) {
+    if (existing.deleted) {
+      const properties = await restorePropertiesStrippingAliases(tx, id)
+      await tx.restore(id, {properties})
+    }
+    if (existing.parentId !== parentId || existing.orderKey !== orderKey) {
+      await tx.move(id, {parentId, orderKey}, {skipMetadata: true})
+    }
+  } else {
+    await tx.create({id, workspaceId, parentId, orderKey, content: title}, {systemMint: true})
+  }
+  const tags = (await prepareTypeTags(tx, snapshot, id, [PAGE_TYPE, DAILY_NOTE_TYPE]))!
+  const heldAliases = existing ? decodeRowProperty(existing, aliasesProp) : []
+  const live = existing && !existing.deleted
+  const set: AnyPropertyAssignment[] = []
+  if (!live || tags.changed) set.push(tags.assignment)
+  if (!live || !includesAll(heldAliases, aliases)) {
+    const wanted = appendMissing(heldAliases, aliases)
+    const claimable = await partitionClaimableAliases(tx, id, wanted, workspaceId)
+    if (!live || canExtendLiveAliases(heldAliases, claimable)) {
+      set.push(propertyValue(aliasesProp, claimable))
+    }
+  }
+  if (!live || existing.properties[dailyNoteDateProp.name] === undefined) {
+    set.push(propertyValue(dailyNoteDateProp, date))
+  }
+  // Conversion runs after the materializer, so create the new note's value children here.
+  if (set.length) await tx.setProperties(id, {set})
+  return id
+}
+
+/** Daily notes reconcile speculative date seats. Keep that policy outside getOrCreateKernelPage.
+ *  The Journal bootstraps outside the undoable note edit. A fully shaped
+ *  live note is a read-only fast path, including when reopened offline. */
 export const getOrCreateDailyNote = async (
-  repo: Repo,
-  workspaceId: string,
-  iso: string,
-  /** Describes the note's own create / repair txs (the agent bridge marks its
-   *  writes this way); the Journal bootstrap keeps its own. */
-  {description}: {description?: string} = {},
+  repo: Repo, workspaceId: string, iso: string, {description}: {description?: string} = {},
 ): Promise<Block> => repo.undoGroup(async repo => {
-  const id = dailyNoteBlockId(workspaceId, iso)
-  const orderKey = dailyNoteOrderKey(iso)
-  const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
-  const dailyAliases = [longLabel, isoLabel]
-  const dateValue = dailyNoteDateValue(iso)
-
-  /** Same guard, and the same reasoning, as `getOrCreateKernelPage`'s: neither
-   *  read below is workspace-scoped (`repo.load` and `tx.get` both select on id
-   *  alone), and what they feed rewrites aliases and types, resurrects
-   *  tombstones, and — uniquely here — `tx.move`s the row under THIS
-   *  workspace's Journal, which would tear a page out of someone else's tree.
-   *
-   *  Worth being honest about reachability, because it differs from the kernel
-   *  page's by which half: `DAILY_NOTE_NS` is app-owned and the key already
-   *  carries the workspace, so a foreign occupant at rest needs a uuid
-   *  collision or a hand-written id. The window between `repo.load` and the
-   *  transaction is not hypothetical though — sync materialization rewrites
-   *  `workspace_id` along with every other column, so the row can change hands
-   *  mid-call whatever the namespace. */
-  const refuseForeign = (occupant: BlockData): void => {
-    if (classifyOccupant(occupant, {workspaceId}).verdict === 'foreign') {
-      throw new DeterministicIdCrossWorkspaceError(id, occupant.workspaceId, workspaceId)
-    }
-  }
-
-  const live = await repo.load(id)
+  const shape = dailyNoteShape(workspaceId, iso)
+  const live = await repo.load(shape.id)
   if (live) {
-    refuseForeign(live)
-    const aliases = stringListProperty(live.properties[aliasesProp.name])
-    const needsRepair =
-      live.parentId !== journalBlockId(workspaceId) ||
-      live.orderKey !== orderKey ||
-      !hasBlockType(live, PAGE_TYPE) ||
-      !hasBlockType(live, DAILY_NOTE_TYPE) ||
-      !includesAll(aliases, dailyAliases)
-    if (!needsRepair) {
-      return repo.block(id)
-    }
-    const journal = await getOrCreateJournalBlock(repo, workspaceId)
-    const typeSnapshot = repo.snapshotTypeRegistries()
-    await repo.tx(async tx => {
-      const current = await tx.get(id)
-      if (!current || current.deleted) return
-      refuseForeign(current)
-      const currentAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(currentAliases, dailyAliases)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
-      }
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await repo.addTypeInTx(
-        tx, id, DAILY_NOTE_TYPE,
-        {[dailyNoteDateProp.name]: dateValue},
-        typeSnapshot,
-      )
-      if (current.parentId !== journal.id || current.orderKey !== orderKey) {
-        await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
-      }
-    }, {scope: ChangeScope.BlockDefault, description})
-    return repo.block(id)
+    checkNoteWorkspace(live, workspaceId)
+    if (noteIsReady(live, shape, journalBlockId(workspaceId))) return repo.block(shape.id)
   }
-
-  const journal = await getOrCreateJournalBlock(repo, workspaceId)
-
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  await repo.tx(async tx => {
-    const existing = await tx.get(id)
-    if (existing) refuseForeign(existing)
-    if (existing && !existing.deleted) return
-    if (existing && existing.deleted) {
-      // The tombstone's stored alias bag can hold an entry a different
-      // live block claimed while the daily note was dead (issue #378) —
-      // restoring it as-is would re-insert that stale claim and abort
-      // the whole tx. Strip it here; the setProperty below re-claims
-      // exactly the canonical long-form + ISO aliases.
-      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: longLabel, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, dailyAliases)
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await repo.addTypeInTx(
-        tx, id, DAILY_NOTE_TYPE,
-        {[dailyNoteDateProp.name]: dateValue},
-        typeSnapshot,
-      )
-      // Re-parent under the journal in case the prior tombstoned row
-      // had drifted. tx.move sets parent_id + order_key in one
-      // primitive (with engine cycle check on parent_id mutation).
-      await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
-      return
-    }
-    await tx.create({
-      id,
-      workspaceId,
-      parentId: journal.id,
-      orderKey,
-      content: longLabel,
-    }, {systemMint: true})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-    await repo.addTypeInTx(
-      tx, id, DAILY_NOTE_TYPE,
-      {[dailyNoteDateProp.name]: dateValue},
-      typeSnapshot,
-    )
-  }, {scope: ChangeScope.BlockDefault, description})
-
-  return repo.block(id)
+  await getOrCreateJournalBlock(repo, workspaceId)
+  const snapshot = repo.snapshotTypeRegistries()
+  await repo.tx(tx => getOrCreateDailyNoteInTx(tx, snapshot, workspaceId, iso),
+    {scope: ChangeScope.BlockDefault, description})
+  return repo.block(shape.id)
 })
 
 // `dailyNoteCreatedAt` retained for callers that need a stable wall-
@@ -286,8 +238,7 @@ export {dailyNoteCreatedAt}
  *  (e.g. extracting the iso from a daily-note's alias list) and the
  *  caller will tolerate a malformed-but-shaped result. Routing
  *  decisions (references processor) use `isValidDateAlias` instead. */
-export const isDateAlias = (alias: string): boolean =>
-  /^\d{4}-\d{2}-\d{2}$/.test(alias)
+export const isDateAlias = isIsoDayShape
 
 /** Shape + calendar-validity check. Returns `true` only for strings
  *  that parse to a real calendar day (rejects `2026-13-01`,
@@ -298,34 +249,18 @@ export const isDateAlias = (alias: string): boolean =>
  *  shape check fall through to `ensureAliasTarget` (regular alias
  *  target page) so the user's typo doesn't pollute the daily-note
  *  namespace with a wrong-but-deterministic seat. */
-export const isValidDateAlias = (alias: string): boolean => {
-  if (!isDateAlias(alias)) return false
-  const ms = Date.parse(`${alias}T00:00:00Z`)
-  if (Number.isNaN(ms)) return false
-  return new Date(ms).toISOString().slice(0, 10) === alias
-}
+export const isValidDateAlias = isValidIsoDay
 
-/** "Which daily note is this?" from a block's alias list — the ISO alias
- *  `getOrCreateDailyNote` writes via `dailyPageAliases`, or `null` for a block
- *  that isn't a daily note. The one definition of that read, shared by the
- *  prev/next keyboard actions (which peek it off a Block) and the title
- *  date-nav arrows (which get it from a reactive `aliases` hook).
- *
- *  `isValidDateAlias`, NOT `isDateAlias`: a date-SHAPED alias that isn't a
- *  calendar day (`2026-02-30`) belongs to an ordinary alias-target page — the
- *  references processor routes it to `ensureAliasTarget` precisely because
- *  `parseLiteralDailyPageTitle` rejects it. Treating such an alias as the
- *  block's date hands a normal page the daily-note affordances, and
- *  `addDaysIso` then reads it as March 2nd — so "previous day" lands on
- *  2026-03-01, forward by a month. Callers fall back to today instead, the
- *  same as on any other non-daily page.
- *
- *  Deliberately NOT a `DAILY_NOTE_TYPE` check: the ISO alias is the marker
- *  every daily-note writer sets, and gating on the type instead would couple
- *  these read paths to type-tagging having reached every historical row. */
+/** Legacy notes can have only an ISO alias. Validate the calendar day so February 30 cannot roll over to March 2. */
 export const dailyNoteIsoFromAliases = (
   aliases: readonly string[],
 ): string | null => aliases.find(isValidDateAlias) ?? null
+
+/** A canonical note can yield its ISO alias to another page. Its UTC anchor still identifies the day. */
+export const dailyNoteIsoFromRow = (row: Pick<BlockData, 'properties'> | null | undefined): string | null => {
+  if (!row) return null
+  return safeDecodeRowProperty(row, dailyNoteDateProp)?.toISOString().slice(0, 10) ?? dailyNoteIsoFromAliases(getAliases(row))
+}
 
 /** Ensure a daily-note **target seat** block exists for ISO date `date`
  *  in `workspaceId`. The seat is a reference target materialised at
@@ -393,42 +328,29 @@ export const ensureDailyNoteTarget = async (
     // (found by referencesRecompute.fuzz.test.ts). The in-tx `aliasLookup`
     // above proved the ISO is unclaimed here, so re-assert it if missing —
     // append (not replace), since the seat may hold long-form literals
-    // claimed via claimLiteralDateAliases.
-    await ensureSeatClaimsIso(tx, result.id, date)
+    // claimed via claimDailyNoteAliases.
+    await claimDailyNoteAliases(tx, result.id, [date])
   }
   return result
 }
 
-/** Append `iso` to the seat's alias list if absent. Precondition: the
- *  caller proved `iso` is unclaimed in this tx, so the ISO insert itself
- *  can't collide. A malformed alias property is left untouched —
- *  replacing it would drop entries the block_aliases trigger still
- *  indexes, worse than leaving the ISO unclaimed. */
-const ensureSeatClaimsIso = async (tx: Tx, id: string, iso: string): Promise<void> => {
+/** Append only unclaimed spellings checked by the caller in this tx. Keep malformed alias bags intact. */
+export const claimDailyNoteAliases = async (tx: Tx, id: string, aliases: readonly string[]): Promise<void> => {
+  if (!aliases.length) return
   const seat = await tx.get(id)
-  if (seat === null || seat.deleted) return
+  if (!seat || seat.deleted) return
   let existing: readonly string[]
   try {
     existing = decodeRowProperty(seat, aliasesProp)
   } catch {
     return
   }
-  if (existing.includes(iso)) return
+  const next = appendMissing(existing, [...new Set(aliases)])
+  if (next.length === existing.length) return
   try {
-    await tx.setProperty(id, aliasesProp, [...existing, iso], {skipMetadata: true})
+    await tx.setProperty(id, aliasesProp, next, {skipMetadata: true})
   } catch (err) {
-    // Swallow ONLY alias-collision aborts (mirrors claimLiteralDateAliases,
-    // referencesProcessor.ts). setProperty rewrites the whole `alias`
-    // property, so the block_aliases trigger re-inserts every PRE-EXISTING
-    // alias before adding the ISO — and a pre-existing alias that's latently
-    // duplicated on another live block (a cross-client dupe synced in
-    // trigger-free, clientSchema.ts) collides on RE-insert. Letting that
-    // propagate would roll back the whole reference-parse tx (references for
-    // every other changed row) and recur on every re-edit — a silent recompute
-    // outage keyed to someone else's dupe. RAISE backs out only this
-    // statement, so degrade to leaving the ISO unclaimed for this seat. The
-    // ISO append can't be the colliding row: the caller's in-tx aliasLookup
-    // proved it unclaimed and `existing` doesn't contain it.
+    // Rewriting the array rechecks its existing aliases too. A synced duplicate can refuse the claim.
     if (parseAliasCollisionError(err) === null) throw err
   }
 }

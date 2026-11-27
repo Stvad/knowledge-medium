@@ -6,6 +6,7 @@ import {
   type BlockMergeAliasRewrite,
   type Tx,
 } from '@/data/api'
+import { storedPropertyValue } from './rowProperty'
 import { keysBetween } from './orderKey'
 import {
   childContentsToEncodedPropertyValue,
@@ -151,6 +152,7 @@ export const foldBlocksInTx = async (
       const projected = childContentsToEncodedPropertyValue(
         schema,
         unionValuesAcrossFieldRows(schema, perFieldRow),
+        storedPropertyValue(mergedProperties, schema.name),
       )
       // `undefined` = nothing under the rows parses. Leave the merged bag's own
       // answer alone rather than unsetting: §9's unset is PROJECT's call to

@@ -6,7 +6,7 @@ import { BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { useBlockContext } from '@/context/block'
 import { PropertyRowListingContext } from '@/context/propertyDisplay'
-import { definePropertyEditorOverride, type PropertyEditorProps } from '@/data/api'
+import { definePropertyEditorOverride } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useUIStateBlock } from '@/data/globalState'
 import { focusBlock, focusedBlockLocationFromProperties, isEditingProp } from '@/data/properties'
@@ -14,14 +14,19 @@ import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle, useHandles } from '@/hooks/block'
 import { useFocusPlacedChildIds } from '@/hooks/focusedChild'
 import { openQueryValue } from './query/queryValue'
+import { QueryText } from './query/QueryText'
 import { useQueryFieldId, type TableQuery } from './query/source'
 import { queryProp } from './schema'
+import { notesInScope } from './registry'
 
 /** Is a block in this render scope being edited? */
 export const useEditingIn = (uiStateBlock: Block, renderScopeId: string): boolean =>
-  useHandle(uiStateBlock, {selector: data => !!data &&
-    focusedBlockLocationFromProperties(data.properties)?.renderScopeId === renderScopeId &&
-    safeDecodeRowProperty(data, isEditingProp)})
+  useHandle(uiStateBlock, {selector: data => {
+    if (!data || !safeDecodeRowProperty(data, isEditingProp)) return false
+    const focusedScope = focusedBlockLocationFromProperties(data.properties)?.renderScopeId
+    return focusedScope === renderScopeId || (focusedScope !== undefined &&
+      notesInScope(focusedScope)?.grid.renderScopeId === renderScopeId)
+  }})
 
 /** The ids whose blocks still exist: a row made here and then deleted leaves the grid. */
 export const useLiveRows = (repo: Block['repo'], ids: readonly string[]): readonly string[] => {
@@ -53,10 +58,6 @@ export const QueryErrors = ({query}: {query: TableQuery}) => {
     </ul>
   )
 }
-
-/** The query as written: its text is query syntax, not markdown (`*a*` is no emphasis, `# x` no heading). */
-const QueryText = ({value}: PropertyEditorProps<string>) =>
-  <code data-table-query-text="true" className="block min-h-[1.7em] whitespace-pre-wrap break-words font-mono text-sm">{value}</code>
 
 export const queryPropertyUi = definePropertyEditorOverride(queryProp, {InlineEditor: QueryText})
 

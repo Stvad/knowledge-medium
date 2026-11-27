@@ -183,7 +183,7 @@ const queryCompletions = (trigger: QueryTrigger, vocabulary: QueryVocabulary, re
 }
 
 /** The workspace's vocabulary, as the property picker and the parser see it. */
-const vocabularyOf = (repo: Repo, workspaceId: string, resolver: QueryResolver): QueryVocabulary => {
+const vocabularyOf = (repo: Repo, workspaceId: string, resolver: QueryResolver, propertyName: string): QueryVocabulary => {
   const definitions = repo.propertyDefinitions
   const uis = repo.facetRuntime?.read(propertyEditorOverridesFacet) ?? new Map()
   return {
@@ -192,19 +192,19 @@ const vocabularyOf = (repo: Repo, workspaceId: string, resolver: QueryResolver):
       return type ? [{...type, plumbing: contribution.hideFromCompletion === true}] : []
     }),
     propertyNames: [...definitions?.definitionsByName.keys() ?? []]
-      .filter(name => name !== queryProp.name && isPropertyPickerName(name, repo.propertySchemas, uis, definitions)),
+      .filter(name => name !== propertyName && isPropertyPickerName(name, repo.propertySchemas, uis, definitions)),
     fieldNames: [...repo.facetRuntime?.read(queryableFieldsFacet, workspaceId)?.keys() ?? []],
   }
 }
 
-const queryCompletionSource = (repo: Repo, block: Block): CompletionSource => context => {
+const queryCompletionSource = (repo: Repo, block: Block, propertyName: string): CompletionSource => context => {
   const {state, pos} = context
   const workspaceId = block.peek()?.workspaceId
   if (!state.selection.main.empty || !workspaceId) return null
   const trigger = queryTriggerAt(state.doc.sliceString(0, pos), state.doc.sliceString(pos, state.doc.lineAt(pos).to))
   if (!trigger) return null
   const resolver = queryResolver(repo, workspaceId, repo.propertyDefinitions, repo.types, new Map())
-  const completions = queryCompletions(trigger, vocabularyOf(repo, workspaceId, resolver), resolver)
+  const completions = queryCompletions(trigger, vocabularyOf(repo, workspaceId, resolver, propertyName), resolver)
   if (completions.length === 0) return null
   return {
     from: trigger.from,
@@ -222,8 +222,10 @@ const queryCompletionSource = (repo: Repo, block: Block): CompletionSource => co
 
 /** Only the query property's value, drawn in its field row: no other block's text is read as a
  *  query. The value block opened on its own (zoomed into) is an ordinary block, `#` tagging included. */
-export const queryCompletionExtension: CodeMirrorExtensionContribution = ({repo, block, propertyValueSchema}) => {
-  if (!block || propertyValueSchema?.name !== queryProp.name) return []
-  const source = queryCompletionSource(repo, block)
+export const blockQueryCompletion = (propertyName: string): CodeMirrorExtensionContribution => ({repo, block, propertyValueSchema}) => {
+  if (!block || propertyValueSchema?.name !== propertyName) return []
+  const source = queryCompletionSource(repo, block, propertyName)
   return [typeTagsOff.of(true), EditorState.languageData.of(() => [{autocomplete: source}])]
 }
+
+export const queryCompletionExtension = blockQueryCompletion(queryProp.name)

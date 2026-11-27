@@ -8,18 +8,24 @@
  *  editing. */
 
 import { blockGutterItemsFacet } from '@/extensions/blockInteraction.js'
+import { definePropertyEditorOverride } from '@/data/api'
 import { actionsFacet } from '@/extensions/core.js'
 import { propertyEditorOverridesFacet } from '@/data/facets'
+import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions'
 import type { AppExtension } from '@/facets/facet'
 import { systemToggle } from '@/facets/togglable'
+import { blockQueryCompletion } from '@/plugins/tables/query/completion'
+import { QueryText } from '@/plugins/tables/query/QueryText'
 import { counterActions } from './actions'
 import { characterCounterDataExtension } from './dataExtension'
 import { characterCountItemContribution } from './CharacterCountItem'
 import { builtinCountProfiles } from './profiles'
 import { charProfileEditorOverride } from './ProfilePropertyEditor'
+import { charExcludeProp } from './properties'
 
 export { CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE } from './blockType'
 export {
+  charExcludeProp,
   charLimitProp,
   charProfileProp,
   charScopeProp,
@@ -42,6 +48,10 @@ export const characterCounterPlugin: AppExtension = systemToggle({
   characterCounterDataExtension,
   builtinCountProfiles,
   propertyEditorOverridesFacet.of(charProfileEditorOverride, {source: 'character-counter'}),
+  propertyEditorOverridesFacet.of(definePropertyEditorOverride(charExcludeProp, {
+    label: 'Exclude from subtree', InlineEditor: QueryText,
+  }), {source: 'character-counter'}),
+  codeMirrorExtensionsFacet.of(blockQueryCompletion(charExcludeProp.name), {source: 'character-counter'}),
   blockGutterItemsFacet.of(characterCountItemContribution, {source: 'character-counter'}),
   counterActions.map(action => actionsFacet.of(action, {source: 'character-counter'})),
 ])

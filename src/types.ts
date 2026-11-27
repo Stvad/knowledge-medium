@@ -140,6 +140,9 @@ export interface BlockContextType {
      *  one rendered occurrence of that block, even when the same block is
      *  visible in the main outline and one or more embeds/backlink rows. */
     renderScopeId?: string
+    /** Mount children immediately in this render scope when its content must
+     *  be measured as a whole. Embedded surfaces retain their own policy. */
+    eagerChildrenScope?: string
     /** Name written to the block shell's `data-block-surface`. Blocks in the
      *  same render scope can have different names. */
     surfaceName?: string
@@ -151,8 +154,7 @@ export interface BlockContextType {
      *  the panel's `topLevelBlockId` — so a block rendered as a root in
      *  a nested surface behaves like one. Every surface that mounts a
      *  block as a bounded view declares it; absent only at the very top
-     *  layout boundary, before a panel sets it. See
-     *  `resolveStructuralEditPolicy`. */
+     *  layout boundary, before a panel sets it. */
     scopeRootId?: string
     /** Whether maximizing this pane would do anything, declared by the layout
      *  that owns the maximize rendering rule: false with a single pane

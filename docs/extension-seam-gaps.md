@@ -68,11 +68,10 @@ Correctly **substrate** (leave closed unless concrete demand): repo/data-backend
 - **Algebra:** Map/Pick `mergeContentStrategyFacet` (unify keyboard + picker) + Chain `backspaceAtStartFacet` (`(ctx) => 'merge'|'outdent'|'delete'|null`).
 
 ### E3 — Enter / split placement policy *(MED-HIGH)*
-- **Where:** `src/shortcuts/defaultShortcuts.ts:629` (`split_block_cm`) consuming `src/data/structuralEditPolicy.ts:79` (`resolveStructuralEditPolicy`).
-- **Hardcoded:** the whole decision tree (mid-text split sibling/first-child; end-of-text-with-children → first child; empty → outdent). `resolveStructuralEditPolicy` is a clean pure function with no contribution seam.
-- **Use case:** Workflowy-style "Enter always makes a sibling"; per-type behavior (Enter inside code block = newline); "Enter on empty list item exits".
-- **Existing/planned:** partial (whole-action replace). Textbook substrate-seam candidate (single orchestration point, decoupled, default is what most want).
-- **Algebra:** verb facet over the policy resolver (default = current pure fn) + decorators to tweak one field.
+- **Where:** `split_block_cm` in `src/shortcuts/defaultShortcuts.ts` classifies Enter and hands placement to `insertDrawnBlock` in `src/data/structuralInsert.ts`.
+- **Default:** At the scope root, insert a first child. Inside the scope, split above, insert after or into an expanded parent, or try to outdent on empty Enter.
+- **Existing seam:** A children view can handle placement through `ChildrenView.insert`. The action still owns whether Enter inserts a block or edits its text.
+- **Use case for the remaining gap:** Enter inserts a newline inside a code block.
 
 ### E4 — Copy / clipboard serialization format *(MED)*
 - **Where:** `src/utils/copy.ts:6` (`createIndentedContent`, fixed 2-space markdown), `:47` (`createClipboardItem` writes only `text/plain`; JSON tree payload commented out as TODO); `src/shortcuts/blockActions.ts:317` (`((id))`/`!((id))` literals).

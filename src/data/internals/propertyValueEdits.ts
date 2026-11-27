@@ -1,6 +1,6 @@
 import {ChangeScope, CodecError, memberCodecOf, type AnyPropertySchema, type BlockData, type Tx} from '@/data/api'
 import {
-  childContentsToEncodedPropertyValue, decodedMemberKeysFor, encodedPropertyValueToChildContents, fieldRowsForSchema, fieldValueChildren,
+  childContentsToEncodedPropertyValue, decodedMemberKeysFor, fieldRowsForSchema, fieldValueChildren,
   isFieldValueChild, memberKeysFor, propertyCellValueRejection, rowsProjectToValue, scalarDuplicates, scalarValueRow,
   unionFieldValues, valueChildContentToEncoded, valueSurvivesChildRoundTrip, verbatimValueTextProblem,
 } from '@/data/propertyChildren'
@@ -46,8 +46,9 @@ const readPropertyRows = async (tx: Tx, ownerId: string, fieldId: string) => {
     throw new PropertyEditRefusedError('resolve-in-outline', 'The property has rows linked across workspaces.')
   }
   const perField = fields.map(group => group.children.filter(isFieldValueChild))
+  const cell = storedPropertyValue(owner.properties, schema.name)
   const stored = hasPendingCellProjection(tx, ownerId, fieldId)
-    ? projectFieldRowValues(schema, perField) : storedPropertyValue(owner.properties, schema.name)
+    ? projectFieldRowValues(schema, perField, cell) : cell
   return {owner, fieldId, schema, fields, perField, values: perField.flat(), stored}
 }
 
@@ -62,7 +63,7 @@ const appendValue = async (tx: Tx, field: Field, schema: AnyPropertySchema, text
   const keys = memberKeysFor(schema)
   const valueKey = keys.content(text)
   const occurrence = values.filter(value => keys.row(value).key === valueKey).length
-  return createValueChild(tx, field, text, freshSlots(values, 1)[0]!, {valueKey, occurrence})
+  return createValueChild(tx, field, {content: text}, freshSlots(values, 1)[0]!, {valueKey, occurrence})
 }
 
 const fieldValueUnion = (rows: PropertyRows) => {
@@ -103,8 +104,8 @@ const foldFields = async (tx: Tx, rows: PropertyRows, duplicates?: ReadonlyMap<B
   return upsertFieldRow(tx, rows.owner, rows.fieldId, rows.fields.map(group => group.field), true)
 }
 
-const writableContents = (schema: AnyPropertySchema, encoded: unknown) => {
-  const contents = encodedPropertyValueToChildContents(schema, encoded)
+const writableContents = async (tx: Tx, rows: PropertyRows, encoded: unknown) => {
+  const contents = (await tx.propertyValueChildContents(rows.schema, encoded, rows.owner.workspaceId)).map(row => row.content)
   if (contents.some(hasLoneSurrogate)) throw new PropertyEditRefusedError('invalid-text', 'The value cannot be represented in SQLite text.')
   return contents
 }
@@ -165,7 +166,7 @@ export const openPropertyValue = async (
   const plan = planOpenFold(rows)
   const {values} = plan
   const list = memberCodecOf(schema.codec) !== undefined
-  const blankCounts = list && (childContentsToEncodedPropertyValue(schema, ['']) as unknown[]).length > 0
+  const blankCounts = list && (childContentsToEncodedPropertyValue(schema, [''], undefined) as unknown[]).length > 0
   const target = (candidates: BlockData[]) => {
     if (!list) return scalarValueRow(schema, candidates)
     const last = candidates.at(-1)
@@ -209,7 +210,8 @@ const carriesData = async (tx: Tx, row: BlockData) =>
 const requestProjection = (tx: Tx, rows: PropertyRows) =>
   requestCellProjection(tx, rows.owner, rows.fieldId, rows.schema)
 
-const preparePaste = (schema: AnyPropertySchema, text: string) => {
+const preparePaste = async (tx: Tx, rows: PropertyRows, text: string) => {
+  const {schema} = rows
   const list = memberCodecOf(schema.codec) !== undefined
   let decoded: unknown
   try {
@@ -223,7 +225,7 @@ const preparePaste = (schema: AnyPropertySchema, text: string) => {
     return {kind: 'draft' as const}
   }
   try {
-    const contents = writableContents(schema, schema.codec.encode(decoded))
+    const contents = await writableContents(tx, rows, schema.codec.encode(decoded))
     return {kind: 'typed' as const, decoded, contents}
   } catch (error) {
     if (!(error instanceof CodecError)) throw error
@@ -252,7 +254,7 @@ export const writePropertyText = async (tx: Tx, ownerId: string, fieldId: string
   if (text === '') return clearPropertyValue(tx, ownerId, fieldId)
   const rows = await readPropertyRows(tx, ownerId, fieldId)
   const {schema} = rows
-  const paste = preparePaste(schema, text)
+  const paste = await preparePaste(tx, rows, text)
   const plan = paste.kind === 'typed' ? planTypedPaste(rows, paste.contents) : undefined
   for (const row of plan?.removed ?? []) {
     if (await carriesData(tx, row)) {
@@ -293,8 +295,8 @@ export const finishPropertyValueEdit = async (
   if (rows.stored !== undefined && !rowsProjectToValue(rows.schema, rows.values, rows.stored)) return
   const peers = rows.values.filter(value => value.id !== id)
   if (peers.length && (!memberCodecOf(rows.schema.codec) ||
-    !jsonValuesEqual(childContentsToEncodedPropertyValue(rows.schema, [...peers, '']),
-      childContentsToEncodedPropertyValue(rows.schema, peers)))) return
+    !jsonValuesEqual(childContentsToEncodedPropertyValue(rows.schema, [...peers, ''], rows.stored),
+      childContentsToEncodedPropertyValue(rows.schema, peers, rows.stored)))) return
   await deleteSubtreeAnnouncedInTx(tx, id)
   const {field} = rows.fields[0]!
   if (edit.draftFieldId === field.id && !await carriesData(tx, field)) await deleteSubtreeAnnouncedInTx(tx, field.id)

@@ -29,6 +29,7 @@ import {
   type PropertyEditorProps,
   type PropertySchema,
 } from '@/data/api'
+import { resolveValuePresetPresentation } from '@/data/valuePresetRegistry'
 import { Block } from '@/data/block'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -424,7 +425,7 @@ export interface PropertyDisplayInfo {
  *    2. Take the caller's pre-resolved `override` (joined by seed identity
  *       via `resolveEditorOverride`, not by name — B′ §8).
  *    3. If schema is known → use the override `Editor` if any, else
- *       the `ValuePreset.Editor` matching `codec.type`.
+ *       a preset presentation matching the schema or codec type.
  *    4. If schema is unknown → infer a primitive type from the JSON
  *       value, build an ad-hoc schema, and use the matching preset's
  *       editor (or fall through to undefined if no preset matches).
@@ -441,7 +442,7 @@ export const resolvePropertyDisplay = (args: {
   const known = args.schemas.get(args.name)
   if (known) {
     const ui = args.override
-    const preset = args.presets.get(known.codec.type)
+    const preset = resolveValuePresetPresentation(args.presets, known)
     return {
       schema: known,
       shape: known.codec.type,

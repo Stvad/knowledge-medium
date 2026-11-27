@@ -187,6 +187,22 @@ describe('resolveBlockRef', () => {
 describe('view-outline', () => {
   const ROOT = uuid('00000001', 1)
 
+  it('lists children and counts their children with parent-key lookups', async () => {
+    await createAll([{id: ROOT}, {id: 'child', parentId: ROOT}])
+    const levels: Array<{sql: string, params: unknown[]}> = []
+    await duringReads({
+      before: async (sql, params) => {
+        if (sql.includes(' AS child_count')) levels.push({sql, params: params as unknown[]})
+      },
+    }, () => view({type: 'view-outline', ref: ROOT, depth: 1}))
+    expect(levels).toHaveLength(1)
+    const {sql, params} = levels[0]!
+    const plan = (await sharedDb.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${sql}`, params)).map(row => row.detail)
+    for (const alias of ['child', 'vc']) {
+      expect(plan).toContain(`SEARCH ${alias} USING INDEX idx_blocks_parent_order (parent_id=?)`)
+    }
+  })
+
   it('renders markdown lines, hides UI-hidden properties, summarizes structured values', async () => {
     const other = uuid('00000002', 2)
     const first = uuid('00000003', 3)

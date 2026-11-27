@@ -125,16 +125,27 @@ describe('relativeDateCandidates', () => {
 })
 
 describe('parseLiteralDailyPageTitle', () => {
+  it.each([
+    ['0001-01-02', 'January 2nd, 1'],
+    ['0900-03-01', 'March 1st, 900'],
+  ])('reads both canonical aliases of %s in the same year', (iso, long) => {
+    for (const alias of [iso, long]) {
+      const parsed = parseLiteralDailyPageTitle(alias)
+      expect(parsed?.iso).toBe(iso)
+      expect(parsed?.date.getFullYear()).toBe(Number(iso.slice(0, 4)))
+    }
+  })
+
   it('accepts ISO dates', () => {
-    expect(parseLiteralDailyPageTitle('2026-04-28', NOW)?.iso).toBe('2026-04-28')
-    expect(parseLiteralDailyPageTitle('2026-12-25', NOW)?.iso).toBe('2026-12-25')
+    expect(parseLiteralDailyPageTitle('2026-04-28')?.iso).toBe('2026-04-28')
+    expect(parseLiteralDailyPageTitle('2026-12-25')?.iso).toBe('2026-12-25')
   })
 
   it('accepts Roam-style long-form dates', () => {
-    expect(parseLiteralDailyPageTitle('April 28th, 2026', NOW)?.iso).toBe('2026-04-28')
-    expect(parseLiteralDailyPageTitle('April 1st, 2026', NOW)?.iso).toBe('2026-04-01')
-    expect(parseLiteralDailyPageTitle('December 22nd, 2026', NOW)?.iso).toBe('2026-12-22')
-    expect(parseLiteralDailyPageTitle('March 3rd, 2026', NOW)?.iso).toBe('2026-03-03')
+    expect(parseLiteralDailyPageTitle('April 28th, 2026')?.iso).toBe('2026-04-28')
+    expect(parseLiteralDailyPageTitle('April 1st, 2026')?.iso).toBe('2026-04-01')
+    expect(parseLiteralDailyPageTitle('December 22nd, 2026')?.iso).toBe('2026-12-22')
+    expect(parseLiteralDailyPageTitle('March 3rd, 2026')?.iso).toBe('2026-03-03')
   })
 
   it('rejects relative-time keywords that chrono.casual would accept', () => {
@@ -144,37 +155,37 @@ describe('parseLiteralDailyPageTitle', () => {
     // *every* historical block that mentioned a relative-time word
     // into the *current* day's backlinks (the bug this guard exists
     // to prevent).
-    expect(parseLiteralDailyPageTitle('today', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('now', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('tomorrow', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('yesterday', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('friday', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('Monday', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('may', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('April', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('noon', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('tonight', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('evening', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('next week', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('3 days ago', NOW)).toBeNull()
+    expect(parseLiteralDailyPageTitle('today')).toBeNull()
+    expect(parseLiteralDailyPageTitle('now')).toBeNull()
+    expect(parseLiteralDailyPageTitle('tomorrow')).toBeNull()
+    expect(parseLiteralDailyPageTitle('yesterday')).toBeNull()
+    expect(parseLiteralDailyPageTitle('friday')).toBeNull()
+    expect(parseLiteralDailyPageTitle('Monday')).toBeNull()
+    expect(parseLiteralDailyPageTitle('may')).toBeNull()
+    expect(parseLiteralDailyPageTitle('April')).toBeNull()
+    expect(parseLiteralDailyPageTitle('noon')).toBeNull()
+    expect(parseLiteralDailyPageTitle('tonight')).toBeNull()
+    expect(parseLiteralDailyPageTitle('evening')).toBeNull()
+    expect(parseLiteralDailyPageTitle('next week')).toBeNull()
+    expect(parseLiteralDailyPageTitle('3 days ago')).toBeNull()
   })
 
   it('rejects month + day without year (not a daily-page title)', () => {
     // "April 28" is a regular Roam page, not a daily — the daily for
     // that day is titled "April 28th, 2026".
-    expect(parseLiteralDailyPageTitle('April 28', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('May 5', NOW)).toBeNull()
+    expect(parseLiteralDailyPageTitle('April 28')).toBeNull()
+    expect(parseLiteralDailyPageTitle('May 5')).toBeNull()
   })
 
   it('rejects malformed-but-coercible date literals', () => {
     // chrono is happy to reinterpret these; we are not.
-    expect(parseLiteralDailyPageTitle('2026-13-01', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('April 31st, 2026', NOW)).toBeNull()
+    expect(parseLiteralDailyPageTitle('2026-13-01')).toBeNull()
+    expect(parseLiteralDailyPageTitle('April 31st, 2026')).toBeNull()
   })
 
   it('rejects non-date strings', () => {
-    expect(parseLiteralDailyPageTitle('Foobar', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('Project Friday', NOW)).toBeNull()
-    expect(parseLiteralDailyPageTitle('', NOW)).toBeNull()
+    expect(parseLiteralDailyPageTitle('Foobar')).toBeNull()
+    expect(parseLiteralDailyPageTitle('Project Friday')).toBeNull()
+    expect(parseLiteralDailyPageTitle('')).toBeNull()
   })
 })

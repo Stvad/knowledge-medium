@@ -58,6 +58,8 @@ agent-extensions/*.probe.*
 
 # Scratch / temp
 tmp/
+# pnpm's content store, which a sandboxed install can create inside a worktree
+.pnpm-store/
 
 # Beads / Dolt files (added by bd init)
 .dolt/

@@ -122,7 +122,7 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
   }),
   kernelPresetPresentation(dateValuePresetCore, {
     id: 'date',
-    label: 'Date',
+    label: 'Date & time',
     Glyph: Calendar,
     Editor: asEditor<Date | undefined>(DatePropertyEditor),
     InlineEditor: asEditor<Date | undefined>(DatePropertyEditor),

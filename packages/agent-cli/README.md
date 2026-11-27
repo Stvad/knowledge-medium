@@ -108,10 +108,11 @@ Run `kmagent <command> --help` for per-command details or `kmagent --help` for t
 
 Writes are markdown-native and conflict-safe, so an agent can treat the graph like files:
 
-- **Targets.** Write verbs take a block id, a `[[Page name]]` — created when missing, exactly as typing that wikilink would (a date-literal name is that daily note) — or a date expression (`today`, `2026-10-15`, `next monday`) for that day's daily note, created when missing. Bare text is tried as an id, an existing page, then a date expression, so a page name belongs in `[[…]]` — and a typo never mints a page. Id fields (`update-block`, `move-block`, …) take an id only, never a name. A block link in content is `((id))` or `[label](((id)))`; content that links an id no live block of the workspace has is refused (property values are not checked).
+- **Targets.** Write verbs take a block id, a `[[Page name]]` — created when missing, exactly as typing that wikilink would (a date-literal name is that daily note) — or a date expression (`today`, `2026-10-15`, `next monday`) for that day's daily note, created when missing. Bare text is tried as an id, an existing page, then a date expression, so a page name belongs in `[[…]]` — and a typo never mints a page. Id fields (`update-block`, `move-block`, …) take an id only, never a name. A block link in content is `((id))` or `[label](((id)))`; content links must point to live blocks in the workspace.
 - **Append.** `append-markdown` parses with the app's paste parser and inserts the whole outline in one transaction, printing the created blocks with their ids.
 - **Edit.** `edit-block` replaces one exact occurrence inside the writing transaction; `update-block` takes `expectedContent` — the block's exact content, read whole with `get-block` — and refuses the overwrite when the content is no longer that.
 - **Todos.** A todo is a block with properties `{"types": ["todo"], "status": "open"}`; set `status` to `"done"` to complete it.
+- **Day properties.** In `create-block`, `update-block`, and `reconcile-markdown-subtree`, a single-reference property targeting only daily notes accepts a daily-note block ID or a calendar expression. Use an ISO day (`2026-10-15`), an ISO instant with `Z` or a numeric offset (read as its UTC day), a Roam date (`October 15th, 2026`), or a local calendar expression (`today`, `tomorrow`, `yesterday`, a weekday, or `next` plus a weekday). A bare weekday includes today. `next` means the following Monday–Sunday week. A calendar expression stores the note’s block ID and creates the note if needed.
 - **Review.** Direct graph verbs record transactions described `agent runtime <verb>`; `recent-changes` and `block-history` read them back from the local change log. Transactions opened by `eval` and explicit raw SQL writes may not carry that description.
 
 ## MCP Server
@@ -145,6 +146,12 @@ the built entrypoint directly:
 ```
 
 `km-mcp` is generic graph access. Dispatch-specific loop-prevention policy, including blocked watcher-target wikilinks, lives in the `agent-dispatch` MCP wrapper.
+
+For repeated reads, keep one MCP connection open. A Node script can also reuse a
+`createBridgeClient()` from `@knowledge-medium/agent-cli/client`. To read a
+known page, pass its name straight to `subtree` (or `today` for the daily note).
+The default text includes ids for follow-up reads and edits. Request JSON when
+the caller needs to process individual fields.
 
 ## Eval execution scope
 
@@ -283,6 +290,11 @@ kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
 ```
 
 Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.9.0 km-mcp`).
+
+### Upgrade to 0.14.3
+
+Upgrade the CLI or MCP server and restart the bridge to receive command results
+as soon as the app finishes. An older bridge still answers by polling.
 
 ### Upgrade to 0.14.1
 

@@ -3,7 +3,7 @@ import type { Block } from '@/data/block'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle } from '@/hooks/block'
 import type { QueryClauses } from './query/parse'
-import { COLUMN_TYPE, VIEW_TYPE, columnFieldProp, columnHiddenProp, columnWidthProp } from './schema'
+import { COLUMN_TYPE, NOT_TABLE_MACHINERY, VIEW_TYPE, columnFieldProp, columnHiddenProp, columnWidthProp, hostChildrenQuery } from './schema'
 
 /** Rows mount and stay mounted, so a table draws at most this many. */
 export const ROW_CAP = 300
@@ -43,9 +43,6 @@ export const useColumns = (host: Block, workspaceId: string, viewId: string): re
     workspaceId, parentId: viewId, types: [COLUMN_TYPE], order: 'outline', propertyChildren: 'none',
   }), {selector: blocks => blocks?.map(columnOf)})
 
-/** No row source returns a table's own configuration, this table's or another's. */
-const NOT_TABLE_MACHINERY = {types: [VIEW_TYPE, COLUMN_TYPE]}
-
 /** Without a query, the host's children in outline order; with one, what it
  *  selects, oldest first, never the host itself. Either way field and value
  *  rows are left out, `order` replaces the default, and one id past the cap
@@ -53,10 +50,10 @@ const NOT_TABLE_MACHINERY = {types: [VIEW_TYPE, COLUMN_TYPE]}
 export const rowQuery = (
   hostId: string, workspaceId: string, query: QueryClauses | null, order?: TypedBlockQuery['order'],
 ): TypedBlockQuery & {limit: number} => ({
-  workspaceId, propertyChildren: 'none', limit: ROW_CAP + 1,
   ...query === null
-    ? {parentId: hostId, order: order ?? 'outline', exclude: [NOT_TABLE_MACHINERY]}
-    : {...query, order: order ?? 'created-asc', exclude: [...query.exclude ?? [], NOT_TABLE_MACHINERY, {id: hostId}]},
+    ? {...hostChildrenQuery(hostId, workspaceId), ...order && {order}}
+    : {workspaceId, propertyChildren: 'none', ...query, order: order ?? 'created-asc', exclude: [...query.exclude ?? [], NOT_TABLE_MACHINERY, {id: hostId}]},
+  limit: ROW_CAP + 1,
 })
 
 export const useRowIds = (
