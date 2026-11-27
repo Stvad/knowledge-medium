@@ -88,7 +88,7 @@ import type { SameTxEventPayload, SameTxReadDb } from './sameTxProcessor'
 /** Named value links carry the alias target resolved for their proposed content. */
 export type ProposedValueChild = Pick<BlockData, 'content' | 'referenceTargetId'>
 
-/** Transactional session. Async reads, no arbitrary queries. Spec §5.3. */
+/** Transactional session. Reads use the current write lock and writes go through the tracked primitives. */
 export interface Tx {
   // ──── Reads ────
 

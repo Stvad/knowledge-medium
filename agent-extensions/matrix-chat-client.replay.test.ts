@@ -123,7 +123,8 @@ it('skips fresh-sync history, then backfills a limited interval in an empty grap
 })
 
 it.each([
-  {name: 'missing prev_batch', timeline: {limited: true}, pages: [], detail: 'Limited Matrix timeline has no prev_batch'},
+  {name: 'invalid prev_batch', timeline: {...limited, prev_batch: ''}, pages: [], detail: 'Matrix history has an invalid starting token'},
+  {name: 'missing timeline events', timeline: {...limited, events: null}, pages: [], detail: 'Matrix timeline has no events array'},
   {name: 'malformed chunk', timeline: limited, pages: [{end: 'S0'}], detail: 'Matrix history page has no chunk'},
   {name: 'invalid end', timeline: limited, pages: [{chunk: [], end: 1}], detail: 'Matrix history page has an invalid end token'},
   {name: 'repeating token', timeline: limited, pages: [{chunk: [], end: 'P1'}], detail: 'Matrix history pagination repeated a token'},
@@ -132,4 +133,11 @@ it.each([
   expect(diagnostics.getSnapshot()?.detail).toBe(detail)
   expect(cursor()).toBe('S0')
   expect(await contents()).toEqual([])
+})
+
+it('uses the sync upper bound when the server omits prev_batch', async () => {
+  const requests = await run(sync('S1', ['latest'], {limited: true}), {chunk: [event('latest')], end: 'S0'})
+  expect(requests[1]).toMatchObject({path: historyPath, query: {from: 'S1', to: 'S0', dir: 'b'}})
+  expect(cursor()).toBe('S1')
+  expect(await contents()).toEqual(['latest'])
 })

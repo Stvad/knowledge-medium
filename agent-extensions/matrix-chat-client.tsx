@@ -459,13 +459,13 @@ const fetchMatrixSync = (config: MatrixConfig, since: string | null, signal: Abo
 // /messages returns newest first. Reverse the complete interval so appending a
 // recovered page never puts it after the more recent page fetched before it.
 const fetchGapEvents = async (
-  config: MatrixConfig, prevBatch: unknown, since: string, signal: AbortSignal,
+  config: MatrixConfig, start: unknown, since: string, signal: AbortSignal,
   matrixClient: any, verifyWorkspace: () => void,
 ): Promise<any[]> => {
-  if (typeof prevBatch !== 'string' || !prevBatch) throw new Error('Limited Matrix timeline has no prev_batch')
+  if (typeof start !== 'string' || !start) throw new Error('Matrix history has an invalid starting token')
   const events: any[] = []
   const visited = new Set<string>()
-  let from = prevBatch
+  let from = start
   while (from !== since) {
     verifyWorkspace()
     if (visited.has(from)) throw new Error('Matrix history pagination repeated a token')
@@ -884,14 +884,17 @@ export const appendMatrixMessage = async (
     verifyWorkspace()
     const dailyId = await getOrCreateDailyNoteInTx(tx, repo.snapshotTypeRegistries(), workspaceId, iso)
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso, verifyWorkspace)
-    const messageChildren = await tx.childrenOf(tagBlockId, workspaceId)
+    const lastChild = await tx.readDb.getOptional<{order_key: string}>(
+      'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key DESC, id DESC LIMIT 1',
+      [tagBlockId],
+    )
 
     await createBlockTree(
       checkedTreeWriter(tx, verifyWorkspace),
       workspaceId,
       tagBlockId,
       messageTree,
-      keysBetween(messageChildren.at(-1)?.orderKey ?? null, null, messageTree.length),
+      keysBetween(lastChild?.order_key ?? null, null, messageTree.length),
       eventId,
       {
         [eventIdProp.name]: eventId,
@@ -1037,8 +1040,12 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
     try {
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
       const timeline = nextBatch ? syncBody?.rooms?.join?.[config.roomId]?.timeline : undefined
+      if (timeline && !Array.isArray(timeline.events)) throw new Error('Matrix timeline has no events array')
+      const newBatch = syncBody?.next_batch
+      // With no prev_batch, page from this sync's upper bound. The overlap
+      // with its timeline is safe because each message is checked by identity.
       const gap = nextBatch && timeline?.limited
-        ? await fetchGapEvents(config, timeline.prev_batch, nextBatch, signal, matrixClient, verifyWorkspace)
+        ? await fetchGapEvents(config, timeline.prev_batch === undefined ? newBatch : timeline.prev_batch, nextBatch, signal, matrixClient, verifyWorkspace)
         : null
       for (const batch of [gap ?? [], timeline?.events ?? []]) {
         for (const event of batch) {
@@ -1046,7 +1053,6 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
         }
       }
 
-      const newBatch = syncBody?.next_batch
       if (typeof newBatch === 'string') {
         verifyWorkspace()
         saveNextBatch(config, newBatch)

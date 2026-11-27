@@ -80,13 +80,12 @@ it('skips tag creation when the workspace changes during the tag lookup', async 
   expect(writes.tag).not.toHaveBeenCalled()
 })
 
-it('skips message creation when the workspace changes during the tag-children lookup', async () => {
+it('skips message creation when the workspace changes during the last message order-key lookup', async () => {
   const {tx, switchWorkspace, run} = fixture()
-  tx.childrenOf
-    .mockResolvedValueOnce([{id: 'tag', content: '[[matrix-messages]]'}])
-    .mockImplementationOnce(async () => { switchWorkspace(); return [] })
+  tx.childrenOf.mockResolvedValueOnce([{id: 'tag', content: '[[matrix-messages]]'}])
+  tx.readDb.getOptional.mockResolvedValueOnce(null).mockImplementationOnce(async () => { switchWorkspace(); return null })
   await run()
-  expect(tx.childrenOf).toHaveBeenNthCalledWith(2, 'tag', config.workspaceId)
+  expect(tx.readDb.getOptional).toHaveBeenNthCalledWith(2, expect.any(String), ['tag'])
   expect(tx.create).not.toHaveBeenCalled()
 })
 
