@@ -12,6 +12,9 @@ let origin: string
 let fixtureUrl: string
 let page: Page
 let fixture: Awaited<ReturnType<typeof seedMarginFixture>>
+/** Full document loads of `page` after its fixture was ready. Hash routes
+ *  don't count; a dev-server dependency re-optimization reload does. */
+let reloadsSinceReady = 0
 
 beforeAll(async () => {
   cacheDir = await mkdtemp(resolve('node_modules/.vite-margin-browser-'))
@@ -32,9 +35,15 @@ beforeAll(async () => {
     // Apply each native wheel delta in one step for the geometry assertions.
     args: ['--disable-smooth-scrolling'],
   })
+  // The cache dir starts empty, so the first boot also optimizes dependencies
+  // and transforms the whole app. Pay that here, not inside the first test.
+  await openFixture()
+  await page.close()
 })
 
-beforeEach(async () => {
+beforeEach(openFixture)
+
+async function openFixture() {
   if (!browser) throw new Error('Chromium did not start')
   page = await browser.newPage({viewport: {width: 1440, height: 780}})
   const pageErrors: string[] = []
@@ -75,10 +84,14 @@ beforeEach(async () => {
   await root.waitFor({timeout: 10_000})
   await card(fixture.first).waitFor({timeout: 10_000})
   await margin().and(page.locator('[aria-busy="false"]')).waitFor({timeout: 10_000})
-})
+  reloadsSinceReady = 0
+  page.on('load', () => { reloadsSinceReady++ })
+}
 
 afterEach(async () => {
+  const reloads = reloadsSinceReady
   await page?.close()
+  if (reloads > 0) throw new Error(`The page reloaded ${reloads} time(s) during the test, so its geometry is not the fixture's`)
 })
 
 afterAll(async () => {
@@ -101,15 +114,22 @@ const box = async (locator: Locator) => {
 const renderFrames = () => page.evaluate(() => new Promise<void>(resolve =>
   requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 
+/** Returns once the card sits `fromTop` below the port's top AND the margin
+ *  has stopped re-placing it: two consecutive samples agree. */
 const positionCard = async (locator: Locator, fromTop: number) => {
+  let previous: number | null = null
   await expect.poll(async () => {
     const [port, current] = await Promise.all([box(outline()), box(locator)])
     const delta = current.y - port.y - fromTop
     if (Math.abs(delta) >= 3) {
       await outline().evaluate((element, delta) => { element.scrollTop += delta }, delta)
+      previous = null
+      return false
     }
-    return Math.abs(delta)
-  }, {timeout: 5_000}).toBeLessThan(3)
+    const settled = previous === current.y
+    previous = current.y
+    return settled
+  }, {timeout: 5_000}).toBe(true)
 }
 
 const wheelOutline = async (delta: number) => {
