@@ -1,0 +1,1 @@
+export{K1 as dailyNotesLocalSchema}from"../../../chunks/app-R6UXjN1R.js";

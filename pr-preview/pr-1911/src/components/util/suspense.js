@@ -1,0 +1,1 @@
+export{wX as SuspenseFallback}from"../../../chunks/app-R6UXjN1R.js";
