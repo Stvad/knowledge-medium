@@ -1,1 +1,1 @@
-export{QC as richPastePlugin}from"../../../chunks/app-B-keTxst.js";
+export{QC as richPastePlugin}from"../../../chunks/app-CbHQZzD4.js";

@@ -1,1 +1,1 @@
-export{jz as BlockLoadingPlaceholder}from"../../chunks/app-B-keTxst.js";
+export{jz as BlockLoadingPlaceholder}from"../../chunks/app-CbHQZzD4.js";
