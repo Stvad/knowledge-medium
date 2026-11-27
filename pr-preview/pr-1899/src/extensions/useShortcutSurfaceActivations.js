@@ -1,1 +1,1 @@
-export{AH as useShortcutSurfaceActivations}from"../../chunks/app-DfgrbnEk.js";
+export{AH as useShortcutSurfaceActivations}from"../../chunks/app-IkphmdPz.js";

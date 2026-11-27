@@ -1,1 +1,1 @@
-export{QL as approveExtensionHere}from"../../chunks/app-DfgrbnEk.js";
+export{QL as approveExtensionHere}from"../../chunks/app-IkphmdPz.js";

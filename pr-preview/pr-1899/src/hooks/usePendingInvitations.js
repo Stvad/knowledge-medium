@@ -1,1 +1,1 @@
-export{PA as usePendingInvitations}from"../../chunks/app-DfgrbnEk.js";
+export{PA as usePendingInvitations}from"../../chunks/app-IkphmdPz.js";
