@@ -1,0 +1,1 @@
+export{LB as trimIfEdited}from"../../chunks/app-5hf2esN-.js";

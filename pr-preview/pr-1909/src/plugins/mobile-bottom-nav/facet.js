@@ -1,0 +1,1 @@
+export{HO as mobileBottomNavItemsFacet}from"../../../chunks/app-5hf2esN-.js";

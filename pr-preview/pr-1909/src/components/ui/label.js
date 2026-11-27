@@ -1,0 +1,1 @@
+export{NM as Label}from"../../../chunks/app-5hf2esN-.js";

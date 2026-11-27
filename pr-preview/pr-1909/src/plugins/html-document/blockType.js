@@ -1,0 +1,1 @@
+export{o$ as htmlDocumentTypeSeed}from"../../../chunks/app-5hf2esN-.js";
