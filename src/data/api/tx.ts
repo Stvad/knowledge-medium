@@ -83,7 +83,7 @@ export interface SiblingAnchor {
  *  but are referenced by the Tx interface. */
 import type { Mutator } from './mutator'
 import type { ScheduledArgsFor } from './processor'
-import type { SameTxEventPayload } from './sameTxProcessor'
+import type { SameTxEventPayload, SameTxReadDb } from './sameTxProcessor'
 
 /** Named value links carry the alias target resolved for their proposed content. */
 export type ProposedValueChild = Pick<BlockData, 'content' | 'referenceTargetId'>
@@ -91,6 +91,9 @@ export type ProposedValueChild = Pick<BlockData, 'content' | 'referenceTargetId'
 /** Transactional session. Async reads, no arbitrary queries. Spec §5.3. */
 export interface Tx {
   // ──── Reads ────
+
+  /** Read extension-owned data under this write lock. Use the Tx primitives for writes. */
+  readonly readDb: SameTxReadDb
 
   /** Read with read-your-own-writes. Runs inside `db.writeTransaction`,
    *  so SQL natively sees writes already issued by this tx. Returns null

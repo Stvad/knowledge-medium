@@ -12,9 +12,9 @@ const {createClient, authedRequest, dailyNote} = vi.hoisted(() => {
   return {authedRequest, createClient: vi.fn(() => ({http: {authedRequest}})), dailyNote: vi.fn()}
 })
 vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({createClient}))
-vi.mock('@/plugins/daily-notes/index.js', async importOriginal => ({
-  ...await importOriginal<typeof import('@/plugins/daily-notes/index.js')>(),
-  getOrCreateDailyNote: dailyNote,
+vi.mock('@/plugins/daily-notes/dailyNotes.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/plugins/daily-notes/dailyNotes.js')>(),
+  getOrCreateDailyNoteInTx: dailyNote,
 }))
 vi.mock('@/data/stateBlocks.js', () => ({
   pluginPrefsBlockId: (workspaceId: string) => workspaceId,

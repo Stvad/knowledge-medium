@@ -26,7 +26,7 @@ import type { BlockRenderer } from '@/types.js'
 import { keyAtEnd, keysBetween, originalSiblingKeys } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
-import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
+import { getOrCreateDailyNoteInTx, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
 import {
   computePromotedFromChildren,
   ensurePromotedPropertySchemas,
@@ -456,9 +456,32 @@ const fetchMatrixSync = (config: MatrixConfig, since: string | null, signal: Abo
     {abortSignal: signal},
   )
 
-const roomEventsFromSync = (syncBody: any, roomId: string): any[] => {
-  const events = syncBody?.rooms?.join?.[roomId]?.timeline?.events
-  return Array.isArray(events) ? events : []
+// /messages returns newest first. Reverse the complete interval so appending a
+// recovered page never puts it after the more recent page fetched before it.
+const fetchGapEvents = async (
+  config: MatrixConfig, prevBatch: unknown, since: string, signal: AbortSignal,
+  matrixClient: any, verifyWorkspace: () => void,
+): Promise<any[]> => {
+  if (typeof prevBatch !== 'string' || !prevBatch) throw new Error('Limited Matrix timeline has no prev_batch')
+  const events: any[] = []
+  const visited = new Set<string>()
+  let from = prevBatch
+  while (from !== since) {
+    verifyWorkspace()
+    if (visited.has(from)) throw new Error('Matrix history pagination repeated a token')
+    visited.add(from)
+    const page = await matrixClient.http.authedRequest(
+      'GET', `/rooms/${encodeURIComponent(config.roomId)}/messages`,
+      {from, to: since, dir: 'b', filter: JSON.stringify({types: ['m.room.message']}), limit: '100'},
+      undefined, {abortSignal: signal},
+    )
+    if (!Array.isArray(page?.chunk)) throw new Error('Matrix history page has no chunk')
+    for (const event of page.chunk) events.push(event)
+    if (page.end === undefined) break
+    if (typeof page.end !== 'string' || !page.end) throw new Error('Matrix history page has an invalid end token')
+    from = page.end
+  }
+  return events.reverse()
 }
 
 const eventTimestamp = (event: any): number => {
@@ -816,16 +839,33 @@ const ensureMatrixTagBlock = async (
   return id
 }
 
-const appendMatrixMessage = async (
+// The type index covers live rows. A deleted message keeps its stored type and
+// metadata in its bag even though the index entry disappears.
+const handledEvent = (
+  db: Pick<Tx['readDb'], 'getOptional'>, workspaceId: string, eventId: string,
+) => db.getOptional(
+  `SELECT 1 FROM blocks WHERE id = ? AND workspace_id = ?
+   UNION ALL
+   SELECT 1 FROM (
+     SELECT b.properties_json FROM block_types t JOIN blocks b ON b.id = t.block_id
+     WHERE t.workspace_id = ? AND t.type = 'matrix-message'
+     UNION ALL
+     SELECT properties_json FROM blocks WHERE workspace_id = ? AND deleted = 1
+       AND EXISTS (SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'matrix-message')
+   ) WHERE ? IN (json_extract(properties_json, '$."matrix-event:id"'), json_extract(properties_json, '$."matrix:eventId"'))
+   LIMIT 1`,
+  [messageNodeId(workspaceId, eventId, [0]), workspaceId, workspaceId, workspaceId, eventId],
+)
+
+export const appendMatrixMessage = async (
   repo: any, config: MatrixConfig, event: any, matrixClient: any, verifyWorkspace: () => void,
 ): Promise<void> => {
   const eventId = typeof event.event_id === 'string' ? event.event_id : null
   if (!eventId) return
   const {workspaceId} = config
   verifyWorkspace()
+  if (await handledEvent(repo.db, workspaceId, eventId)) return
   const iso = todayIso(new Date(eventTimestamp(event)))
-  await getOrCreateDailyNote(repo, workspaceId, iso)
-  const dailyId = dailyNoteBlockId(workspaceId, iso)
 
   // Promotion INVENTS property names from message text (`key:: value`), so no
   // code seed can declare them. Mint their definitions BEFORE the write:
@@ -839,23 +879,12 @@ const appendMatrixMessage = async (
   const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
   for (const note of promotionNotes) console.warn('[matrix] promoted property:', note)
 
-  await repo.tx(async (tx: any) => {
+  await repo.tx(async (tx: Tx) => {
+    if (await handledEvent(tx.readDb, workspaceId, eventId)) return
+    verifyWorkspace()
+    const dailyId = await getOrCreateDailyNoteInTx(tx, repo.snapshotTypeRegistries(), workspaceId, iso)
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso, verifyWorkspace)
-
-    // Idempotency + cross-device de-duplication. The message root carries a
-    // deterministic id derived from the (workspace, matrix event id). A row
-    // already at that id — live OR tombstoned — means this event was already
-    // ingested (here or, post-sync, on another device) or deliberately
-    // deleted, so leave it be. Creation is atomic, so a present root implies
-    // the whole tree is present; absence implies none of its nodes exist.
-    const rootId = messageNodeId(workspaceId, eventId, [0])
-    if (await tx.get(rootId)) return
-
-    // Legacy guard: messages ingested before deterministic ids carry random
-    // ids but the same `matrix-event:id` property. This event would have
-    // landed under the same day's tag block, so a match there means skip.
     const messageChildren = await tx.childrenOf(tagBlockId, workspaceId)
-    if (messageChildren.some((child: any) => child.properties?.[eventIdProp.name] === eventId)) return
 
     await createBlockTree(
       checkedTreeWriter(tx, verifyWorkspace),
@@ -1007,22 +1036,30 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
   while (isCurrent()) {
     try {
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
-      const events = nextBatch ? roomEventsFromSync(syncBody, config.roomId) : []
-
-      for (const event of events) {
-        if (event?.type === 'm.room.message') await appendMatrixMessage(repo, config, event, matrixClient, verifyWorkspace)
+      const timeline = nextBatch ? syncBody?.rooms?.join?.[config.roomId]?.timeline : undefined
+      const gap = nextBatch && timeline?.limited
+        ? await fetchGapEvents(config, timeline.prev_batch, nextBatch, signal, matrixClient, verifyWorkspace)
+        : null
+      for (const batch of [gap ?? [], timeline?.events ?? []]) {
+        for (const event of batch) {
+          if (event?.type === 'm.room.message') await appendMatrixMessage(repo, config, event, matrixClient, verifyWorkspace)
+        }
       }
 
       const newBatch = syncBody?.next_batch
       if (typeof newBatch === 'string') {
         verifyWorkspace()
-        nextBatch = newBatch
         saveNextBatch(config, newBatch)
+        nextBatch = newBatch
+        if (gap) setMatrixDiagnostic({
+          severity: 'ok', summary: 'Matrix history gap recovered',
+          detail: `History events checked: ${gap.length}.`,
+        })
       }
       if (degraded) {
         degraded = false
         toasted = false
-        clearMatrixDiagnostic()
+        if (!gap) clearMatrixDiagnostic()
       }
     } catch (error) {
       if (error === stopped || !isCurrent()) return

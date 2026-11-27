@@ -7,9 +7,9 @@ const writes = vi.hoisted(() => ({
   tag: vi.fn(async () => ({id: 'tag'})),
 }))
 vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({createClient: vi.fn()}))
-vi.mock('@/plugins/daily-notes/index.js', async importOriginal => ({
-  ...await importOriginal<typeof import('@/plugins/daily-notes/index.js')>(),
-  getOrCreateDailyNote: writes.dailyNote,
+vi.mock('@/plugins/daily-notes/dailyNotes.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/plugins/daily-notes/dailyNotes.js')>(),
+  getOrCreateDailyNoteInTx: writes.dailyNote,
 }))
 vi.mock('@/plugins/roam-import/plan.js', async importOriginal => ({
   ...await importOriginal<typeof import('@/plugins/roam-import/plan.js')>(),
@@ -30,11 +30,13 @@ const config = {
 function fixture(body = 'example') {
   const tx = {
     childrenOf: vi.fn<() => Promise<Array<{id: string, content: string}>>>().mockResolvedValue([]),
-    get: vi.fn(async () => null),
+    readDb: {getOptional: vi.fn(async () => null)},
     create: vi.fn(async () => 'message'),
   }
   const repo = {
     activeWorkspaceId: config.workspaceId,
+    db: {getOptional: vi.fn(async () => null)},
+    snapshotTypeRegistries: () => ({}),
     tx: (run: (writer: typeof tx) => Promise<void>) => run(tx),
     propertySchemas: new Map(),
   }
@@ -46,7 +48,7 @@ function fixture(body = 'example') {
     localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch: 'before'}))
     return pollLoop(repo, config, new AbortController().signal, client)
   }
-  return {tx, switchWorkspace, run}
+  return {tx, repo, switchWorkspace, run}
 }
 
 afterEach(() => {
@@ -54,12 +56,20 @@ afterEach(() => {
   localStorage.clear()
 })
 
-it('skips schema registration when the workspace changes during daily-note creation', async () => {
-  const {switchWorkspace, run} = fixture()
-  writes.dailyNote.mockImplementationOnce(async () => { switchWorkspace() })
+it('skips schema registration when the workspace changes during the initial identity read', async () => {
+  const {repo, switchWorkspace, run} = fixture()
+  repo.db.getOptional.mockImplementationOnce(async () => { switchWorkspace(); return null })
   await run()
-  expect(writes.dailyNote).toHaveBeenCalledOnce()
+  expect(repo.db.getOptional).toHaveBeenCalledOnce()
   expect(writes.schemas).not.toHaveBeenCalled()
+})
+
+it('skips the daily note when the workspace changes during the transactional identity read', async () => {
+  const {tx, switchWorkspace, run} = fixture()
+  tx.readDb.getOptional.mockImplementationOnce(async () => { switchWorkspace(); return null })
+  await run()
+  expect(tx.readDb.getOptional).toHaveBeenCalledOnce()
+  expect(writes.dailyNote).not.toHaveBeenCalled()
 })
 
 it('skips tag creation when the workspace changes during the tag lookup', async () => {
