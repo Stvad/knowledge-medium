@@ -1,1 +1,1 @@
-export{PF as CommandPaletteHeaderItem}from"../../../chunks/app-DG7BiGcK.js";
+export{PF as CommandPaletteHeaderItem}from"../../../chunks/app-CLsqF8IN.js";

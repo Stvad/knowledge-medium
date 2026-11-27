@@ -1,1 +1,1 @@
-export{GF as SwipeActionMenu}from"../../../chunks/app-DG7BiGcK.js";
+export{GF as SwipeActionMenu}from"../../../chunks/app-CLsqF8IN.js";

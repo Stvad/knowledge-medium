@@ -1,1 +1,1 @@
-export{xX as BootFallback}from"../../../chunks/app-DG7BiGcK.js";
+export{xX as BootFallback}from"../../../chunks/app-CLsqF8IN.js";
