@@ -182,12 +182,13 @@ const savedCursor = (): string | null => {
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-beforeEach(async () => {
+const resetReplica = async (): Promise<void> => {
   timeline.clear()
   window.localStorage.clear()
   await resetTestDb(sharedDb.db)
   await seedFlippedWorkspace()
-})
+}
+beforeEach(resetReplica)
 afterEach(() => {
   stopIngest?.()
   stopIngest = undefined
@@ -310,10 +311,6 @@ describe('matrix ingest into a child-backed workspace', () => {
 
   it('merges conflicting-schema replicas without shifting attribute or nested message rows', async () => {
     const makeReplica = async (presetId: 'number' | 'string'): Promise<MessageRow[]> => {
-      timeline.clear()
-      window.localStorage.clear()
-      await resetTestDb(sharedDb.db)
-      await seedFlippedWorkspace()
       const repo = await setup()
       await repo.userSchemas.addSchema({name: 'matrix:count', presetId})
       await configureIngest(repo)
@@ -344,6 +341,7 @@ describe('matrix ingest into a child-backed workspace', () => {
     // them. The test snapshots just the user-authored rows, excluding derived
     // property branches from the message subtree.
     const promotingRows = await makeReplica('string')
+    await resetReplica()
     const decliningRows = await makeReplica('number')
     const rootId = eventNodeId('0')
     const promotedRoot = promotingRows.find(row => row.id === rootId)!
