@@ -73,7 +73,7 @@ describe('buildClaudeArgs', () => {
 })
 
 describe('unexpectedClaudeInventory', () => {
-  const intended = {acceptedBuiltIns: new Set(['Read']), serverNames: ['fixture']}
+  const intended = {acceptedBuiltIns: new Set(['Read']), serverNames: ['fixture'], allowedPlugins: new Set<string>()}
   const server = {name: 'fixture', source: 'dynamic'}
   const clean = {tools: ['Read', 'mcp__fixture__lookup'], mcp_servers: [server], plugins: [{source: 'fixture@builtin'}]}
 
@@ -95,6 +95,18 @@ describe('unexpectedClaudeInventory', () => {
     ['malformed server', {...clean, mcp_servers: [null]}, 'server'],
   ] as const)('reports %s', (_, init, detail) => {
     expect(unexpectedClaudeInventory(init, intended).join(' ')).toContain(detail)
+  })
+
+  it('accepts a plugin the watcher allows and still reports the others', () => {
+    const allowing = {...intended, allowedPlugins: new Set(['guard@local'])}
+    const plugins = [{source: 'guard@local'}, {source: 'guard@other'}]
+    expect(unexpectedClaudeInventory({...clean, plugins}, allowing)).toEqual(['plugin guard@other'])
+  })
+
+  it('still reports a tool an allowed plugin adds', () => {
+    const allowing = {...intended, allowedPlugins: new Set(['guard@local'])}
+    expect(unexpectedClaudeInventory({...clean, tools: ['Read', 'GuardTool'], plugins: [{source: 'guard@local'}]}, allowing))
+      .toEqual(['tool GuardTool'])
   })
 })
 
@@ -390,6 +402,13 @@ describe('runClaude', () => {
     expect(events).toEqual([])
   })
 
+  it('accepts an init whose plugins the watcher allows', async () => {
+    const init = {...cleanInit, plugins: [{source: 'guard@local'}]}
+    const script = streamResult(init) + '; ' + streamResult({type: 'result', result: 'ok'})
+    const result = await runClaude({...baseOptions, allowedPlugins: ['guard@local']}, fakeProcess(script))
+    expect(result).toMatchObject({ok: true, resultText: 'ok'})
+  })
+
   it('keeps waiting for init through startup hook notifications', async () => {
     const hooks = ['hook_started', 'hook_progress', 'hook_response'].map(subtype => streamResult({type: 'system', subtype}))
     const final = streamResult({type: 'result', result: 'ok'})
@@ -409,7 +428,7 @@ describe('runClaude', () => {
 
   it.each(['\n', ''])('discards a buffered session after refusal with terminator %j', terminator => {
     const events: RunEvent[] = []
-    const parser = createStreamJsonParser(event => events.push(event), {acceptedBuiltIns: new Set<string>(), serverNames: []})
+    const parser = createStreamJsonParser(event => events.push(event), {acceptedBuiltIns: new Set<string>(), serverNames: [], allowedPlugins: new Set<string>()})
     const refused = JSON.stringify({...cleanInit, tools: ['Extra']})
     const buffered = JSON.stringify({...cleanInit, session_id: 'late'})
     parser.feed(`${refused}\n${buffered}${terminator}`)
@@ -456,7 +475,7 @@ describe('runClaude', () => {
 
   it('ignores non-tool blocks and payloads outside tool request events', () => {
     const other = toolUse('Unused')
-    const parser = createStreamJsonParser(undefined, {acceptedBuiltIns: new Set<string>(), serverNames: []})
+    const parser = createStreamJsonParser(undefined, {acceptedBuiltIns: new Set<string>(), serverNames: [], allowedPlugins: new Set<string>()})
     const records = [
       cleanInit,
       assistant(null, {type: 'text', text: 'ok'}, {type: 'server_tool_use', name: 'server_operation'}),

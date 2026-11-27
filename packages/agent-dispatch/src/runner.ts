@@ -55,6 +55,7 @@ export interface CommonRunOptions {
 export interface AgentRunOptions extends CommonRunOptions {
   claudeBin: string
   allowedTools: string[]
+  allowedPlugins?: readonly string[]
   effort?: ClaudeEffort
   mcpConfig?: {path: string, serverNames: readonly string[]}
   /** Which CLI the engine should dispatch this run to (daemon.ts's
@@ -174,6 +175,7 @@ const claudeToolSet = (options: AgentRunOptions) => {
     requested,
     acceptedBuiltIns: new Set([...requested, ...reported]),
     serverNames: options.mcpConfig?.serverNames ?? [],
+    allowedPlugins: new Set(options.allowedPlugins),
   }
 }
 
@@ -206,7 +208,7 @@ export const buildClaudeArgs = (options: AgentRunOptions, tools = claudeToolSet(
 
 const startupHookEvents: ReadonlySet<unknown> = new Set(['hook_started', 'hook_progress', 'hook_response'])
 
-type ClaudeToolSet = Pick<ReturnType<typeof claudeToolSet>, 'acceptedBuiltIns' | 'serverNames'>
+type ClaudeToolSet = Pick<ReturnType<typeof claudeToolSet>, 'acceptedBuiltIns' | 'serverNames' | 'allowedPlugins'>
 
 const unexpectedTool = (name: unknown, intended: ClaudeToolSet): string | null => {
   if (typeof name !== 'string') return 'malformed tool name'
@@ -232,7 +234,7 @@ export const unexpectedClaudeInventory = (init: Record<string, unknown>, intende
   else for (const plugin of init.plugins) {
     const source = isRecord(plugin) ? plugin.source : undefined
     if (typeof source !== 'string') extras.push('missing or malformed plugin source')
-    else if (!source.endsWith('@builtin')) extras.push(`plugin ${source}`)
+    else if (!source.endsWith('@builtin') && !intended.allowedPlugins.has(source)) extras.push(`plugin ${source}`)
   }
   return extras
 }
@@ -489,7 +491,7 @@ export const runClaude = async (
   if (refusal) {
     return {
       ok: false, resultText: '', sessionId: null, exitCode, timedOut, raw: null, usage: null,
-      stderr: `Check plugins and settings in runner.cwd (including the default home directory), managed settings, and tool names in this Claude CLI version. ${refusal}`,
+      stderr: `Check plugins and settings in runner.cwd (including the default home directory), managed settings, and tool names in this Claude CLI version; a plugin the watcher should load goes in runner.allowedPlugins. ${refusal}`,
     }
   }
   const ok = !timedOut && exitCode === 0 && parsed !== null && !parsed.isError

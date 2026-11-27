@@ -1425,7 +1425,7 @@ describe('mention lifecycle', () => {
           name: 'mentions',
           target: 'claude',
           settleMs: 0,
-          runner: {executor: 'claude', allowedTools: ['Bash(git:*)']},
+          runner: {executor: 'claude', allowedTools: ['Bash(git:*)'], allowedPlugins: ['guard@local']},
         }],
       }),
     })
@@ -1433,6 +1433,7 @@ describe('mention lifecycle', () => {
     await engine.tick()
     await engine.drain()
 
+    expect(runTask.mock.calls[0][0]).toMatchObject({allowedPlugins: ['guard@local']})
     const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
     expect(tools).toContain('mcp__km__get_block')
     expect(tools).toContain('WebSearch')

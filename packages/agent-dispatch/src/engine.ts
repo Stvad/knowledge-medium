@@ -226,6 +226,7 @@ export const createEngine = (deps: EngineDeps) => {
           ...runner.allowedTools,
         ])]
         : [],
+      allowedPlugins: runner.executor === 'claude' ? runner.allowedPlugins : undefined,
       mcpConfig: mcpConfig ?? undefined,
       model: runner.model,
       effort: runner.executor === 'claude' ? runner.effort : undefined,
