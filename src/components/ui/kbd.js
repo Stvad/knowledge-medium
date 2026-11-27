@@ -1,1 +1,1 @@
-export{IF as Kbd}from"../../../chunks/app-CY2u5ZWT.js";
+export{RF as Kbd}from"../../../chunks/app-CKmuRdWw.js";

@@ -1,1 +1,1 @@
-export{A4 as CONTRIBUTOR_TYPE,j4 as attributionCreatorsProp,M4 as attributionEditorsProp,N4 as contributorForProp,P4 as contributorKindOf,F4 as contributorKindProp,I4 as contributorProfileType,L4 as contributorRoleProp}from"../../../chunks/app-CY2u5ZWT.js";
+export{M4 as CONTRIBUTOR_TYPE,N4 as attributionCreatorsProp,P4 as attributionEditorsProp,F4 as contributorForProp,I4 as contributorKindOf,L4 as contributorKindProp,R4 as contributorPictureProp,z4 as contributorProfileType,B4 as contributorRoleProp}from"../../../chunks/app-CKmuRdWw.js";
