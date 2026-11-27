@@ -36,15 +36,20 @@ beforeAll(async () => {
     args: ['--disable-smooth-scrolling'],
   })
   // The cache dir starts empty, so the first boot also optimizes dependencies
-  // and transforms the whole app. Pay that here, not inside the first test.
-  await openFixture()
+  // and transforms the whole app. Pay that here, not inside the first test,
+  // with waits sized for it.
+  await openFixture(COLD_BOOT_WAIT_MS)
   await page.close()
-})
+}, 300_000)
 
-beforeEach(openFixture)
+beforeEach(() => openFixture())
 
-async function openFixture() {
+/** A cold boot's per-step wait: two to six times a warm boot's on CI. */
+const COLD_BOOT_WAIT_MS = 60_000
+
+async function openFixture(waitMs = 10_000) {
   if (!browser) throw new Error('Chromium did not start')
+  reloadsSinceReady = 0
   page = await browser.newPage({viewport: {width: 1440, height: 780}})
   const pageErrors: string[] = []
   page.on('pageerror', error => pageErrors.push(error.message))
@@ -67,9 +72,8 @@ async function openFixture() {
   fixture = await page.evaluate<Awaited<ReturnType<typeof seedMarginFixture>>>(
     `import(${JSON.stringify(fixtureUrl)}).then(fixture => fixture.seedMarginFixture())`,
   )
-  await card(fixture.first).waitFor({timeout: 10_000})
-  await margin().and(page.locator('[aria-busy="false"]')).waitFor({timeout: 10_000})
-  reloadsSinceReady = 0
+  await card(fixture.first).waitFor({timeout: waitMs})
+  await margin().and(page.locator('[aria-busy="false"]')).waitFor({timeout: waitMs})
   page.on('load', () => { reloadsSinceReady++ })
 }
 
@@ -109,12 +113,13 @@ const positionCard = async (locator: Locator, fromTop: number) => {
     if (Math.abs(delta) >= 3) {
       await outline().evaluate((element, delta) => { element.scrollTop += delta }, delta)
       previous = null
-      return false
+      return `${Math.round(delta)} px from its place`
     }
     const settled = previous === current.y
+    const moved = `still moving (${previous} → ${current.y})`
     previous = current.y
-    return settled
-  }, {timeout: 5_000}).toBe(true)
+    return settled ? 'settled' : moved
+  }, {timeout: 5_000}).toBe('settled')
 }
 
 const wheelOutline = async (delta: number) => {

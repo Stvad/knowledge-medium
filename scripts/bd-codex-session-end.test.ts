@@ -40,16 +40,18 @@ const waitForLog = async (path: string, text: string) => {
   await vi.waitFor(() => expect(readFileSync(path, 'utf8')).toContain(text), { timeout: 5_000, interval: 20 })
 }
 
+// The production probe budget (1s) must fit the SessionEnd hook's 3s cap; under full-gate
+// load a `git rev-parse` can exceed it, so every test that needs a real probe to succeed
+// allows more, still below vitest's default 5s test budget.
+const LOADED_PROBE_TIMEOUT = 4_000
+
 describe('resolveMainRepoRoot', () => {
   it('resolves the shared main root when called from a linked worktree', () => {
     const { main, cwd } = makeGitRepo({ worktree: true })
-    expect(resolveMainRepoRoot({ cwd })).toBe(realpathSync(main))
+    expect(resolveMainRepoRoot({ cwd, probeTimeout: LOADED_PROBE_TIMEOUT })).toBe(realpathSync(main))
   })
 })
 
-// The production probe budget (1s) must fit the SessionEnd hook's 3s cap; under full-gate
-// load a `git rev-parse` can exceed it, so tests that need a real probe to succeed allow more.
-const LOADED_PROBE_TIMEOUT = 15_000
 
 describe('launchSessionEndSync', () => {
   it('returns before the detached sync finishes and writes its stdout/stderr to the shared log', async () => {
@@ -76,7 +78,7 @@ process.stdout.write('fake sync ready\\n')
     )
     const launcher = writeSyncFixture(
       'parent',
-      `import { launchSessionEndSync } from ${JSON.stringify(fileURLToPath(new URL('./bd-codex-session-end.mjs', import.meta.url)))}\nlaunchSessionEndSync({ cwd: ${JSON.stringify(cwd)}, syncScript: ${JSON.stringify(fixture)} })\n`,
+      `import { launchSessionEndSync } from ${JSON.stringify(fileURLToPath(new URL('./bd-codex-session-end.mjs', import.meta.url)))}\nlaunchSessionEndSync({ cwd: ${JSON.stringify(cwd)}, syncScript: ${JSON.stringify(fixture)}, probeTimeout: ${LOADED_PROBE_TIMEOUT} })\n`,
     )
     let parentStatus: number | null = null
     let parentStderr = ''
@@ -123,13 +125,13 @@ process.stdout.write('fake sync ready\\n')
     )
     expect(child.unref).toHaveBeenCalledOnce()
     expect(existsSync(join(main, '.beads', 'embeddeddolt'))).toBe(false)
-  }, 20_000)
+  })
 
   it('reports launch failures on stderr and preserves the failure in the log', () => {
     const { main, cwd } = makeGitRepo()
     const error = new Error('fixture spawn failed')
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const result = launchSessionEndSync({ cwd, syncScript: '/tmp/fake-sync.mjs', spawnImpl: () => { throw error } })
+    const result = launchSessionEndSync({ cwd, syncScript: '/tmp/fake-sync.mjs', spawnImpl: () => { throw error }, probeTimeout: LOADED_PROBE_TIMEOUT })
 
     expect(result.started).toBe(false)
     expect(stderr).toHaveBeenCalledWith('bd-codex-session-end: failed — fixture spawn failed')
