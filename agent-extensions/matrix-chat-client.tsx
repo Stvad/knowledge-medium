@@ -59,6 +59,7 @@ const POLL_ERROR_DELAY_MS = 5_000
 // their writes instead of duplicating the message. Picked once; never change.
 const MATRIX_NS = '9839e327-a96a-4974-acb1-128fc44878b8'
 
+const TOKEN_PREFIX = 'knowledge-medium:matrix:token:v2:'
 // Pre-binding storage is read only by setup and the legacy config migration.
 const LEGACY_TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
 const LEGACY_BATCH_PREFIX = 'knowledge-medium:matrix-messages:state:v1'
@@ -204,14 +205,16 @@ const EVENT_KEY_RENAMES: ReadonlyArray<readonly [string, string]> = [
 // ---------------------------------------------------------------------------
 // config / secret storage
 
-const normalizeBaseUrl = (value: string): string => {
+const httpsUrl = (value: string): URL | null => {
   try {
     const url = new URL(value)
-    return url.protocol === 'https:' ? url.origin : ''
+    return url.protocol === 'https:' ? url : null
   } catch {
-    return ''
+    return null
   }
 }
+
+const originWithoutPath = (url: URL | null) => url?.pathname === '/' ? url.origin : ''
 
 interface MatrixDestination {
   workspaceId: string
@@ -222,27 +225,79 @@ interface MatrixDestination {
 const destinationKey = ({workspaceId, baseUrl, roomId}: MatrixDestination) =>
   JSON.stringify([workspaceId, baseUrl, roomId])
 export const tokenKey = (destination: MatrixDestination) =>
-  `knowledge-medium:matrix:token:v2:${destinationKey(destination)}`
+  TOKEN_PREFIX + destinationKey(destination)
 export const nextBatchKey = (destination: MatrixDestination) =>
   `knowledge-medium:matrix-messages:state:v2:${destinationKey(destination)}`
 
 const loadToken = (destination: MatrixDestination) => window.localStorage.getItem(tokenKey(destination))
 const pendingToken = () => window.localStorage.getItem(LEGACY_TOKEN_KEY)
 
-const bindToken = (destination: MatrixDestination, token: string, legacyBaseUrl: string) => {
+const storageKeys = (prefix: string): string[] => {
   const storage = window.localStorage
-  const previous = `${LEGACY_BATCH_PREFIX}:${legacyBaseUrl.replace(/\/+$/, '')}:${destination.roomId}`
-  const cursor = storage.getItem(previous)
-  const adopt = cursor !== null && storage.getItem(nextBatchKey(destination)) === null
-  if (adopt) storage.setItem(nextBatchKey(destination), cursor)
-  storage.setItem(tokenKey(destination), token)
-  if (adopt) storage.removeItem(previous)
-  const legacy = readLegacyConfig()
-  if (legacy?.accessToken === token) {
-    delete legacy.accessToken
-    storage.setItem(LEGACY_CONFIG_KEY, JSON.stringify(legacy))
+  const keys: string[] = []
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i)
+    if (key?.startsWith(prefix)) keys.push(key)
   }
-  if (pendingToken() === token) storage.removeItem(LEGACY_TOKEN_KEY)
+  return keys
+}
+
+const legacyCheckpoint = ({baseUrl, roomId}: MatrixDestination): string | null => {
+  const storage = window.localStorage
+  const prefix = LEGACY_BATCH_PREFIX + ':'
+  const current = storage.getItem(prefix + baseUrl + ':' + roomId)
+  if (decodeNextBatch(current)) return current
+
+  // The v1 key retains the server spelling (including its path). Split at
+  // the Matrix room ID so an origin match cannot also match a room suffix.
+  for (const key of storageKeys(prefix)) {
+    const pair = key.slice(prefix.length)
+    const separator = pair.indexOf(':!')
+    if (separator < 0 || pair.slice(separator + 1) !== roomId) continue
+    if (httpsUrl(pair.slice(0, separator))?.origin !== baseUrl) continue
+    const raw = storage.getItem(key)
+    if (decodeNextBatch(raw)) return raw
+  }
+  return null
+}
+
+const eligibleLegacyToken = (destination: MatrixDestination) => {
+  const token = pendingToken()
+  if (!token) return null
+  if (legacyCheckpoint(destination)) return token
+  const legacy = readLegacyConfig()
+  return legacy?.roomId === destination.roomId &&
+    httpsUrl(legacy.baseUrl)?.origin === destination.baseUrl &&
+    (!legacy.accessToken || legacy.accessToken === token) ? token : null
+}
+
+const clearLegacyTokens = () => {
+  const legacy = readLegacyConfig()
+  if (legacy?.accessToken) {
+    delete legacy.accessToken
+    window.localStorage.setItem(LEGACY_CONFIG_KEY, JSON.stringify(legacy))
+  }
+  window.localStorage.removeItem(LEGACY_TOKEN_KEY)
+}
+
+const bindToken = (destination: MatrixDestination, token: string) => {
+  const storage = window.localStorage
+  const checkpointKey = nextBatchKey(destination)
+  if (storage.getItem(checkpointKey) === null) {
+    const cursor = legacyCheckpoint(destination)
+    if (cursor !== null) storage.setItem(checkpointKey, cursor)
+  }
+  storage.setItem(tokenKey(destination), token)
+  clearLegacyTokens()
+}
+
+const forgetDeviceTokens = () => {
+  if (!window.confirm('Forget all Matrix tokens in this browser across all workspaces?')) return
+  for (const key of storageKeys(TOKEN_PREFIX)) window.localStorage.removeItem(key)
+  clearLegacyTokens()
+  requestRestart()
+  setSetupOpen(false)
+  showInfo('Removed Matrix tokens from this device.')
 }
 
 interface MatrixConfig extends MatrixDestination {
@@ -261,7 +316,7 @@ const prefsBlock = (repo: any) => {
 
 const destinationFromPrefs = (prefs: Block): MatrixDestination => ({
   workspaceId: prefs.data.workspaceId,
-  baseUrl: normalizeBaseUrl(prefs.get(homeserverProp)),
+  baseUrl: originWithoutPath(httpsUrl(prefs.get(homeserverProp))),
   roomId: prefs.get(roomIdProp),
 })
 
@@ -338,8 +393,7 @@ const matrixDiagnosticSource: DiagnosticSourceContribution = {
 // ---------------------------------------------------------------------------
 // long-poll cursor (localStorage)
 
-const loadNextBatch = (config: MatrixConfig): string | null => {
-  const raw = window.localStorage.getItem(nextBatchKey(config))
+const decodeNextBatch = (raw: string | null): string | null => {
   if (!raw) return null
   try {
     const state = JSON.parse(raw)
@@ -348,6 +402,8 @@ const loadNextBatch = (config: MatrixConfig): string | null => {
     return null
   }
 }
+
+const loadNextBatch = (config: MatrixConfig) => decodeNextBatch(window.localStorage.getItem(nextBatchKey(config)))
 
 const saveNextBatch = (config: MatrixConfig, nextBatch: string) =>
   window.localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch, savedAt: Date.now()}))
@@ -1103,20 +1159,24 @@ const MatrixSetupDialog = () => {
   const [homeserver, setHomeserver] = useState('https://matrix.org')
   const [roomId, setRoomId] = useState('')
   const [token, setToken] = useState('')
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null)
+  const [workspace, setWorkspace] = useState<{id: string, name: string} | null>(null)
   const [saving, setSaving] = useState(false)
 
   // Load current prefs into the form each time the dialog opens.
   useEffect(() => {
     if (!open) return
     setToken('')
-    setWorkspaceId(null)
+    setWorkspace(null)
     let cancelled = false
     void (async () => {
       try {
         const prefs = await prefsBlock(repo)
-        if (!cancelled && prefs) {
-          setWorkspaceId(prefs.data.workspaceId)
+        if (!prefs) return
+        const id = prefs.data.workspaceId
+        const row = await repo.db.getOptional<{name: string}>('SELECT name FROM workspaces WHERE id = ?', [id])
+        if (!row) throw new Error('Missing workspace')
+        if (!cancelled) {
+          setWorkspace({id, name: row.name})
           setHomeserver(prefs.get(homeserverProp) || 'https://matrix.org')
           setRoomId(prefs.get(roomIdProp) || '')
         }
@@ -1127,33 +1187,32 @@ const MatrixSetupDialog = () => {
     return () => { cancelled = true }
   }, [open, repo])
 
-  const baseUrl = normalizeBaseUrl(homeserver)
-  const destination = workspaceId && baseUrl && roomId.trim()
-    ? {workspaceId, baseUrl, roomId: roomId.trim()} : null
+  const url = httpsUrl(homeserver)
+  const baseUrl = originWithoutPath(url)
+  const destination = workspace && baseUrl && roomId.trim()
+    ? {workspaceId: workspace.id, baseUrl, roomId: roomId.trim()} : null
   const save = async (bindPending: boolean) => {
     setSaving(true)
     try {
-      if (!destination || workspaceId !== repo.activeWorkspaceId) {
+      if (!destination || destination.workspaceId !== repo.activeWorkspaceId) {
         showError('Choose an HTTPS homeserver and room in the active workspace.')
         return
       }
       const prefs = await getPluginPrefsBlock(repo, destination.workspaceId, repo.user, matrixChatPrefsType)
-      const legacyBaseUrl = prefs.get(homeserverProp)
-      const selectedToken = bindPending ? pendingToken() : token
+      const selectedToken = bindPending ? eligibleLegacyToken(destination) : token
       if (!selectedToken && (bindPending || !loadToken(destination))) {
         showError('An access token is required.')
         return
       }
-      // Other devices still need this spelling to find their legacy checkpoint.
-      const sameOrigin = normalizeBaseUrl(legacyBaseUrl) === baseUrl
       await repo.tx(async tx => {
-        await tx.setProperty(prefs.id, homeserverProp, sameOrigin ? legacyBaseUrl : baseUrl)
+        await tx.setProperty(prefs.id, homeserverProp, baseUrl)
         await tx.setProperty(prefs.id, roomIdProp, destination.roomId)
         await tx.setProperty(prefs.id, autoStartProp, true)
-        await tx.setProperty(prefs.id, connectedHintProp, true)
-      }, {scope: ChangeScope.UserPrefs, description: 'configure Matrix ingest'})
+      }, {scope: ChangeScope.BlockDefault, description: 'configure Matrix ingest'})
+      await prefs.set(connectedHintProp, true)
       if (repo.activeWorkspaceId !== destination.workspaceId) throw new Error('The active workspace changed. Reopen Matrix settings.')
-      if (selectedToken) bindToken(destination, selectedToken, sameOrigin ? legacyBaseUrl : homeserver)
+      if (bindPending && eligibleLegacyToken(destination) !== selectedToken) throw new Error('The saved device token changed. Reopen Matrix settings.')
+      if (selectedToken) bindToken(destination, selectedToken)
       requestRestart()
       showSuccess('Matrix connected.')
       setSetupOpen(false)
@@ -1184,7 +1243,8 @@ const MatrixSetupDialog = () => {
               disabled={saving}
               placeholder='https://matrix.org'
             />
-            {homeserver && !baseUrl && <span>Enter an HTTPS homeserver URL.</span>}
+            {homeserver && !url && <span>Enter an HTTPS homeserver URL.</span>}
+            {url && !baseUrl && <span>Enter the homeserver origin without a path.</span>}
           </div>
           <div className='flex flex-col gap-1'>
             <Label htmlFor='mx-room'>Room ID</Label>
@@ -1207,11 +1267,13 @@ const MatrixSetupDialog = () => {
               placeholder={destination && loadToken(destination) ? 'leave blank to keep saved token' : 'paste token'}
             />
           </div>
-          {destination && <p className="break-all">Destination: {destination.baseUrl} · {destination.roomId} · workspace {workspaceId}</p>}
+          {destination && workspace && <p className="break-all">Destination: {destination.baseUrl} · {destination.roomId} · workspace {workspace.name}</p>}
         </div>
+        {pendingToken() && <p>Binding or saving a token clears the old unscoped credentials on this device.</p>}
+        <Button variant='ghost' disabled={saving} onClick={forgetDeviceTokens}>Forget all Matrix tokens on this device</Button>
         <DialogFooter>
           <Button variant='ghost' onClick={() => setSetupOpen(false)} disabled={saving}>Cancel</Button>
-          {pendingToken() && destination && !token && (
+          {open && destination && !token && eligibleLegacyToken(destination) && (
             <Button variant='outline' disabled={saving} onClick={() => void save(true)}>
               Bind saved device token
             </Button>
@@ -1341,7 +1403,7 @@ const resetPositionAction = {
   handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
     const prefs = await prefsBlock(uiStateBlock.repo)
     if (!prefs) return
-    window.localStorage.removeItem(nextBatchKey(destinationFromPrefs(prefs)))
+    window.localStorage.setItem(nextBatchKey(destinationFromPrefs(prefs)), JSON.stringify({nextBatch: null, savedAt: Date.now()}))
     requestRestart()
   },
 }

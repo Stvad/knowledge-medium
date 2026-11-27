@@ -48,6 +48,10 @@ vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({
   }),
 }))
 
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {createElement, type ComponentType} from 'react'
+import {RepoContext} from '@/context/repo.js'
+import * as toast from '@/utils/toast.js'
 import type { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo.js'
@@ -173,6 +177,50 @@ beforeEach(async () => {
 afterEach(() => {
   stopIngest?.()
   stopIngest = undefined
+})
+
+describe('Matrix setup in a child-backed workspace', () => {
+  it.each(['Save', 'Bind saved device token'] as const)('%s persists the settings and device credential', async button => {
+    const repo = await setup()
+    const prefs = await getPluginPrefsBlock(repo, WS, repo.user, matrixChatPrefsType)
+    const initialRoom = '!previous:matrix.test'
+    await prefs.set(roomIdProp, initialRoom)
+    await prefs.set(autoStartProp, false)
+    const legacyTokenKey = 'knowledge-medium:matrix:token:v1'
+    const legacyCursorKey = `knowledge-medium:matrix-messages:state:v1:${HOMESERVER}:${ROOM}`
+    const bind = button === 'Bind saved device token'
+    if (bind) {
+      localStorage.setItem(legacyTokenKey, 'setup-token')
+      localStorage.setItem(legacyCursorKey, JSON.stringify({nextBatch: 'old-cursor', savedAt: 1}))
+    }
+    const errors = vi.spyOn(toast, 'showError')
+    const successes = vi.spyOn(toast, 'showSuccess')
+    try {
+      const mount = matrixContributions.find(c => (c.value as {id?: string}).id === 'matrix.setup-dialog')!.value as {component: ComponentType}
+      const connect = matrixContributions.find(c => (c.value as {id?: string}).id === 'matrix.connect')!.value as unknown as {handler: () => void}
+      render(createElement(RepoContext.Provider, {value: repo}, createElement(mount.component)))
+      act(() => connect.handler())
+      await screen.findByDisplayValue(initialRoom)
+      fireEvent.change(screen.getByLabelText('Homeserver URL'), {target: {value: HOMESERVER}})
+      fireEvent.change(screen.getByLabelText('Room ID'), {target: {value: ROOM}})
+      if (!bind) fireEvent.change(screen.getByLabelText('Access token'), {target: {value: 'setup-token'}})
+      fireEvent.click(await screen.findByRole('button', {name: button}))
+      await waitFor(() => expect(errors.mock.calls.length + successes.mock.calls.length).toBeGreaterThan(0))
+      expect(errors.mock.calls).toEqual([])
+      expect(successes).toHaveBeenCalledWith('Matrix connected.')
+      expect(await cellBag(prefs.id)).toMatchObject({
+        [homeserverProp.name]: HOMESERVER, [roomIdProp.name]: ROOM, [autoStartProp.name]: true,
+        'matrix:connected': true,
+      })
+      expect(localStorage.getItem(tokenKey(destination))).toBe('setup-token')
+      expect(savedCursor()).toBe(bind ? 'old-cursor' : null)
+      expect(localStorage.getItem(legacyTokenKey)).toBeNull()
+    } finally {
+      cleanup()
+      errors.mockRestore()
+      successes.mockRestore()
+    }
+  })
 })
 
 describe('matrix ingest into a child-backed workspace', () => {
