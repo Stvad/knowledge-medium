@@ -1,0 +1,1 @@
+export{Cz as LazyBlockComponent}from"../../chunks/app-BhMwcM1h.js";

@@ -1,0 +1,1 @@
+export{NS as referencesPlugin}from"../../../chunks/app-BhMwcM1h.js";

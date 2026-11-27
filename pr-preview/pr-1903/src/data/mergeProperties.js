@@ -1,0 +1,1 @@
+export{Irt as mergeProperties}from"../../chunks/app-BhMwcM1h.js";
