@@ -43,7 +43,7 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 ## Upgrade to 0.9.11
 
-Row tasks require `@knowledge-medium/agent-cli` 0.14.5 for workspace-scoped block reads. Install it with `@knowledge-medium/agent-dispatch` 0.9.11 and restart the daemon. Enabling `rowTasks` takes a fresh baseline, including when the watcher already has a batch cursor.
+Row tasks require `@knowledge-medium/agent-cli` 0.14.5 for workspace-scoped block reads. Install it with `@knowledge-medium/agent-dispatch` 0.9.11 and restart the daemon. Reload the app for exact reads of imported block IDs that look like references. Enabling `rowTasks` takes a fresh baseline, including when the watcher already has a batch cursor.
 
 ## Upgrade to 0.9.10
 
@@ -471,7 +471,7 @@ Rows must select a stable `id` column. First tick establishes a baseline without
 
 ### One task per matching block
 
-With `"rowTasks": true`, each new id gets a separate spawned run. Select one row per exact, live block id and filter by the configured workspace. The daemon independently verifies membership and logs skipped ids. The first successful scan records the existing ids without claiming them. Those ids stay excluded even if they leave the SQL results and later return. A single result set is limited to 20,000 rows. Use a stable predicate that covers the historical rows you want to exclude on the first scan. A rotating `LIMIT` can expose older blocks only after that scan.
+With `"rowTasks": true`, each new id gets a separate spawned run. Select one row per exact, live block id and filter by workspace and source type. A query over all blocks can match the new property-value blocks created by the daemon’s own bookkeeping. The daemon independently verifies membership and logs skipped ids. The first successful scan records the existing ids without claiming them. Those ids stay excluded even if they leave the SQL results and later return. A single result set is limited to 20,000 rows. Use a stable predicate that covers the historical rows you want to exclude on the first scan. A rotating `LIMIT` can expose older blocks only after that scan.
 
 For example, this watcher selects voice-note message blocks with an audio URL and no task status. Replace both workspace placeholders with the same workspace id and supply your task instructions in `prompt`.
 
@@ -494,7 +494,7 @@ For example, this watcher selects voice-note message blocks with an audio URL an
 }
 ```
 
-The row template receives `{{row}}` (one JSON object with all selected columns), `{{blockId}}`, `{{subtree}}` (a fresh outline including properties), and `{{watcherName}}`. Batch templates continue to receive `{{newRows}}`. Select only columns needed by the run. The daemon saves the original columns for pending rows in its local state file before launching any of them. Keep that file across restarts. A claim, an edit, or a changing query result can then remove a row from the SQL without losing its retry.
+The row template receives `{{row}}` (one JSON object with all selected columns), `{{blockId}}`, `{{subtree}}` (a fresh outline including properties), and `{{watcherName}}`. Batch templates continue to receive `{{newRows}}`. Select only columns needed by the run. The daemon saves the original columns for pending rows in its local state file before launching any of them. Keep that file across restarts. If the daemon reports corrupt state with row tasks enabled, stop it, preserve the damaged file, and restore the last valid copy before restarting. A claim, an edit, or a changing query result can then remove a row from the SQL without losing its retry.
 
 The block carries its status, attempt count, and failure reason. A completed block stays done even when its edits make the SQL match again. Preserve its `agent:*` properties when editing it. Each block has one task status, so choose disjoint sources for watchers that should do independent work. Failed row runs queue again up to three claims in total. A stale running claim follows the same limit. Exhaustion parks the task with `agent:status=error` and `agent:error`. Stop cancels a live run and parks it immediately. A crash after an edit but before the terminal write can repeat the work, so make edits safe to repeat.
 

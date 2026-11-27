@@ -106,8 +106,8 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return result.backlinks ?? []
   }
 
-  const getBlock = async (id: string): Promise<BlockData | null> => {
-    const result = await client.runCommand({type: 'get-block', id})
+  const getBlock = async (id: string, options: ExactIds = {}): Promise<BlockData | null> => {
+    const result = await client.runCommand({type: 'get-block', id, ...options})
     if (result === null || result === undefined) return null
     const raw = asRecord(result, 'get-block')
     const editedAt = raw.userUpdatedAt ?? raw.updatedAt
@@ -146,8 +146,8 @@ export const createBridgeGraph = (client: BridgeClient) => {
     })
   }
 
-  const getSubtree = async (rootId: string): Promise<BlockData[]> => {
-    const result = await client.runCommand({type: 'get-subtree', rootId})
+  const getSubtree = async (rootId: string, options: ExactIds = {}): Promise<BlockData[]> => {
+    const result = await client.runCommand({type: 'get-subtree', rootId, ...options})
     return Array.isArray(result) ? result as BlockData[] : []
   }
 

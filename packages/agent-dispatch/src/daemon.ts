@@ -217,7 +217,7 @@ const main = async () => {
     config,
     graph,
     replies: createReplyWriter(client),
-    state: createStateStore(config.statePath ?? files.state),
+    state: createStateStore(config.statePath ?? files.state, config.watchers),
     runTask: options => options.executor === 'codex'
       ? runCodex({
         codexBin: config.codexBin,

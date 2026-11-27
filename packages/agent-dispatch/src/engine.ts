@@ -266,18 +266,27 @@ export const createEngine = (deps: EngineDeps) => {
     return block
   }
 
-  /** Park a task that exhausted its retries. Re-read + re-decide first
-   *  (the pre-filter used a tick-start snapshot; the ambient session may
-   *  have closed it since), then write the terminal `error` props BEFORE
-   *  the reply, so the state sticks even if the reply write fails: a
-   *  reply-succeeds / setTaskProps-fails split would re-enter every
-   *  tick and spam ⚠️ blocks into the user's notes (the one write path with
-   *  no billed-run circuit breaker). */
-  const parkExhausted = async (watcher: Watcher, sourceId: string) => {
+  const pendingDecision = (task: BlockTask, source: BlockView, editingActiveAtMs?: number) => {
+    const status = source.properties?.[PROPS.status]
+    if ('row' in task && source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
+      return {pending: false, reason: 'cancelled'} as const
+    }
+    return decidePending({
+      source, nowMs: now(), editingActiveAtMs,
+      settleMs: task.watcher.settleMs, editHoldMs: task.watcher.editHoldMs,
+      baselineMs: 'baselineMs' in task ? task.baselineMs : undefined,
+    })
+  }
+
+  /** Recheck the reason before parking. Write terminal props before a reply
+   *  so a failed reply cannot retrigger this unbilled write every tick. */
+  const parkTask = async (task: BlockTask, expected: 'attempts-exhausted' | 'cancelled') => {
+    const {watcher, id: sourceId} = task
     const fresh = await currentTaskBlock(watcher, sourceId)
-    if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
-    const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
-    await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
+    if (!fresh || pendingDecision(task, fresh).reason !== expected) return
+    const reason = expected === 'cancelled' ? 'cancelled'
+      : `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
+    await graph.setTaskProps(sourceId, {status: 'error', error: reason, cancel: null, activity: null, nowMs: now()})
     if (postsReply(watcher)) await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`, {
       replyKey: `park:${sourceId}`, shape: 'block', final: true,
     }).catch(() => {})
@@ -362,9 +371,7 @@ export const createEngine = (deps: EngineDeps) => {
     const editingActiveAtMs = (await graph.beingEditedBlocks()).get(sourceId)
     const block = await currentTaskBlock(watcher, sourceId)
     if (!block) return null
-    const decision = decidePending({
-      source: block, nowMs: now(), settleMs: watcher.settleMs, editingActiveAtMs, editHoldMs: watcher.editHoldMs, baselineMs: 'baselineMs' in task ? task.baselineMs : undefined,
-    })
+    const decision = pendingDecision(task, block, editingActiveAtMs)
     if (!decision.pending) return null
     return {block, decision, ancestorBlocks: 'row' in task ? [] : await graph.ancestors(sourceId)}
   }
@@ -420,9 +427,9 @@ export const createEngine = (deps: EngineDeps) => {
     // *terminal props write* — which lands AFTER a good reply — can't
     // re-enter the reply write and clobber the answer.
     let terminalReplyDelivered = false
-    // Per-run reply identity + shape, set once `attempt` is known (below).
-    let replyKey = ''
-    let replyShape: 'outline' | 'block' = 'block'
+    const attempt = taskAttempts(block) + 1
+    const replyKey = `reply:${sourceId}:${attempt}`
+    const replyShape = watcher.kind === 'query' || watcher.splitReply ? 'outline' : 'block'
     // Abort handle for THIS run — a cancel request (agent:cancel, detected
     // in the tick) aborts it, killing the child. `signal.aborted` after the
     // run tells a user cancel apart from a timeout/crash.
@@ -455,20 +462,19 @@ export const createEngine = (deps: EngineDeps) => {
       }
     }
 
-    const attempt = taskAttempts(block) + 1
+    let claimed = false
     let runSucceeded = false
-    const failureStatus = () => !runSucceeded && 'row' in task && attempt < MAX_ATTEMPTS && !abortController.signal.aborted
-      ? 'queued' : 'error'
+    const failureProps = () => !runSucceeded && 'row' in task && attempt < MAX_ATTEMPTS && !abortController.signal.aborted
+      ? {status: 'queued' as const} : {status: 'error' as const, cancel: null}
     try {
-      // Fresh reply subtree per attempt; split unless the watcher opted out.
-      replyKey = `reply:${sourceId}:${attempt}`
-      replyShape = (watcher.kind === 'query' || watcher.splitReply) ? 'outline' : 'block'
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
         status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, nowMs: claimStamp,
         ...('row' in task ? {error: null} : {}),
       })
+
+      claimed = true
 
       // Claim-verify: re-read and confirm OUR claim stuck. Defends only
       // against a faster LOCAL overwrite (two daemons on one client); it
@@ -665,19 +671,20 @@ export const createEngine = (deps: EngineDeps) => {
         ))
         terminalReplyDelivered = true
         await writeWithRetry('status', () => graph.setTaskProps(sourceId, {
-          status: failureStatus(),
+          ...failureProps(),
           error: reason,
           session: storedSessionFor(runner.executor, result.sessionId),
           resumeOptions: resumeOptionsForSession(result.sessionId),
           activity: null,
-          cancel: null,
           nowMs: now(),
         }))
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}${usageNote(result)}`)
       }
     } catch (error) {
-      // Infra failure between claim and reply (bridge blip, spawn error,
-      // channel down): leave a visible trace AND status=error props.
+      if (!claimed) {
+        refundLaunch(launchStamp)
+        throw error
+      }
       const reason = abortController.signal.aborted ? 'cancelled' : truncate(errorMessage(error))
       const infraNote = `⚠️ agent-dispatch infrastructure error — ${reason}`
       // Drain any queued progress writes first — a streamed-text write
@@ -690,13 +697,9 @@ export const createEngine = (deps: EngineDeps) => {
       if (!terminalReplyDelivered) {
         await reconcileReply(infraNote, {final: true, shape: 'block'}).catch(() => {})
       }
-      // Clear agent:cancel like the done/error terminal writes: a Stop
-      // may have set it (this catch can run right after the child was
-      // aborted, e.g. the reply write then failed). Left behind, the flag
-      // survives askAgent's retry-reset and would abort the fresh run on
-      // its very next tick.
+      // A queued retry preserves any Stop written before the next sweep.
       await graph.setTaskProps(sourceId, {
-        status: failureStatus(), error: reason, activity: null, cancel: null, nowMs: now(),
+        ...failureProps(), error: reason, activity: null, nowMs: now(),
       }).catch(() => {})
       throw error
     } finally {
@@ -713,43 +716,19 @@ export const createEngine = (deps: EngineDeps) => {
       const {watcher} = task
       const view = views.get(task.id) ?? {id: task.id, properties: {}}
       if (!belongsToWatcher(view, watcher)) continue
-      // Clear an agent:cancel the daemon can't act on. sweepCancellations
-      // aborts only runs we OWN (a live abortController); a Stop on a
-      // channel-delivered task, or on a run stranded by a hard daemon kill,
-      // leaves status:running with no controller here, so nothing ever
-      // clears the flag and the chip reads "cancelling…" forever. A spawn
-      // run mid-claim IS in `running`, so its genuinely-pending Stop is
-      // never dropped here.
-      if (
-        view.properties?.[PROPS.cancel]
-        && view.properties?.[PROPS.status] === 'running'
-        && !running.has(task.id)
-        && !abortControllers.has(task.id)
-      ) {
-        // Clear ONLY the cancel property, in a merged single-key write. The
-        // batched `views` snapshot is stale by now and a channel task's
-        // ambient session may write status:done concurrently; re-affirming
-        // status:running would revert that, and the stale agent:updated-at
-        // would make the stale-running sweep REDELIVER the task. A
-        // cancel-only write can't clobber a terminal status, and clearing an
-        // already-satisfied flag is idempotent — so no re-read is needed.
-        await graph.clearCancel(task.id)
-        log(`[${watcher.name}] cleared an un-actionable agent:cancel on ${task.id}`)
+      const key = `block:${task.id}`
+      if (running.has(key)) continue
+      const preview = pendingDecision(task, view, editing.get(task.id))
+      if (preview.reason === 'attempts-exhausted' || preview.reason === 'cancelled') {
+        const reason = preview.reason
+        launch(key, () => parkTask(task, reason))
         continue
       }
-      if (running.has(task.id)) continue
-      const preview = decidePending({
-        source: view,
-        nowMs: now(),
-        settleMs: watcher.settleMs,
-        editingActiveAtMs: editing.get(task.id),
-        editHoldMs: watcher.editHoldMs,
-        baselineMs: 'baselineMs' in task ? task.baselineMs : undefined,
-      })
-
-      if (preview.reason === 'attempts-exhausted') {
-        // Terminal write (once) so the pre-filter skips it forever.
-        launch(task.id, () => parkExhausted(watcher, task.id))
+      // A channel session can finish independently. Clear only its Stop,
+      // so a stale snapshot cannot overwrite its terminal status.
+      if (view.properties?.[PROPS.cancel] && view.properties[PROPS.status] === 'running') {
+        await graph.clearCancel(task.id)
+        log(`[${watcher.name}] cleared an un-actionable agent:cancel on ${task.id}`)
         continue
       }
       if (!preview.pending) continue
@@ -761,7 +740,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Budget is consumed at the launch DECISION (synchronously) — the
       // async task body would record too late to gate this same loop.
       const launchStamp = recordLaunch()
-      launch(task.id, () => processBlockTask(task, launchStamp))
+      launch(key, () => processBlockTask(task, launchStamp))
     }
   }
 
@@ -810,9 +789,14 @@ export const createEngine = (deps: EngineDeps) => {
     return diff
   }
 
-  const tickRowTasks = async (watcher: QueryWatcher, rows: unknown[]) => {
+  const tickRowTasks = async (watcher: QueryWatcher) => {
     const key = JSON.stringify([config.workspaceId, watcher.name])
     const saved = await state.getRowTasks(key)
+    const rows = await graph.sqlAll(watcher.sql, watcher.params).catch(error => {
+      if (!saved) throw error
+      log(`[${watcher.name}] discovery SQL failed; checking saved rows: ${errorMessage(error)}`)
+      return []
+    })
     const diff = queryDiff(watcher, rows, saved?.baselineIds ?? null)
     if (!saved && diff.oversized) return
     const candidates = new Map<string, QueryRow>()
@@ -845,11 +829,11 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   const tickQueryWatcher = async (watcher: QueryWatcher) => {
+    if (watcher.rowTasks) return tickRowTasks(watcher)
     const key = `query:${watcher.name}`
     if (running.has(key)) return
 
     const rows = await graph.sqlAll(watcher.sql, watcher.params)
-    if (watcher.rowTasks) return tickRowTasks(watcher, rows)
     const prev = await state.getCursor(watcher.name)
     const diff = queryDiff(watcher, rows, prev)
     if (diff.oversized) return

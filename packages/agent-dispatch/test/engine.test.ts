@@ -2418,7 +2418,7 @@ describe('query row tasks', () => {
   })
 
   it('leaves a row unclaimed while the only worker is occupied', async () => {
-    const {graph, propWrites} = fakeGraph({blocks: {alpha: {}, beta: {}}})
+    const {graph, propWrites} = fakeGraph({blocks: {'session:one': {}, beta: {}}})
     const runGate = Promise.withResolvers<void>()
     const runTask = vi.fn(async () => {
       await runGate.promise
@@ -2426,19 +2426,19 @@ describe('query row tasks', () => {
     })
     const engine = engineWith({graph, runTask, config: config({}, {maxConcurrent: 1})})
     await tick(engine)
-    graph.sqlAll = async () => [{id: 'alpha'}, {id: 'beta'}]
+    graph.sqlAll = async () => [{id: 'session:one'}, {id: 'beta'}]
     const running = engine.tick()
     try {
       await vi.waitFor(() => expect(runTask).toHaveBeenCalledOnce())
       await running
-      expect(propWrites.filter(write => write.status === 'running').map(write => write.id)).toEqual(['alpha'])
+      expect(propWrites.filter(write => write.status === 'running').map(write => write.id)).toEqual(['session:one'])
     } finally {
       runGate.resolve()
       await running
       await engine.drain()
     }
     await tick(engine)
-    expect(propWrites.filter(write => write.status === 'running').map(write => write.id)).toEqual(['alpha', 'beta'])
+    expect(propWrites.filter(write => write.status === 'running').map(write => write.id)).toEqual(['session:one', 'beta'])
   })
 
   it('honors both the edit hold and settle window when retrying a stale claim', async () => {
@@ -2632,9 +2632,76 @@ describe('query row tasks', () => {
     expect(propWrites).toEqual([])
   })
 
+  it('retains only unfinished task inputs and releases their columns once they finish', async () => {
+    const {graph, blocks} = fakeGraph({blocks: {
+      done: {properties: {[PROPS.status]: 'done'}},
+      error: {properties: {[PROPS.status]: 'error'}},
+      reply: {properties: {[PROPS.reply]: true}},
+      foreign: {properties: {[PROPS.watcher]: 'other', [PROPS.status]: 'queued'}},
+      active: {},
+    }})
+    const state = memoryState()
+    const editing = vi.spyOn(graph, 'beingEditedBlocks')
+    const engine = engineWith({graph, state, config: config()})
+    await tick(engine)
+    graph.sqlAll = async () => [...blocks.keys()].map(id => ({id}))
+    await tick(engine)
+    const key = JSON.stringify(['ws-test', 'inbox'])
+    expect((await state.getRowTasks(key))?.pending).toEqual([{id: 'active'}])
+    editing.mockClear()
+    await tick(engine)
+    expect((await state.getRowTasks(key))?.pending).toEqual([])
+    expect(editing).not.toHaveBeenCalled()
+  })
+
+  it('replaces a finished pending input with a newly held one of the same queue length', async () => {
+    const {graph, blocks} = fakeGraph({beingEdited: ['alpha', 'beta'], blocks: {alpha: {}, beta: {}}})
+    const state = memoryState()
+    const engine = engineWith({graph, state, config: config()})
+    await tick(engine)
+    graph.sqlAll = async () => [{id: 'alpha'}]
+    await tick(engine)
+    blocks.get('alpha')!.properties = {[PROPS.status]: 'done'}
+    graph.sqlAll = async () => [{id: 'beta'}]
+    await tick(engine)
+    expect((await state.getRowTasks(JSON.stringify(['ws-test', 'inbox'])))?.pending).toEqual([{id: 'beta'}])
+  })
+
+  it('accepts an unclaimed row whose previous watcher name remains', async () => {
+    const {graph, blocks} = fakeGraph({blocks: {alpha: {properties: {[PROPS.watcher]: 'previous'}}}})
+    const engine = engineWith({graph, config: config()})
+    await tick(engine)
+    graph.sqlAll = async () => [{id: 'alpha'}]
+    await tick(engine)
+    expect(blocks.get('alpha')?.properties).toMatchObject({[PROPS.watcher]: 'inbox', [PROPS.status]: 'done'})
+  })
+
+  it('leaves another watcher’s cancel request for its own scan', async () => {
+    const {graph, cancelClears} = fakeGraph({
+      backlinks: [{id: 'alpha'}],
+      blocks: {alpha: {properties: {[PROPS.status]: 'running', [PROPS.watcher]: 'other', [PROPS.cancel]: true}}},
+    })
+    await tick(engineWith({graph}))
+    expect(cancelClears).toEqual([])
+  })
+
+  it('parks a successful run if its reply cannot be delivered without repeating its edits', async () => {
+    const {graph, blocks} = fakeGraph({blocks: {alpha: {}}})
+    graph.reconcileReplyTree = async () => { throw new Error('reply unavailable') }
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, config: config()})
+    await tick(engine)
+    graph.sqlAll = async () => [{id: 'alpha'}]
+    await tick(engine)
+    await tick(engine)
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(blocks.get('alpha')?.properties).toMatchObject({[PROPS.status]: 'error', [PROPS.error]: 'reply unavailable'})
+  })
+
   it('requires an existing live block in the configured workspace before any task writes', async () => {
     const stale = {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS - 1, [PROPS.attempts]: MAX_ATTEMPTS}
     const {graph, propWrites, cancelClears} = fakeGraph({blocks: {
+      finished: {properties: {[PROPS.status]: 'done'}},
       deleted: {deleted: true, properties: stale},
       foreign: {workspaceId: 'ws-other', properties: {...stale, [PROPS.cancel]: true}},
     }})
@@ -2643,7 +2710,7 @@ describe('query row tasks', () => {
     const runTask = vi.fn(async () => okRun())
     const engine = engineWith({graph, runTask, log, config: config()})
     await tick(engine)
-    graph.sqlAll = async () => [{id: 'missing'}, {id: 'deleted'}, {id: 'foreign'}, {id: 123}, {title: 'no id'}]
+    graph.sqlAll = async () => [{id: 'finished'}, {id: 'missing'}, {id: 'deleted'}, {id: 'foreign'}, {id: 123}, {title: 'no id'}]
     await tick(engine)
 
     expect(views.mock.calls).toEqual(expect.arrayContaining([
@@ -2652,6 +2719,150 @@ describe('query row tasks', () => {
     expect(runTask).not.toHaveBeenCalled()
     expect(propWrites).toEqual([])
     expect(cancelClears).toEqual([])
-    expect(log.mock.calls.flat().join('\n')).toMatch(/missing|skipp/i)
+    for (const id of ['missing', 'deleted', 'foreign']) {
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(`skipped ${id}: no live block`))
+    }
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('skipped finished'))
+  })
+
+  it('baselines on the first successful SQL read after discovery fails', async () => {
+    const {graph, propWrites} = fakeGraph({blocks: {existing: {}, later: {}}})
+    const state = memoryState()
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, state, runTask, config: config()})
+
+    graph.sqlAll = async () => { throw new Error('query unavailable') }
+    await tick(engine)
+    expect(await state.getRowTasks(rowTaskKey)).toBeNull()
+
+    graph.sqlAll = async () => [{id: 'existing'}]
+    await tick(engine)
+    expect(await state.getRowTasks(rowTaskKey)).toEqual({baselineIds: ['existing'], pending: []})
+    expect(runTask).not.toHaveBeenCalled()
+
+    graph.sqlAll = async () => [{id: 'existing'}, {id: 'later'}]
+    await tick(engine)
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(propWrites.map(write => write.id)).toEqual(['later', 'later'])
+  })
+
+  it('resumes a saved row when discovery SQL fails', async () => {
+    const seed: FakeGraphSeed = {beingEdited: ['alpha'], blocks: {alpha: {}}}
+    const {graph, blocks} = fakeGraph(seed)
+    const state = memoryState()
+    const runTask = vi.fn<(options: {prompt: string}) => Promise<AgentRunResult>>(async () => okRun())
+    const deps = {graph, state, runTask, config: config()}
+    await tick(engineWith(deps))
+    graph.sqlAll = async () => [{id: 'alpha', label: 'saved input'}]
+    await tick(engineWith(deps))
+    expect(await state.getRowTasks(rowTaskKey)).toMatchObject({pending: [{id: 'alpha', label: 'saved input'}]})
+    expect(runTask).not.toHaveBeenCalled()
+
+    seed.beingEdited = []
+    graph.sqlAll = async () => { throw new Error('query unavailable') }
+    await tick(engineWith(deps))
+
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(runTask.mock.calls[0][0].prompt).toContain('saved input')
+    expect(blocks.get('alpha')?.properties?.[PROPS.status]).toBe('done')
+  })
+
+  it.each(['running', 'queued'])('parks a saved %s row with Stop after restart even when SQL omits it', async status => {
+    const {graph, blocks, reconciles, cancelClears} = fakeGraph({blocks: {alpha: {properties: {
+      [PROPS.status]: status, [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1,
+      [PROPS.updatedAt]: NOW, [PROPS.cancel]: NOW,
+    }}}})
+    const state = memoryState()
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], pending: [{id: 'alpha'}]})
+    const runTask = vi.fn(async () => okRun())
+    const deps = {graph, state, runTask, config: config({reply: false})}
+    await tick(engineWith(deps))
+    await tick(engineWith(deps))
+
+    expect(runTask).not.toHaveBeenCalled()
+    expect(blocks.get('alpha')?.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: '', [PROPS.attempts]: 1,
+    })
+    expect(await state.getRowTasks(rowTaskKey)).toMatchObject({pending: []})
+    expect(cancelClears).toEqual([])
+    expect(reconciles).toEqual([])
+  })
+
+  it.each([
+    {status: 'done', cancel: NOW},
+    {status: 'running', cancel: ''},
+  ])('leaves the row alone when the fresh Stop read shows status $status and cancel $cancel', async ({status, cancel}) => {
+    const {graph, blocks, reconciles, propWrites, cancelClears} = fakeGraph({blocks: {alpha: {properties: {
+      [PROPS.status]: 'running', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 1,
+      [PROPS.updatedAt]: NOW, [PROPS.cancel]: NOW,
+    }}}})
+    const state = memoryState()
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], pending: [{id: 'alpha'}]})
+    const getBlock = graph.getBlock
+    graph.getBlock = async id => {
+      const block = await getBlock(id)
+      if (block) block.properties = {...block.properties, [PROPS.status]: status, [PROPS.cancel]: cancel}
+      return block
+    }
+    const runTask = vi.fn(async () => okRun())
+    await tick(engineWith({graph, state, runTask, config: config()}))
+
+    expect(blocks.get('alpha')?.properties).toMatchObject({[PROPS.status]: status, [PROPS.cancel]: cancel})
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+    expect(cancelClears).toEqual([])
+    expect(reconciles).toEqual([])
+  })
+
+  it.each(['returns a failure', 'throws'])('honors Stop stored before the sweep when the runner %s', async outcome => {
+    const {graph, blocks, reconciles} = fakeGraph({blocks: {alpha: {}}})
+    const state = memoryState()
+    const runTask = vi.fn(async ({signal}: {signal?: AbortSignal}) => {
+      expect(signal?.aborted).toBe(false)
+      const block = blocks.get('alpha')!
+      block.properties = {...block.properties, [PROPS.cancel]: NOW}
+      graph.sqlAll = async () => []
+      if (outcome === 'throws') throw new Error('runner failed')
+      return okRun({ok: false, exitCode: 1, stderr: 'runner failed'})
+    })
+    const deps = {graph, state, runTask, config: config({reply: false})}
+    await tick(engineWith(deps))
+    graph.sqlAll = async () => [{id: 'alpha'}]
+    await tick(engineWith(deps))
+
+    expect(blocks.get('alpha')?.properties?.[PROPS.cancel]).toBe(NOW)
+    await tick(engineWith(deps))
+    expect(blocks.get('alpha')?.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: '', [PROPS.attempts]: 1,
+    })
+    await tick(engineWith(deps))
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(reconciles).toEqual([])
+  })
+
+  it('refunds the launch budget when a row claim write fails before committing', async () => {
+    const {graph, blocks, propWrites, reconciles} = fakeGraph({blocks: {alpha: {}}})
+    const setTaskProps = graph.setTaskProps
+    let failClaim = true
+    graph.setTaskProps = async (id, update) => {
+      if (failClaim && update.status === 'running') throw new Error('bridge unavailable')
+      await setTaskProps(id, update)
+    }
+    const runTask = vi.fn(async () => okRun())
+    const state = memoryState()
+    const engine = engineWith({graph, state, runTask, config: config({}, {runsPerHour: 1})})
+    await tick(engine)
+    graph.sqlAll = async () => [{id: 'alpha'}]
+    await tick(engine)
+
+    expect(propWrites).toEqual([])
+    expect(reconciles).toEqual([])
+    expect(runTask).not.toHaveBeenCalled()
+    expect(await state.getLaunchTimes()).toEqual([])
+
+    failClaim = false
+    await tick(engine)
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(blocks.get('alpha')?.properties).toMatchObject({[PROPS.status]: 'done', [PROPS.attempts]: 1})
   })
 })

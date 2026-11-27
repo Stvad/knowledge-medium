@@ -113,6 +113,17 @@ const result = (overrides: Partial<AgentRunResult>): AgentRunResult => ({
 })
 
 describe('dispatch attribution', () => {
+  it('reads the subtree and writes task properties on the exact stored id', async () => {
+    const literal = `^${MENTION}`
+    await repo.tx(tx => tx.create({id: literal, workspaceId: WS, parentId: 'page', orderKey: 'a1', content: 'Literal'}), opts)
+    const graph = createGraph(inProcessClient())
+    expect((await graph.getBlock(literal))?.id).toBe(literal)
+    expect((await graph.getSubtree(literal))[0]?.id).toBe(literal)
+    await graph.setTaskProps(literal, {status: 'running', nowMs: 1})
+    expect((await repo.load(literal))?.properties[PROPS.status]).toBe('running')
+    expect((await repo.load(MENTION))?.properties[PROPS.status]).toBeUndefined()
+  })
+
   it('accepts activity writes when the app has no activity timestamp seed', async () => {
     context = createTestAgentContext(repo, WS, [
       staticDataExtensions.filter(extension => extension !== agentDispatchCompanionDataExtension),

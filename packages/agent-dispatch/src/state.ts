@@ -10,6 +10,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
+import type { Watcher } from './config.js'
 import { isErrnoException } from '@knowledge-medium/agent-cli/config'
 
 // Snapshots preserve prompt columns when a claim or the run's edits remove
@@ -32,9 +33,12 @@ interface StateData {
 
 const emptyState = (): StateData => ({rowTasks: {}, queryCursors: {}, launchTimes: [], backlinkBaselines: {}})
 
-const normalizeState = (value: unknown): StateData => {
+const normalizeState = (value: unknown, requireObjectRoot: boolean): StateData => {
   const state = emptyState()
-  if (!value || typeof value !== 'object') return state
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    if (requireObjectRoot) throw new Error('state root must be an object')
+    return state
+  }
 
   if ('rowTasks' in value) state.rowTasks = z.record(z.string(), rowTaskState).parse(value.rowTasks)
 
@@ -76,16 +80,23 @@ export interface StateStore {
   setLaunchTimes: (times: number[]) => Promise<void>
 }
 
-export const createStateStore = (filePath: string): StateStore => {
+export const createStateStore = (filePath: string, watchers: readonly Watcher[] = []): StateStore => {
+  const hasRowTasks = watchers.some(watcher => watcher.kind === 'query' && watcher.rowTasks)
   let cache: StateData | null = null
 
   const load = async (): Promise<StateData> => {
     if (cache) return cache
+    const contents = await fs.readFile(filePath, 'utf8').catch(error => {
+      if (isErrnoException(error) && error.code === 'ENOENT') return '{}'
+      throw error
+    })
     try {
-      cache = normalizeState(JSON.parse(await fs.readFile(filePath, 'utf8')))
+      cache = normalizeState(JSON.parse(contents), hasRowTasks)
     } catch (error) {
-      if (isErrnoException(error) && error.code === 'ENOENT') cache = emptyState()
-      else if (error instanceof SyntaxError) cache = emptyState()
+      if (hasRowTasks) {
+        throw new Error(`state file at ${filePath} contains invalid state. Restore a valid copy to resume.`, {cause: error})
+      }
+      if (error instanceof SyntaxError) cache = emptyState()
       else throw error
     }
     return cache
