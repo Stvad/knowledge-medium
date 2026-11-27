@@ -1,6 +1,6 @@
 # Installed extensions in the headless host
 
-> **Status:** Proposed. Nothing is implemented. One decision is settled and one is open; both are in [§9](#9-decisions). Last verified against code: 2026-11-27.
+> **Status:** Proposed. Nothing is implemented. Two decisions are settled and one is open; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
 > Claims are tagged as in [headless-client.md](headless-client.md). **[read]** means seen in the code. **[measured]** means run or queried, and the entry says where. **[reasoned]** means inferred; the slice that would verify it is named.
 
 ## 1. Goal
@@ -36,6 +36,7 @@ What is missing, all **[read]** except the one marked:
 - The verb table refuses `eval`, the extension verbs and `run-action` (`scripts/headless/commands.ts`).
 - There is no enable intent on the host: `extensions-settings` is not in `staticDataExtensions`, and intent is per user, kept in the user's own extensions prefs block.
 - `import('https://…')` fails in Node with `ERR_UNSUPPORTED_ESM_URL_SCHEME` **[measured]**.
+- Neither platform pins a URL import. A tab resolves one over the network each time the extension loads, so the approval covers the import's URL but not the bytes it serves **[read]**. The host cannot load one at all.
 
 ## 4. Trust
 
@@ -60,7 +61,7 @@ The one real lever is the daemon's OS user: a dedicated user with nothing else i
 **The boundary:**
 1. **A host runs an extension block only if its own config names that block id with the path of a reviewed copy of its source.** The config file and the files it names are the trust anchor. The config already stands in for a person's confirmation of a plaintext workspace, though there it sits alongside the server row and here it stands alone. Whoever can write the config or a named file as the daemon's OS user can grant code execution, as they already can by editing the checkout the host runs. That includes any agent session running as that user, and those sessions read graph content. No bridge verb grants, changes or revokes the grant (the extension verbs stay refused), and no synced value takes part: not intent, not approval state, not the source.
 2. **The host runs the reviewed copy, never the live block content** ([§9](#9-decisions) D1, decided). This is the tab's #67 rule with the reviewed file as the pin. The live block still has to exist, since the loader walks live extension blocks, so deleting it in the graph stops the block at the next restart. When the live source differs from the reviewed copy, the host keeps running the reviewed copy. It logs that a review is needed and reports `update-available` in `health`.
-3. **Imports resolve only to what `index.html`'s importmap maps.** The rule reuses `runnableSpecifier`, so tab and host accept the same specifiers. Specifiers are checked from the AST before anything is imported. Anything else is a load error that names the specifier: `https:`, bare packages, `node:*`, computed `import()`. The host also refuses direct imports of the extension compile and evaluator modules, since they evaluate graph content with no hash check. This is a portability rule, not a sandbox. A pinned source can still use `new Function`, `process.getBuiltinModule`, or code it fetched. The review in rule 4 has to catch "fetches or evaluates code", and also "re-exports a static plugin", since provenance prefixing would start that plugin's effects as the block's own.
+3. **Imports resolve only to what `index.html`'s importmap maps, or to an `https:` URL carrying an integrity hash** ([§5](#pinned-url-imports)). The importmap rule reuses `runnableSpecifier`, so tab and host accept the same specifiers. Specifiers are checked from the AST before anything is imported. Anything else is a load error that names the specifier: an unpinned `https:` import, bare packages, `node:*`, computed `import()`. The host also refuses direct imports of the extension compile and evaluator modules, since they evaluate graph content with no hash check. This is a portability rule, not a sandbox. A pinned source can still use `new Function`, `process.getBuiltinModule`, or code it fetched. The review in rule 4 has to catch "fetches or evaluates code", and also "re-exports a static plugin", since provenance prefixing would start that plugin's effects as the block's own.
 4. **Allowlisting a block trusts it with the workspace key, the host's session and the daemon's OS account.** The operator procedure says this in those words, and lists the review items from rule 3.
 5. **The reviewed copy comes from a reviewed commit, never from the graph.** Copying the live block into the file would let whoever edited the block choose what the host runs. So `health` and the log say only that the live source differs, and never carry its content or hash. To compare them, the host normalises the file the way `install-extension` does before storing, which trims trailing whitespace, so a raw hash of the file never matches **[measured]**. That normalisation becomes one function, shared by install and host.
 6. **A device-stored secret is stored under the destination it may be sent to.** Synced config must not be able to redirect it. For Matrix, the access token is kept per homeserver, so a synced homeserver change finds no token and reports missing-token.
@@ -71,7 +72,7 @@ The one real lever is the daemon's OS user: a dedicated user with nothing else i
 | A compromised editor installs a new extension block | Nothing. Its id is not in the config |
 | A compromised editor edits the synced config an allowlisted extension reads | Only what the reviewed code does with that config. The secret does not follow a changed destination (rule 6). A changed room makes the host ingest that room, which an editor could write into the graph directly anyway |
 | A holder of a bridge token, including a read-write one | Nothing. No verb reaches the allowlist |
-| A compromised CDN | Nothing. A pinned source cannot import from it |
+| A compromised CDN | Nothing. A device fetches a pinned import only when it approves, and refuses bytes that do not hash to the pin |
 | The allowlisted source itself is malicious or buggy | Everything the daemon's OS user can reach |
 
 The AGENTS.md review rule that rates "synced data that runs code in another device's client" as P1 holds: synced data can only stop code on the host, never start it. The last row is the cost of the feature, and the operator signs for it per block by naming a reviewed file. If the daemon shares an OS user with agent sessions, those agents can already read the key file ([headless-client.md](headless-client.md) §8), so a separate user is hardening, not a precondition. If the daemon runs as the operator's own account, the last row reaches everything that account holds, and the procedure must say so.
@@ -89,7 +90,43 @@ The AGENTS.md review rule that rates "synced data that runs code in another devi
 
 **UI imports are loaded, not avoided.** The Matrix extension imports its dialog, buttons and toast modules, which load in Node with no DOM **[measured]**. Loading them is not a separate trust question, since one review covers the whole file. A headless entry module or a per-extension "headless" declaration would split every extension for a population of two, so it is rejected unless memory forces it ([§8](#8-slices)).
 
-**URL imports are refused, not pinned.** Node cannot import `https:`. The esm.sh `?bundle` URL is not one file: it is a stub plus dozens of transitive imports, some on semver-range paths, and the response varies by user agent **[measured]**. Pinning it would mean crawling, bundling and hashing a closure that changes between requesters, and a quick bundle attempt failed on missing exports **[measured]**. Matrix uses the SDK for three calls: `createClient`, the `/sync` request and `mxcUrlToHttp` **[read]**. Those are about twenty lines of `fetch`. The proposal is to replace them in the extension ([§9](#9-decisions) D2) and to defer URL-import support until a second extension needs it.
+<a id="pinned-url-imports"></a>**Pinned URL imports, the same in tab and host** ([§9](#9-decisions) D2, decided). Users keep writing CDN imports. The pin goes into the source, on the import itself:
+
+```ts
+import * as sdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle&target=es2024'
+  with {integrity: 'sha256-…'}
+```
+
+Because the hash is source text, the tab's existing source pin (#67) and the host's reviewed file both cover it. That needs no lock file, no new property and no synced bytes. Each device fetches each pinned URL once, when it approves the extension, and nothing is fetched at load. Tab and host therefore run byte-identical modules, or the approval is refused.
+
+*What esm.sh serves* (fetched and inspected as text, never executed; 2026-11-27) **[measured]**:
+- *Without `target=`:* the response depends on the user agent. A browser gets a stub plus 136 modules (2.79 MB), 52 of them on semver-range paths and 56 not immutable, with `Vary: User-Agent`. A Node agent gets a different build that imports `node:` builtins.
+- *With `&target=es2024`:* esm.sh serves a 107-byte stub that re-exports one 1,164,790-byte module. That module has no static or dynamic imports, is served `immutable`, and is identical across user agents and repeated fetches. It is 296 KB gzipped.
+- *Not separate modes:* `?standalone`, `?bundle=all` and `?bundle-deps` return the same bytes as `?bundle`.
+- *Treated as observed, not as a contract:* `target=es2024` giving one file held for this SDK and for `date-fns`. A package with a peer dependency still pulls it from a range path; `react-markdown` pulls a second React that way.
+
+*The freezer* is one function, shared by the CLI, the tab and the host:
+1. Fetch the URL. If the body consists only of `export … from "<one URL>"` statements, follow that URL once.
+2. Refuse unless the resulting module has no import or export-from statements and no `import()` (checked from the AST). The error names the count and, when the response varied by user agent, suggests pinning `target=`. A browser cannot set its user agent, so an agent-dependent URL could never freeze identically in a tab and in Node.
+3. The integrity value is the SHA-256 of that module's bytes.
+
+Multi-module closures are refused, not bundled. A tab has no bundler, and a raw closure would need its specifiers rewritten at load, where blob URLs cannot express cycles **[reasoned]**.
+
+*Adding the pin.* A new `pin-imports <file>` CLI verb runs the freezer and writes the attributes into the file. `install-extension` refuses a URL import with no integrity value. In a tab, the approve flow offers "Pin imports" for an unpinned source. That step rewrites the block's source in one undoable transaction, then approves it. The host never writes a source; its reviewed file must already be pinned.
+
+*Compiling.* A Babel plugin in the transpile step replaces each pinned specifier with `km-vendored:<integrity>` and drops the attribute, so the pinned compiled string contains no URL. Babel 8 standalone parses the attribute under the loader's presets, and TypeScript 6 accepts it with the existing `https://*` module declaration **[measured]**. The plugin changes the compiled output, so `COMPILER_VERSION` is bumped.
+
+*Instantiating.*
+- *Tab.* The approval record (`CompiledRecord`) gains `vendored: {integrity → module text}`, written only by `approveExtension` after the freezer verifies it. At load, each placeholder becomes a blob URL over the stored text. Disable and uninstall already delete the record, so the vendored bytes go with it.
+- *Host.* Verified bytes are cached at `<state>/vendored/<sha256>.mjs`. At boot the host uses the cached file if it hashes right, and otherwise fetches, verifies and writes it. A mismatch is a `load-error`. The module loads with a native `import()` of the file URL, not through Babel-to-CJS: that transform takes 0.8 s on this bundle and keeps `import.meta`, which would fail inside the CJS evaluator's function body. Native file and `data:` imports both work under vite-node with the headless config **[measured with a fixture]**. The extension itself stays Babel-to-CJS.
+- *Default-import interop.* The host must pass `require` a wrapper over the module namespace with `__esModule: true`. Without it, Babel's CJS helpers treat the namespace as a default export, so `import d from '<url>'` would yield the whole namespace on the host and the real default in a tab **[read]**.
+
+*Testing identity.* A local test server serves a fixture "CDN" module with named and default exports, top-level await and `import.meta`. A fixture extension imports it three ways: namespace, default and named. The same assertions run through the host platform in vitest and through the tab platform in headless Playwright. Each of these deletions must fail a named test:
+- the hash comparison;
+- the self-contained check;
+- the `__esModule` wrapper.
+
+*What a pin does not give.* Pinning trusts whatever the CDN served at pin time. A 1 MB minified bundle is not reviewable by reading, so "pulls package X at hash H" joins the rule 4 review items, and the hash guarantees only that every device runs the same bytes. Pinned imports are not synced. A device approving after the CDN stops serving those bytes cannot approve until the import is re-pinned or its version bumped, which is a visible source change. Syncing the bytes as media blocks is deferred until that happens. The bytes would be transport, not trust: the pin in the source is still what a device checks.
 
 ## 6. Enable state and the allowlist
 
@@ -136,7 +173,7 @@ A read-only host (`writable` false) loads the runtime and starts no effects.
 - *Toasts* go to sonner's module queue with no `<Toaster/>` to drain them. Matrix toasts once per failure streak, and its diagnostics already carry the same states, so no sink is added **[read]**.
 
 **Two ingesting clients.** A tab and the host polling the same room is the normal path, not an edge case. Every message is a create that collides on its derived id, and the server keeps the first create to arrive **[read]**. This converges on ids, parents (given `timeZone`) and content, with two exceptions:
-- *Content* matches only while every client runs the same version. A tab keeps its pinned version until it is re-approved there, and the host keeps its reviewed copy until the operator updates it. So after any change to the extension, content can differ until every client has the new version. Before slice 3, a tab also unwraps links by `window.location` and builds media URLs through the SDK, so the `fetch` replacement must produce the SDK's exact media URL.
+- *Content* matches only while every client runs the same version. A tab keeps its pinned version until it is re-approved there, and the host keeps its reviewed copy until the operator updates it. So after any change to the extension, content can differ until every client has the new version. Before slice 3, a tab also unwraps links by `window.location`. If slice 3 falls back to replacing the SDK, the replacement must produce the SDK's exact media URL.
 - *Order keys* are computed from each client's local view, so a lagging client can interleave display order **[read]**. Accepted: only display order is affected.
 
 The host never resurrects a message the owner deleted: the ingest checks the derived id with `tx.get`, which sees tombstones, and with the gate open the host has the full view **[read]**. A write refused mid-poll throws before `saveNextBatch`, so the cursor holds and the next poll retries **[read]**.
@@ -145,6 +182,13 @@ The host never resurrects a message the owner deleted: the ingest checks the der
 
 ## 8. Slices
 
+0. **Pinned URL imports in tabs.** This slice is core, changes tabs, and stands on its own: it closes the gap that an approval does not cover a URL import's bytes.
+   - The pinned-import reader and the freezer.
+   - The placeholder plugin, with the `COMPILER_VERSION` bump.
+   - `vendored` on the approval record, and blob substitution at load.
+   - "Pin imports" in the approve flow, `pin-imports` in the CLI, and the `install-extension` refusal.
+
+   It breaks every installed block with an unpinned URL import (5 on the owner's replica, [§2](#2-population)). Each stops loading and reports that its imports need pinning, until it is pinned and re-approved on each device ([§9](#9-decisions) D3). No data is touched.
 1. **Core seams, with no change in tabs.**
    - The compile-platform setter.
    - The Node evaluator, extracted from `src/test/` to check before importing.
@@ -157,6 +201,7 @@ The host never resurrects a message the owner deleted: the ingest checks the der
    - The async resolve after the first gate open, with the agent context on a `LiveRuntimeHandle`.
    - The read-only approval store built from the config.
    - Effects started only for allowlisted blocks while writable.
+   - Pinned imports on the host: the fetch-verify cache, native import, and the `__esModule` wrapper.
    - `headless storage set`.
    - `health.extensions`, and the boot log line for `update-available`.
 
@@ -167,21 +212,30 @@ The host never resurrects a message the owner deleted: the ingest checks the der
    - effects do not start on a read-only host;
    - a static plugin's effect does not start.
 3. **Matrix on the host.** This slice changes the extension first:
-   - replace the SDK with `fetch`;
+   - pin the SDK import: add `&target=es2024` and run `pin-imports`;
    - page back through `prev_batch` when a timeline comes back `limited`. Today a gap of more than 30 messages since the saved cursor is silently skipped on that client, tabs included (filed as a bug of its own);
    - read prefs through `readPluginPref` and re-read them on change;
    - key the token by homeserver;
    - remove `migrateEventNamespace`, a one-time data migration gated only by a device-local flag that a new device lacks. It is a no-op today: 0 rows pending and 1,402 already migrated on the owner's tab replica **[measured]**. Removed, it can never fire from the host. `migrateLegacyConfig`, the other flag-gated one-time step, only sets its flag on a device without the legacy blob;
    - read the app origin from a constant instead of `window.location`.
 
-   Then reinstall the extension, re-approve it in tabs, allowlist it, and set the token. Loading the extension and its imports cost about 290 MB RSS over a bare vite-node process on a laptop **[measured]**. The marginal cost over a running host is not measured, and it decides whether this fits beside the host under the target's OOM policy.
+   Then reinstall the extension, re-approve it in tabs, allowlist it, and set the token. Two costs are still unmeasured, and together they decide whether this fits beside the host under the target's OOM policy:
+   - Loading the extension and its `@/` imports cost about 290 MB RSS over a bare vite-node process on a laptop, with the SDK stubbed **[measured]**. The marginal cost over a running host is not measured.
+   - Whether the es2024 browser-target SDK bundle runs under Node, and what it costs there, is not verified.
 
-Deferred: pinned URL imports, `run-action`, static-plugin effects, per-effect headless flags, `--permission` as a seat belt, an out-of-process runner, a toast sink, and the Readwise effect (slice 2 covers it mechanically once someone allowlists it).
+   If either fails, the fallback is to replace the SDK's three calls with about twenty lines of `fetch`. That stays a Matrix-only change; pinned imports remain the general path.
+
+Deferred: synced vendored bytes, multi-module closures and any bundler, externals mapped to the importmap (the peer-dependency case), runtime assets reached through `import.meta.url` (a blob URL breaks `new URL(…, import.meta.url)`; the SDK's only such use is a lazy crypto path Matrix never calls **[read]**), `run-action`, static-plugin effects, per-effect headless flags, `--permission` as a seat belt, an out-of-process runner, a toast sink, and the Readwise effect (slice 2 covers it mechanically once someone allowlists it).
 
 ## 9. Decisions
 
 - **D1, decided by the owner (2026-11-27): run the reviewed copy, and log that a review is needed.** This matches a tab's #67 behaviour, and ingest keeps going after the extension changes in the graph. The rejected alternative was to refuse a block whose live source no longer matches. That would mean code the graph no longer holds never starts, at the cost of pausing ingest until an operator acts. The cost accepted is that the host can keep writing an old shape after the extension changed, until its reviewed copy is updated.
-- **D2. Matrix SDK: replace it with `fetch` in the extension (proposed), or build pinned URL imports.** Replacing it also drops the SDK from tabs. Pinning is a bundler project with no second consumer.
+- **D2, decided by the owner (2026-11-27): keep CDN imports working, pinned, and resolved the same way in tab and host** ([§5](#pinned-url-imports)). The rejected alternatives were:
+  - removing Matrix's one URL import and refusing URL imports outright;
+  - moving the host to Deno, whose lockfile pins remote modules. It would take the host off Node, and its PowerSync SDK depends on a native SQLite addon untested under Deno. It would also leave tabs unpinned.
+- **D3, open: when slice 0 lands, an installed extension with an unpinned URL import stops loading until it is pinned (proposed), or keeps loading live for a transition with a warning.**
+  - *Stop* closes the gap at once. It costs each affected extension a "Pin imports" click on every device; 5 blocks on the owner's replica, no data touched.
+  - *Transition* keeps those extensions running untouched. It leaves the gap open for as long as the transition lasts, and adds a second load path that must later be removed.
 
 ## 10. Still open
 
@@ -189,4 +243,6 @@ Deferred: pinned URL imports, `run-action`, static-plugin effects, per-effect he
 |---|---|
 | How the contributors processor attributes effect writes, which go through `repo.tx` directly rather than `executeCommand`'s contributor binding | slice 2 |
 | A message write that commits locally but is rejected at upload: it goes to the host's rejected-upload quarantine with the rest of its transaction, while the cursor has already moved past it | slice 3 |
-| Marginal memory of the loaded extension modules on a running host | slice 3, on the target |
+| Marginal memory of the loaded extension modules on a running host, the pinned SDK bundle included | slice 3, on the target |
+| Whether the es2024 browser-target SDK bundle runs under Node | slice 3 |
+| Whether `target=es2024` keeps giving a single self-contained file across esm.sh versions and packages. The freezer checks rather than assumes, so a change is a refusal, never a wrong load | slice 0, then on every pin |
