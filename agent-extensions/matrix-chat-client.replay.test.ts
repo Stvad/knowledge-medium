@@ -4,7 +4,7 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb.j
 import {createTestRepo} from '@/data/test/createTestRepo.js'
 import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension.js'
 import {diagnosticsFacet, type DiagnosticSourceContribution} from '@/plugins/diagnostics/facet.js'
-import matrixContributions, {nextBatchKey, pollLoop, publishDeviceCheckpoint, tokenKey} from './matrix-chat-client.tsx'
+import matrixContributions, {nextBatchKey, pollLoop} from './matrix-chat-client.tsx'
 
 vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({}))
 
@@ -31,9 +31,7 @@ beforeEach(async () => {
   await resetTestDb(h.db)
   repo = createTestRepo({db: h.db, extensions: [dailyNotesDataExtension]}).repo
   repo.setActiveWorkspaceId(config.workspaceId)
-  localStorage.setItem(tokenKey(config), config.accessToken)
   localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch: 'S0'}))
-  await publishDeviceCheckpoint(repo, config)
 })
 afterEach(() => { vi.restoreAllMocks(); localStorage.clear() })
 
@@ -72,11 +70,12 @@ const run = async (...replies: unknown[]) => {
 
 it('pages across empty responses, keeps S0 through fetches and writes, and appends oldest-first', async () => {
   const write = repo.tx.bind(repo)
-  const duringWrite: string[] = []
+  const duringMessageWrite: string[] = []
   vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
-    duringWrite.push(cursor())
+    const before = cursor()
+    const count = (await contents()).length
     const result = await write(fn, opts)
-    duringWrite.push(cursor())
+    if ((await contents()).length > count) duringMessageWrite.push(before, cursor())
     return result
   })
   const requests = await run(
@@ -89,7 +88,7 @@ it('pages across empty responses, keeps S0 through fetches and writes, and appen
   expect(requests.slice(1, 4)).toEqual(['P1', 'P2', 'P3'].map(from => ({
     method: 'GET', path: historyPath, cursor: 'S0', query: expect.objectContaining({from, to: 'S0', dir: 'b'}),
   })))
-  expect(new Set(duringWrite)).toEqual(new Set(['S0']))
+  expect(new Set(duringMessageWrite)).toEqual(new Set(['S0']))
   expect(requests.at(-1)?.query.since).toBe('S1')
   expect(cursor()).toBe('S1')
   expect(await contents()).toEqual(['one', 'two', 'three', 'four', 'five'])
@@ -98,7 +97,7 @@ it('pages across empty responses, keeps S0 through fetches and writes, and appen
 
 it('recovers an older missing event beyond a newer known event', async () => {
   await run(sync('S1', ['known']))
-  await run(sync('S2', [], limited), {chunk: [event('known'), event('missing')]})
+  await run(sync('S2', [], limited), {chunk: [event('known'), event('missing')], end: 'S1'})
   expect(cursor()).toBe('S2')
   expect(await contents()).toEqual(['known', 'missing'])
 })
@@ -114,6 +113,7 @@ it('retries a failed history fetch from the last saved sync position', async () 
 })
 
 it('backfills a limited interval from the shared position in a room with no imported messages', async () => {
+  await run(sync('S0', []))
   localStorage.removeItem(nextBatchKey(config))
   const requests = await run(sync('S1', ['newer'], limited), {chunk: [event('older')], end: 'S0'})
   expect(requests.map(r => r.path)).toEqual(['/sync', historyPath, '/sync'])

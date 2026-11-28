@@ -393,8 +393,6 @@ const canUseAmbientSchemas = (activeWorkspaceId: string | null, workspaceId: str
   activeWorkspaceId === null || workspaceId === activeWorkspaceId
 
 export interface RepoOptions {
-  /** This replica was opened without a remote sync connector. */
-  localOnly?: boolean
   db: PowerSyncDb
   cache: BlockCache
   user: User
@@ -685,7 +683,6 @@ export interface RunOptions {
 const MAX_HELD_SYNC_DRAIN_STATS = 50
 
 export class Repo {
-  readonly localOnly: boolean
   readonly db: PowerSyncDb
   readonly cache: BlockCache
   /** The client's indexical "acting-as" state (user, active workspace
@@ -1156,7 +1153,6 @@ export class Repo {
   readonly query: QueryProxy
 
   constructor(opts: RepoOptions) {
-    this.localOnly = opts.localOnly ?? false
     // Wrap the raw PowerSyncDb so every read/write call goes through
     // the timing proxy. Internal Repo code, processors, runTx, and the
     // sync observer all consume `this.db` — they all get the wrapped

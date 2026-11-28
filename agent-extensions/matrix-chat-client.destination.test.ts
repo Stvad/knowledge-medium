@@ -60,19 +60,17 @@ function makePrefs(workspaceId: string) {
 }
 
 function makeRepo() {
-  const checkpoint = {
-    workspaceId: a.workspaceId, deleted: false,
-    properties: {types: ['matrix-checkpoint'], 'matrix-checkpoint:nextBatch': 'shared-position'},
-  }
   const prefs = new Map([a, otherWorkspace].map(d => [d.workspaceId, makePrefs(d.workspaceId)]))
   const listeners = new Set<() => void>()
   return {
     activeWorkspaceId: a.workspaceId, user: {id: 'fixture-user'}, prefs,
-    load: async (id: string) => id === checkpointId(a) ? checkpoint : null,
     block: (id: string) => prefs.get(id),
     db: {
       getAll: async () => [],
-      getOptional: async (_sql: string, [id]: string[]) => id === a.workspaceId ? {name: workspaceName} : null,
+      getOptional: async (_sql: string, [id]: string[]) => {
+        if (id === checkpointId(a)) return {deleted: 0, position: 'shared-position'}
+        return id === a.workspaceId ? {name: workspaceName} : null
+      },
     },
     tx: vi.fn(async (run: (tx: {setProperty: (id: string, prop: {name: string}, value: unknown) => void}) => Promise<void>) => {
       await run({setProperty: (id, prop, value) => prefs.get(id)!.set(prop, value)})
@@ -159,7 +157,7 @@ describe('Matrix device authorization', () => {
   })
 
   it.each(['unscoped token', 'legacy config'] as const)(
-    'keeps the %s pending until explicit bind, preserves its cursor and resumes the shared position', async source => {
+    'keeps the %s pending until explicit bind and resumes its original cursor', async source => {
       const repo = makeRepo()
       const prefs = repo.prefs.get(a.workspaceId)!
       const reads = vi.spyOn(prefs, 'get')
@@ -189,8 +187,7 @@ describe('Matrix device authorization', () => {
       fireEvent.click(bind)
       await vi.waitFor(() => expect(authedRequest).toHaveBeenCalled())
       expect(createClient).toHaveBeenCalledWith({baseUrl: a.baseUrl, accessToken: 'pending-token'})
-      expect(authedRequest.mock.calls[0][2].since).toBe('shared-position')
-      expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('prior-position'))
+      expect(authedRequest.mock.calls[0][2].since).toBe('prior-position')
       expect(localStorage.getItem(legacyTokenKey)).toBeNull()
       expect(JSON.parse(localStorage.getItem(legacyConfigKey)!)).toEqual(blobPrefs)
       expect(localStorage.getItem(legacyCursorKey)).toBe(cursorState('prior-position'))
@@ -249,7 +246,7 @@ describe('Matrix device authorization', () => {
     await runAction('matrix.start', repo)
     await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledTimes(2))
     expect(localStorage.getItem(stoppedKey(a))).toBeNull()
-    expect(authedRequest.mock.calls[1][2].since).toBe('shared-position')
+    expect(authedRequest.mock.calls[1][2].since).toBe('local')
   })
 
   it('resumes the paused destination from the settings Restart button', async () => {
@@ -277,7 +274,7 @@ describe('Matrix device authorization', () => {
     expect(authedRequest.mock.calls[0][2].since).toBe('shared-position')
   })
 
-  it.each([['start', 'matrix.start'], ['stop', 'matrix.stop'], ['initialization', 'matrix.publish-position']])(
+  it.each([['start', 'matrix.start'], ['stop', 'matrix.stop'], ['Start fresh', 'matrix.reset-position']])(
     'ignores %s without an active workspace', async (_, action) => {
       const repo = makeRepo()
       repo.setActiveWorkspaceId('')
@@ -551,7 +548,7 @@ describe('Matrix device authorization', () => {
       const run = pollLoop(repo, {...a, accessToken: 'fixture-token', autoStart: true},
         controller.signal, {http: {authedRequest}})
       await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-      expect(authedRequest.mock.calls[0][2].since).toBe('shared-position')
+      expect(authedRequest.mock.calls[0][2].since).toBe('original')
       repo.activeWorkspaceId = otherWorkspace.workspaceId
       const events = kind === 'message' ? [{event_id: '$fixture', type: 'm.room.message'}] : []
       deliver({next_batch: 'advanced', rooms: {join: {[a.roomId]: {timeline: {events}}}}})

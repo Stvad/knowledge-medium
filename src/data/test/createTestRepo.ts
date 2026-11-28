@@ -65,7 +65,6 @@ import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { trackTestRepo } from '@/data/test/testRepoScope'
 
 export interface CreateTestRepoOptions {
-  localOnly?: boolean
   /** The shared PowerSync db from `createTestDb()`. */
   db: RepoOptions['db']
   /** Data extensions to register beyond the always-present kernel. When
@@ -147,7 +146,6 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
       blockIdPolicy: opts.blockIdPolicy ?? 'any',
       newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
     }),
-    localOnly: opts.localOnly,
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,
     syncObserverDeps: opts.syncObserverDeps,

@@ -52,7 +52,7 @@ it.each([
 ] as const)('leaves a %s at its random id and parent', async (_name, props, deleted) => {
   await rawRow('elsewhere', {})
   await rawRow('random', props, {deleted, parentId: 'elsewhere'})
-  expect(await ingest()).toBe('random')
+  await ingest()
   expect(await row(rootId)).toBeNull()
   expect(await row('random')).toMatchObject({parent_id: 'elsewhere', content: 'user edit', deleted})
 })
@@ -97,7 +97,7 @@ it('rechecks an arriving identity under the write lock before creating the day',
     await rawRow('arrived', {...typed, ...oldId}, {deleted: 1})
     return write(run, opts)
   })
-  expect(await ingest()).toBe('arrived')
+  await ingest()
   expect(await row('arrived')).toMatchObject({deleted: 1})
   expect(await row(dayId)).toBeNull()
   expect(await row(rootId)).toBeNull()

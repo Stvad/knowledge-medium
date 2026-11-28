@@ -11,7 +11,7 @@ import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPrope
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets.js'
 import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension.js'
 import {diagnosticsFacet, type DiagnosticSourceContribution} from '@/plugins/diagnostics/facet.js'
-import matrix, {appendMatrixMessage, checkpointId, messageNodeId, nextBatchKey, pollLoop, publishDeviceCheckpoint, startFresh, tokenKey} from './matrix-chat-client.tsx'
+import matrix, {appendMatrixMessage, checkpointId, messageNodeId, nextBatchKey, pollLoop, startFresh, tokenKey} from './matrix-chat-client.tsx'
 
 vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({}))
 
@@ -20,13 +20,16 @@ const diagnostics = matrix.find(c => c.facet.id === diagnosticsFacet.id)!.value 
 const cursorKey = nextBatchKey(config)
 const event = (body: string) => ({type: 'm.room.message', event_id: '$' + body, origin_server_ts: 1_700_000_000_000, content: {body}})
 
-function replica(db: TestDb['db'], tag: string, localOnly = false) {
+function replica(db: TestDb['db'], tag: string) {
   let id = 0
+  let caughtUp = false
   const {repo, cache} = createTestRepo({
-    db, localOnly, extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension, dailyNotesDataExtension, ...matrix], newId: () => tag + ++id, backfillSyncGate: () => () => {},
+    db, extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension, dailyNotesDataExtension, ...matrix], newId: () => tag + ++id,
+    backfillSyncGate: ready => { if (caughtUp) ready(); return () => {} },
   })
   repo.setActiveWorkspaceId(config.workspaceId)
-  return {db, repo, cache, downloadCursor: 0}
+  caughtUp = true
+  return {db, repo, cache, downloadCursor: 0, setCaughtUp: (value: boolean) => { caughtUp = value }}
 }
 type Replica = ReturnType<typeof replica>
 
@@ -39,6 +42,7 @@ beforeAll(async () => { [senderDb, receiverDb] = await Promise.all([createTestDb
 afterAll(async () => { await Promise.all([senderDb.cleanup(), receiverDb.cleanup()]) })
 beforeEach(async () => {
   await Promise.all([resetTestDb(senderDb.db), resetTestDb(receiverDb.db)])
+  localStorage.setItem(tokenKey(config), config.accessToken)
   sender = replica(senderDb.db, 'sender')
   receiver = replica(receiverDb.db, 'receiver')
   let serverClock = 1_800_000_000_000
@@ -81,26 +85,27 @@ const response = (since: string | undefined, stream: string[]) => ({
     : stream.slice(Number(since.slice(1))).map(event)}}}},
 })
 
-const fresh = (reply: (since?: string) => unknown, signal = new AbortController().signal) =>
-  startFresh(sender.repo, config, signal, {http: {
+const fresh = (device: Replica, reply: (since?: string) => unknown, signal = new AbortController().signal) =>
+  startFresh(device.repo, config, signal, {http: {
     authedRequest: async (_method: string, _path: string, query: {since?: string}) => reply(query.since),
   }})
 
 const seed = async () => {
-  localStorage.setItem(tokenKey(config), config.accessToken)
-  await fresh(since => response(since, []))
+  await fresh(sender, since => response(since, []))
+  expect(await poll(sender, [since => response(since, [])])).toEqual(['S0', 'S0'])
   expect(await checkpoint(sender)).toBe('S0')
   expect(await messages(sender)).toEqual([])
   await upload(sender)
+  localStorage.removeItem(cursorKey)
   await download(receiver)
   expect(await checkpoint(receiver)).toBe('S0')
 }
 
-const poll = async (device: Replica, replies: ((since: string | undefined) => unknown)[] = []) => {
+const poll = async (device: Replica, replies: ((since: string | undefined) => unknown)[] = [], stopOnWarning = true) => {
   const controller = new AbortController()
   const requested: Array<string | undefined> = []
   const unsubscribe = diagnostics.subscribe(() => {
-    if (diagnostics.getSnapshot()?.severity === 'warning') queueMicrotask(() => controller.abort())
+    if (stopOnWarning && diagnostics.getSnapshot()?.severity === 'warning') queueMicrotask(() => controller.abort())
   })
   try {
     await pollLoop(device.repo, config, controller.signal, {http: {
@@ -119,16 +124,108 @@ const poll = async (device: Replica, replies: ((since: string | undefined) => un
   }
 }
 
-it.each([null, 'S8', '{"nextBatch":"S8"}'])(
-  'refuses resume without a graph checkpoint, including copied device state %j', async raw => {
+const deviceCursor = () => JSON.parse(localStorage.getItem(cursorKey) ?? 'null')?.nextBatch
+const storeCursor = (value: string) => localStorage.setItem(cursorKey, JSON.stringify({nextBatch: value}))
+
+it.each([null, 'S8', '{"nextBatch":4}', '{"nextBatch":"  "}'])(
+  'refuses missing or malformed copied position %j before requesting a timeline', async raw => {
     if (raw !== null) localStorage.setItem(cursorKey, raw)
     expect(await poll(receiver)).toEqual([])
-    expect(diagnostics.getSnapshot()).toMatchObject({severity: 'warning'})
-    expect(JSON.stringify(diagnostics.getSnapshot())).toMatch(/checkpoint/i)
+    expect(diagnostics.getSnapshot()).toMatchObject({severity: 'warning', detail: expect.stringMatching(/checkpoint/i)})
     expect(localStorage.getItem(cursorKey)).toBe(raw)
     expect(await checkpoint(receiver)).toBeUndefined()
   },
 )
+
+it('resumes from the device’s own cursor ahead of a visible shared checkpoint', async () => {
+  await seed()
+  storeCursor('S1')
+  expect(await poll(receiver, [since => response(since, ['seen', 'new'])])).toEqual(['S1', 'S2'])
+  expect(await messages(receiver)).toEqual(['new'])
+})
+
+it('creates the missing shared checkpoint on the first drained idle poll, then skips idle writes', async () => {
+  storeCursor('S2')
+  expect(await poll(sender, [
+    () => ({next_batch: 'S3'}),
+    async () => {
+      expect(await checkpoint(sender)).toBe('S3')
+      await upload(sender)
+      return {next_batch: 'S4'}
+    },
+  ])).toEqual(['S2', 'S3', 'S4'])
+  expect(deviceCursor()).toBe('S4')
+  expect(await checkpoint(sender)).toBe('S3')
+  expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeNull()
+})
+
+it('refuses Start fresh before the checkpoint downloads and recovers both gap messages exactly once', async () => {
+  await fresh(sender, () => ({next_batch: 'S0'}))
+  await poll(sender, [() => ({next_batch: 'S0'})])
+  await upload(sender)
+  localStorage.removeItem(cursorKey)
+  receiver.setCaughtUp(false)
+  expect(await checkpoint(receiver)).toBeUndefined()
+  expect(await receiver.repo.workspaceViewGap(config.workspaceId)).not.toBeNull()
+  const stream = ['first gap', 'second gap']
+  const initialSync = vi.fn((since?: string) => response(since, stream))
+  await expect(fresh(receiver, initialSync)).rejects.toThrow(/sync/i)
+  expect(initialSync).not.toHaveBeenCalled()
+  expect(deviceCursor()).toBeUndefined()
+  expect(await poll(receiver)).toEqual([])
+  expect(diagnostics.getSnapshot()?.summary).toMatch(/waiting for sync/i)
+  await download(receiver)
+  receiver.setCaughtUp(true)
+  expect(await checkpoint(receiver)).toBe('S0')
+  stream.push('later')
+  expect(await poll(receiver, [
+    since => response(since, stream),
+    async since => { await upload(receiver); return response(since, stream) },
+  ])).toEqual(['S0', 'S3', 'S3'])
+  await upload(receiver)
+  await download(sender)
+  expect(await checkpoint(sender)).toBe('S3')
+  expect(await messages(sender)).toEqual(['first gap', 'later', 'second gap'])
+})
+
+const historicalMessage = async (deleted: boolean) => {
+  const prior = event('prior')
+  await appendMatrixMessage(receiver.repo, config, prior, {}, () => {})
+  if (deleted) await receiver.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [messageNodeId(config.workspaceId, prior.event_id, [0])])
+}
+it.each(['live', 'deleted'])('refuses Start fresh before the request for a room with a %s message', async state => {
+  await historicalMessage(state === 'deleted')
+  const initialSync = vi.fn(() => ({next_batch: 'S9'}))
+  await expect(fresh(receiver, initialSync)).rejects.toThrow(/message|ingest/i)
+  expect(initialSync).not.toHaveBeenCalled()
+  expect(deviceCursor()).toBeUndefined()
+})
+
+// Install the change after the transport returns, at entry to the repo write.
+// Even a second preflight immediately before calling repo.tx sees the old view.
+it.each(['view gap', 'live message', 'deleted message'])('rechecks %s inside the Start fresh transaction', async change => {
+  const write = receiver.repo.tx.bind(receiver.repo)
+  const sync = vi.fn(() => {
+    vi.spyOn(receiver.repo, 'tx').mockImplementationOnce(async (work, options) => {
+      if (change === 'view gap') receiver.setCaughtUp(false)
+      else await historicalMessage(change === 'deleted message')
+      return write(work, options)
+    })
+    return {next_batch: 'S9'}
+  })
+  await expect(fresh(receiver, sync)).rejects.toThrow(change === 'view gap' ? /sync/i : /message|ingest/i)
+  expect(sync).toHaveBeenCalledOnce()
+  expect(deviceCursor()).toBeUndefined()
+  expect(await checkpoint(receiver)).toBeUndefined()
+})
+
+it.each(['device', 'shared'])('refuses Start fresh before fetching when the %s position exists', async position => {
+  if (position === 'shared') await seed()
+  else storeCursor('S1')
+  const initialSync = vi.fn(() => ({next_batch: 'S9'}))
+  await expect(fresh(receiver, initialSync)).rejects.toThrow(/position|checkpoint/i)
+  expect(initialSync).not.toHaveBeenCalled()
+})
 
 it('ingests the handoff gap exactly once when another open tab completes its outstanding poll', async () => {
   await seed()
@@ -141,201 +238,134 @@ it('ingests the handoff gap exactly once when another open tab completes its out
   const oldTab = poll(sender, [oldTabPoll])
   try {
     await vi.waitFor(() => expect(oldTabPoll).toHaveBeenCalledWith('S0'))
-    localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S1'}))
     expect(await poll(receiver, [since => response(since, ['gap'])])).toEqual(['S0', 'S1'])
-    expect(await messages(receiver)).toEqual(['gap'])
     await upload(receiver)
     await download(sender)
   } finally {
     release()
     await oldTab
   }
-
   expect(await messages(sender)).toEqual(['gap'])
   await upload(sender)
   await download(receiver)
   expect(await messages(receiver)).toEqual(['gap'])
 })
 
-it.each(['pending', 'quarantined', 'dismissed rejection'] as const)(
-  'resumes from the visible checkpoint with a %s sender message upload', async state => {
-    await seed()
-    const stream = ['in-flight']
-    const assertQueue = async () => {
-      const id = messageNodeId(config.workspaceId, '$in-flight', [0])
-      expect(await sender.db.getOptional("SELECT 1 FROM ps_crud WHERE json_extract(data, '$.id') = ?", [id])).toBeTruthy()
-      if (state !== 'pending') {
-        await quarantineSenderUploads()
-        expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeNull()
-        expect(await sender.db.getOptional("SELECT 1 FROM ps_crud_rejected WHERE json_extract(data, '$.id') = ?", [id])).toBeTruthy()
-        if (state === 'dismissed rejection') {
-          await sender.db.execute('DELETE FROM ps_crud_rejected')
-          expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [id])).toBeNull()
-        }
-      }
-    }
-    expect(await poll(sender, [
-      since => response(since, stream),
-      async since => { await assertQueue(); return response(since, stream) },
-    ])).toEqual(['S0', 'S1', 'S1'])
-    expect(await messages(sender)).toEqual(stream)
-    if (state !== 'pending') {
+it('hands off while a sender upload is pending, from the last visible shared position', async () => {
+  await seed()
+  const stream = ['in-flight']
+  await poll(sender, [since => response(since, stream)])
+  expect(deviceCursor()).toBe('S1')
+  expect(await sender.db.getOptional("SELECT 1 FROM ps_crud WHERE json_extract(data, '$.id') = ?", [
+    messageNodeId(config.workspaceId, '$in-flight', [0]),
+  ])).toBeTruthy()
+  expect(await checkpoint(sender)).toBe('S0')
+  expect(await messages(receiver)).toEqual([])
+  localStorage.removeItem(cursorKey)
+  stream.push('gap')
+  expect(await poll(receiver, [since => response(since, stream)])).toEqual(['S0', 'S2'])
+  expect(await messages(receiver)).toEqual(['gap', 'in-flight'])
+})
+
+it.each(['pending', 'rejected'])('checks the %s upload queue inside the checkpoint transaction', async state => {
+  storeCursor('S2')
+  const write = sender.repo.tx.bind(sender.repo)
+  const inject = vi.fn(async () => {
+    await write(tx => tx.create({workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'late upload'}), {scope: ChangeScope.BlockDefault})
+    if (state === 'rejected') await quarantineSenderUploads()
+  })
+  await poll(sender, [() => {
+    vi.spyOn(sender.repo, 'tx').mockImplementationOnce(async (fn, opts) => {
+      await inject()
+      return write(fn, opts)
+    })
+    return {next_batch: 'S3'}
+  }])
+  expect(inject).toHaveBeenCalledOnce()
+  expect(await checkpoint(sender)).toBeUndefined()
+  expect(deviceCursor()).toBe('S3')
+})
+
+it('reports held advancement after three polls, keeps ingesting, and clears the warning when uploads drain', async () => {
+  await seed()
+  const stream = ['first']
+  const held = () => diagnostics.getSnapshot()?.summary === 'Matrix checkpoint held'
+  await poll(sender, [
+    since => response(since, stream),
+    async since => {
+      expect(held()).toBe(false)
+      await quarantineSenderUploads()
+      stream.push('second')
+      return response(since, stream)
+    },
+    since => {
+      expect(held()).toBe(false)
+      return response(since, stream)
+    },
+    async () => {
+      const counts = await sender.db.get<{pending: number; rejected: number}>(
+        'SELECT (SELECT count(*) FROM ps_crud) AS pending, (SELECT count(*) FROM ps_crud_rejected) AS rejected',
+      )
+      expect(counts.pending).toBeGreaterThan(0)
+      expect(counts.rejected).toBeGreaterThan(0)
+      expect(diagnostics.getSnapshot()).toMatchObject({severity: 'warning', summary: 'Matrix checkpoint held',
+        detail: expect.stringContaining('Pending uploads: ' + counts.pending + '. Rejected uploads: ' + counts.rejected)})
+      expect(await messages(sender)).toEqual(stream)
+      expect(await checkpoint(sender)).toBe('S0')
+      expect(deviceCursor()).toBe('S2')
+      await sender.db.writeTransaction(async tx => {
+        await tx.execute('INSERT INTO ps_crud (id, tx_id, data) SELECT original_id, tx_id, data FROM ps_crud_rejected')
+        await tx.execute('DELETE FROM ps_crud_rejected')
+      })
       await upload(sender)
-      await download(receiver)
-    }
-    expect(await checkpoint(receiver)).toBe('S0')
-    expect(await checkpoint(sender)).toBe('S0')
-    expect(await messages(receiver)).toEqual([])
-    localStorage.clear()
-    const withGap = [...stream, 'gap']
-    expect(await poll(receiver, [since => response(since, withGap)])).toEqual(['S0', 'S2'])
-    expect(await messages(receiver)).toEqual(['gap', 'in-flight'])
-  },
-)
-
-it.each([null, 'S8', '{"nextBatch":4}', '{"nextBatch":"  "}'])(
-  'refuses to publish malformed or missing device state %j even on its original writer', async raw => {
-    localStorage.setItem(tokenKey(config), config.accessToken)
-    if (raw !== null) localStorage.setItem(cursorKey, raw)
-    await expect(publishDeviceCheckpoint(sender.repo, config)).rejects.toThrow(/valid.*position/i)
-    expect(await checkpoint(sender)).toBeUndefined()
-  },
-)
-
-it.each(['pending', 'quarantined'] as const)(
-  'refuses to bootstrap a copied cursor when a writer has a %s upload', async state => {
-    localStorage.setItem(tokenKey(config), config.accessToken)
-    localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S1'}))
-    const id = await sender.repo.tx(tx => tx.create({
-      workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'uploaded',
-    }), {scope: ChangeScope.BlockDefault})
-    await upload(sender)
-    await download(sender)
-    expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [id])).toBeTruthy()
-    await sender.repo.tx(tx => tx.update(id, {content: 'waiting for upload'}), {scope: ChangeScope.BlockDefault})
-    expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeTruthy()
-    if (state === 'quarantined') await quarantineSenderUploads()
-    await expect(publishDeviceCheckpoint(sender.repo, config)).rejects.toThrow(/uploads/i)
-    expect(await checkpoint(sender)).toBeUndefined()
-  },
-)
-
-it('bootstraps the original device position after uploads drain and refuses a second initialization', async () => {
-  localStorage.setItem(tokenKey(config), config.accessToken)
-  localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S2'}))
-  await publishDeviceCheckpoint(sender.repo, config)
-  expect(await checkpoint(sender)).toBe('S2')
-  await upload(sender)
+      return {next_batch: 'S3'}
+    },
+    async () => {
+      expect(held()).toBe(false)
+      expect(await checkpoint(sender)).toBe('S3')
+      await upload(sender)
+      return {next_batch: 'S4'}
+    },
+  ], false)
+  expect(await checkpoint(sender)).toBe('S3')
+  expect(deviceCursor()).toBe('S4')
   await download(receiver)
-  expect(await checkpoint(receiver)).toBe('S2')
-  await download(sender)
+  expect(await messages(receiver)).toEqual(stream)
+})
+
+it('explains how to restore a deleted shared checkpoint when the device has no position', async () => {
+  await seed()
+  await receiver.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [checkpointId(config)])
+  expect(await poll(receiver)).toEqual([])
+  expect(diagnostics.getSnapshot()?.detail).toMatch(/undelete the Matrix room checkpoint block/i)
   const initialSync = vi.fn(() => ({next_batch: 'S9'}))
-  await expect(fresh(initialSync)).rejects.toThrow(/already.*checkpoint/i)
+  await expect(fresh(receiver, initialSync)).rejects.toThrow(/undelete the Matrix room checkpoint block/i)
   expect(initialSync).not.toHaveBeenCalled()
-  await expect(publishDeviceCheckpoint(sender.repo, config)).rejects.toThrow(/already.*checkpoint/i)
-  expect(await checkpoint(sender)).toBe('S2')
+
+  storeCursor('S1')
+  expect(await poll(receiver, [() => ({next_batch: 'S2'})])).toEqual(['S1'])
+  expect(diagnostics.getSnapshot()?.detail).toMatch(/undelete the Matrix room checkpoint block/i)
+  expect(await checkpoint(receiver)).toBeUndefined()
 })
 
 it.each(['   ', 5])('requires a nonblank position from the fresh sync (%j)', async invalid => {
-  localStorage.setItem(tokenKey(config), config.accessToken)
-  await expect(fresh(() => ({next_batch: invalid}))).rejects.toThrow(/invalid.*position/i)
-  expect(await checkpoint(sender)).toBeUndefined()
+  await expect(fresh(sender, () => ({next_batch: invalid}))).rejects.toThrow(/invalid.*position/i)
+  expect(deviceCursor()).toBeUndefined()
 })
 
 it.each(['workspace', 'credential', 'abort'] as const)(
   'abandons the fresh response when %s changes during the request', async change => {
-    localStorage.setItem(tokenKey(config), config.accessToken)
     const controller = new AbortController()
-    const attempt = fresh(() => {
+    const attempt = fresh(sender, () => {
       if (change === 'workspace') sender.repo.setActiveWorkspaceId('another-workspace')
       if (change === 'credential') localStorage.setItem(tokenKey(config), 'replacement')
       if (change === 'abort') controller.abort()
       return {next_batch: 'S9'}
     }, controller.signal)
     await expect(attempt).rejects.toThrow(change === 'abort' ? /abort/i : /destination or device credential changed/i)
-    expect(await checkpoint(sender)).toBeUndefined()
+    expect(deviceCursor()).toBeUndefined()
   },
 )
-
-it('publishes after uploaded messages arrive back from the server and skips subsequent idle polls', async () => {
-  await seed()
-  const stream = ['landed']
-  expect(await poll(sender, [
-    since => response(since, stream),
-    async since => {
-      expect(await checkpoint(sender)).toBe('S0')
-      await upload(sender)
-      return response(since, stream)
-    },
-    async since => {
-      expect(await checkpoint(sender)).toBe('S0')
-      await download(sender)
-      return response(since, stream)
-    },
-    async () => {
-      expect(await checkpoint(sender)).toBe('S1')
-      await upload(sender)
-      return {next_batch: 'S8'}
-    },
-  ])).toEqual(['S0', 'S1', 'S1', 'S1', 'S8'])
-  expect(await checkpoint(sender)).toBe('S1')
-  await download(receiver)
-  expect(await messages(receiver)).toEqual(stream)
-  expect(await checkpoint(receiver)).toBe('S1')
-})
-
-it.each(['foreign workspace', 'blank position'] as const)(
-  'refuses a shared checkpoint with a %s even when device storage has a valid position', async damage => {
-    await seed()
-    const id = checkpointId(config)
-    await receiver.db.writeTransaction(tx => damage === 'foreign workspace'
-      ? tx.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?', ['elsewhere', id])
-      : tx.execute(`UPDATE blocks SET properties_json = json_set(properties_json, '$."matrix-checkpoint:nextBatch"', '') WHERE id = ?`, [id]))
-    const rebooted = replica(receiver.db, 'rebooted')
-    localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S9'}))
-    expect(await poll(rebooted)).toEqual([])
-    expect(diagnostics.getSnapshot()?.detail).toMatch(/checkpoint/i)
-  },
-)
-
-it('refuses an untyped row occupying the shared checkpoint ID', async () => {
-  await seed()
-  await receiver.db.execute(`UPDATE blocks SET properties_json = json_remove(properties_json, '$.types') WHERE id = ?`, [checkpointId(config)])
-  expect(await poll(receiver)).toEqual([])
-  expect(diagnostics.getSnapshot()?.detail).toMatch(/checkpoint/i)
-})
-
-it('leaves a checkpoint deleted during the poll untouched', async () => {
-  await seed()
-  const stream = ['landed']
-  const requests = await poll(sender, [
-    since => response(since, stream),
-    async since => {
-      await upload(sender)
-      await download(sender)
-      await sender.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [checkpointId(config)])
-      return response(since, stream)
-    },
-  ])
-  expect(requests).toEqual(['S0', 'S1'])
-  expect(diagnostics.getSnapshot()?.detail).toMatch(/checkpoint/i)
-  const row = await sender.db.get<{token: string}>(
-    `SELECT json_extract(properties_json, '$."matrix-checkpoint:nextBatch"') AS token FROM blocks WHERE id = ? AND deleted = 1`,
-    [checkpointId(config)],
-  )
-  expect(row.token).toBe('S0')
-})
-
-it('skips the Matrix request when the workspace changes during the checkpoint read', async () => {
-  await seed()
-  const load = receiver.repo.load.bind(receiver.repo)
-  vi.spyOn(receiver.repo, 'load').mockImplementationOnce(async id => {
-    const row = await load(id)
-    receiver.repo.setActiveWorkspaceId('another-workspace')
-    return row
-  })
-  expect(await poll(receiver)).toEqual([])
-})
 
 it('refuses an empty sync position instead of polling from the beginning', async () => {
   await seed()
@@ -344,242 +374,90 @@ it('refuses an empty sync position instead of polling from the beginning', async
   expect(await checkpoint(receiver)).toBe('S0')
 })
 
-it.each(['credential', 'workspace'])('checks the bound %s before a fresh request', async change => {
-  if (change === 'workspace') {
-    localStorage.setItem(tokenKey(config), config.accessToken)
-    sender.repo.setActiveWorkspaceId('another-workspace')
+it('allows a genuinely new room with unrelated live and deleted rows in the graph', async () => {
+  for (const deleted of [false, true]) {
+    for (const [workspace, room, type] of [
+      ['elsewhere', config.roomId, 'matrix-message'], [config.workspaceId, '!elsewhere', 'matrix-message'],
+      [config.workspaceId, config.roomId, 'page'],
+    ]) {
+      receiver.repo.setActiveWorkspaceId(workspace)
+      const id = await receiver.repo.tx(tx => tx.create({
+        workspaceId: workspace, parentId: null, orderKey: 'a0', content: 'unrelated',
+        properties: {types: [type], 'matrix-event:room': room},
+      }), {scope: ChangeScope.BlockDefault})
+      if (deleted) await receiver.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [id])
+    }
   }
+  await fresh(receiver, () => ({next_batch: 'S9'}))
+  expect(deviceCursor()).toBe('S9')
+  expect(await checkpoint(receiver)).toBeUndefined()
+})
+
+it('refuses a malformed shared position on a device without a cursor', async () => {
+  await seed()
+  await receiver.db.execute(`UPDATE blocks SET properties_json = json_set(properties_json, '$."matrix-checkpoint:nextBatch"', ' ') WHERE id = ?`, [checkpointId(config)])
+  expect(await poll(receiver)).toEqual([])
+  expect(diagnostics.getSnapshot()?.detail).toMatch(/position/i)
+})
+
+it.each(['workspace', 'credential'])('refuses a fresh request with the wrong %s binding', async change => {
+  if (change === 'workspace') receiver.repo.setActiveWorkspaceId('another-workspace')
+  else localStorage.removeItem(tokenKey(config))
   const initialSync = vi.fn(() => ({next_batch: 'S0'}))
-  await expect(fresh(initialSync)).rejects.toThrow(/credential/i)
+  await expect(fresh(receiver, initialSync)).rejects.toThrow(/credential/i)
   expect(initialSync).not.toHaveBeenCalled()
 })
 
-it('rechecks the active workspace inside the checkpoint advancement transaction', async () => {
+it('skips the Matrix request when the workspace changes during the checkpoint read', async () => {
   await seed()
-  const stream = ['landed']
-  await poll(sender, [
-    since => response(since, stream),
-    async since => {
-      await upload(sender)
-      await download(sender)
-      const write = sender.repo.tx.bind(sender.repo)
-      vi.spyOn(sender.repo, 'tx').mockImplementationOnce((fn, opts) => write(async tx => {
-        const get = tx.get.bind(tx)
-        vi.spyOn(tx, 'get').mockImplementationOnce(async id => {
-          const data = await get(id)
-          sender.repo.setActiveWorkspaceId('other-workspace')
-          return data
-        })
-        return fn(tx)
-      }, opts))
-      return response(since, stream)
-    },
-  ])
-  expect(sender.repo.activeWorkspaceId).toBe('other-workspace')
-  expect(await checkpoint(sender)).toBe('S0')
+  const read = receiver.db.getOptional.bind(receiver.db)
+  const request = vi.spyOn(receiver.db, 'getOptional').mockImplementationOnce(async <T>(...args: Parameters<typeof read>) => {
+    const row = await read<T>(...args)
+    receiver.repo.setActiveWorkspaceId('another-workspace')
+    return row
+  })
+  try { expect(await poll(receiver)).toEqual([]) } finally { request.mockRestore() }
 })
 
-const omitDescendantEcho = async (content: string) => {
-  const rows = server.rows()
-  const leaf = rows.find(row => row.content === content)
-  expect(leaf).toBeDefined()
-  const partial = createFakeSyncServer({now: Date.now})
-  await partial.createRows(rows.filter(row => row.id !== leaf!.id))
-  await partial.deliverTo(sender.db, 0)
-  expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [leaf!.parent_id])).toBeTruthy()
-  expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [leaf!.id])).toBeNull()
-  return leaf!.id as string
-}
-
-it('holds the checkpoint until every message descendant has a server echo', async () => {
-  await seed()
-  const stream = ['- root\n  - child\n    - grandchild']
-  expect(await poll(sender, [
-    since => response(since, stream),
-    async since => {
-      await upload(sender)
-      await omitDescendantEcho('grandchild')
-      return response(since, stream)
-    },
-    async since => {
-      expect(await checkpoint(sender)).toBe('S0')
-      await download(sender)
-      return response(since, stream)
-    },
-  ])).toEqual(['S0', 'S1', 'S1', 'S1'])
-  expect(await checkpoint(sender)).toBe('S1')
+it('waits for the first completed download even when the connected workspace view gap is clear', async () => {
+  const status = receiver.db.currentStatus
+  const connected = vi.spyOn(status, 'connected', 'get').mockReturnValue(true)
+  const synced = vi.spyOn(status, 'hasSynced', 'get')
+  try {
+    expect(receiver.repo.lastSyncedAt).toBeUndefined()
+    expect(status.hasSynced).toBeFalsy()
+    expect(await receiver.repo.workspaceViewGap(config.workspaceId)).toBeNull()
+    const firstTimeline = vi.fn(() => ({next_batch: 'S9'}))
+    await expect(fresh(receiver, firstTimeline)).rejects.toThrow(/sync/i)
+    expect(firstTimeline).not.toHaveBeenCalled()
+    expect(await poll(receiver)).toEqual([])
+    expect(diagnostics.getSnapshot()?.summary).toMatch(/waiting for sync/i)
+    synced.mockReturnValue(true)
+    await fresh(receiver, firstTimeline)
+    expect(deviceCursor()).toBe('S9')
+  } finally {
+    synced.mockRestore()
+    connected.mockRestore()
+  }
 })
 
-it('starts a new room explicitly even while an unrelated edit is waiting to upload', async () => {
-  await sender.repo.tx(tx => tx.create({
-    workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'unrelated pending edit',
-  }), {scope: ChangeScope.BlockDefault})
-  expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeTruthy()
-  localStorage.setItem(tokenKey(config), config.accessToken)
-  await fresh(since => response(since, []))
-  expect(await checkpoint(sender)).toBe('S0')
-})
-
-it('a permanently local-only device resumes its own position and saves progress across reloads', async () => {
-  localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S0'}))
-  const stream = ['locally ingested']
-  const device = replica(sender.db, 'offline', true)
-  expect(await poll(device, [since => response(since, stream)])).toEqual(['S0', 'S1'])
-  expect(await messages(device)).toEqual(stream)
-  expect(await checkpoint(device)).toBeUndefined()
-  const rebooted = replica(device.db, 'rebooted', true)
-  expect(await poll(rebooted)).toEqual(['S1'])
-  expect(await checkpoint(rebooted)).toBeUndefined()
-})
-
-it('requires a server echo of prior Matrix ingest before bootstrapping from the original writer', async () => {
-  localStorage.setItem(tokenKey(config), config.accessToken)
-  localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S1'}))
-  await appendMatrixMessage(sender.repo, config, event('pre-upgrade'), {}, () => {})
-  await upload(sender)
-  expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeNull()
-  await expect(publishDeviceCheckpoint(sender.repo, config)).rejects.toThrow()
-  expect(await checkpoint(sender)).toBeUndefined()
-  await download(sender)
-  await publishDeviceCheckpoint(sender.repo, config)
-  expect(await checkpoint(sender)).toBe('S1')
-})
-
-it('a permanently local-only device can resume a shared baseline and keeps subsequent progress local', async () => {
-  await seed()
-  const device = replica(receiver.db, 'local-only', true)
-  localStorage.removeItem(cursorKey)
-  const stream = ['new']
-  expect(await poll(device, [
-    since => response(since, stream),
-    async since => {
-      await upload(device)
-      await download(device)
-      return response(since, stream)
-    },
-  ])).toEqual(['S0', 'S1', 'S1'])
-  expect(await checkpoint(device)).toBe('S0')
-  expect(await poll(device)).toEqual(['S1'])
-})
-
-it.each([null, '{"nextBatch":""}'])('refuses local-only resume when neither graph nor device has a position (%j)', async raw => {
-  if (raw !== null) localStorage.setItem(cursorKey, raw)
-  const device = replica(sender.db, 'local-only', true)
-  expect(await poll(device)).toEqual([])
-  expect(diagnostics.getSnapshot()?.detail).toMatch(/checkpoint/i)
-  expect(await checkpoint(device)).toBeUndefined()
-})
-
-const adoptPosition = () => {
-  localStorage.setItem(tokenKey(config), config.accessToken)
-  localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S1'}))
-  return publishDeviceCheckpoint(sender.repo, config)
-}
-
-it('refuses one-time adoption when the only unconfirmed workspace row lost its Matrix metadata', async () => {
-  const prior = event('pre-upgrade')
-  const id = messageNodeId(config.workspaceId, prior.event_id, [0])
-  await appendMatrixMessage(sender.repo, config, prior, {}, () => {})
-  await upload(sender)
-  expect(await omitDescendantEcho('pre-upgrade')).toBe(id)
-  await sender.db.execute(`UPDATE blocks SET properties_json = '{}' WHERE id = ?`, [id])
-  expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeNull()
-  await expect(adoptPosition()).rejects.toThrow(/uploads|server cop/i)
-  expect(await checkpoint(sender)).toBeUndefined()
-})
-
-it('a running poll advances once its own message is confirmed despite an unconfirmed message in another room', async () => {
-  await seed()
-  await appendMatrixMessage(sender.repo, {...config, roomId: '!elsewhere:matrix.test'}, event('elsewhere'), {}, () => {})
-  const stream = ['current room']
-  expect(await poll(sender, [
-    since => response(since, stream),
-    async since => {
-      await upload(sender)
-      await omitDescendantEcho('elsewhere')
-      return response(since, stream)
-    },
-  ])).toEqual(['S0', 'S1', 'S1'])
-  expect(await checkpoint(sender)).toBe('S1')
-})
-
-it('can publish when only a deleted message child lacks an echo', async () => {
-  await appendMatrixMessage(sender.repo, config, event('- root\n  - deleted leaf'), {}, () => {})
-  await upload(sender)
-  const leafId = await omitDescendantEcho('deleted leaf')
-  await sender.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [leafId])
-  await adoptPosition()
-  expect(await checkpoint(sender)).toBe('S1')
-})
-
-it('refuses a server echo whose block id matches but whose workspace differs', async () => {
-  const prior = event('prior')
-  const id = messageNodeId(config.workspaceId, prior.event_id, [0])
-  await appendMatrixMessage(sender.repo, config, prior, {}, () => {})
-  await upload(sender)
-  await server.deliverTo(sender.db, 0)
-  await sender.db.execute('UPDATE blocks_synced SET workspace_id = ? WHERE id = ?', ['elsewhere', id])
-  expect(await sender.db.getOptional('SELECT workspace_id FROM blocks_synced WHERE id = ?', [id]))
-    .toEqual({workspace_id: 'elsewhere'})
-  await expect(adoptPosition()).rejects.toThrow(/uploads|server cop/i)
-  expect(await checkpoint(sender)).toBeUndefined()
-})
-
-it('can adopt the device checkpoint with unconfirmed rows in another workspace', async () => {
-  const otherWorkspace = {...config, workspaceId: 'another-workspace'}
-  sender.repo.setActiveWorkspaceId(otherWorkspace.workspaceId)
-  await appendMatrixMessage(sender.repo, otherWorkspace, event('elsewhere'), {}, () => {})
-  sender.repo.setActiveWorkspaceId(config.workspaceId)
-  await upload(sender)
-  expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced LIMIT 1')).toBeNull()
-  await adoptPosition()
-  expect(await checkpoint(sender)).toBe('S1')
-})
-
-it.each(['deleted', 'foreign-workspace'] as const)('excludes a %s descendant from the running poll receipt check', async state => {
-  await seed()
-  const stream = ['- root\n  - moved']
-  expect(await poll(sender, [
-    since => response(since, stream),
-    async since => {
-      await upload(sender)
-      const leaf = await omitDescendantEcho('moved')
-      if (state === 'deleted') await sender.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [leaf])
-      else await sender.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?', ['elsewhere', leaf])
-      return response(since, stream)
-    },
-  ])).toEqual(['S0', 'S1', 'S1'])
-  expect(await checkpoint(sender)).toBe('S1')
-})
-
-it('holds the processed message identity when a local edit removes its Matrix metadata', async () => {
-  await seed()
-  const stream = ['edited']
-  await poll(sender, [
-    since => response(since, stream),
-    async since => {
-      const id = messageNodeId(config.workspaceId, '$edited', [0])
-      await sender.db.execute("UPDATE blocks SET properties_json = '{}' WHERE id = ?", [id])
-      await quarantineSenderUploads()
-      await sender.db.execute('DELETE FROM ps_crud_rejected')
-      expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [id])).toBeNull()
-      return response(since, stream)
-    },
-  ])
-  expect(await checkpoint(sender)).toBe('S0')
-  await upload(sender)
-  await download(receiver)
-  expect(await poll(receiver, [since => response(since, stream)])).toEqual(['S0', 'S1'])
-  expect(await messages(receiver)).toEqual(stream)
-})
-
-it('does not schedule checkpoint publication for a message without an event identity', async () => {
-  await seed()
-  const write = vi.spyOn(receiver.repo, 'tx')
-  const body = {next_batch: 'S1', rooms: {join: {[config.roomId]: {
-    timeline: {events: [{type: 'm.room.message', content: {body: 'missing identity'}}]},
-  }}}}
-  expect(await poll(receiver, [() => body])).toEqual(['S0', 'S1'])
-  expect(write).not.toHaveBeenCalled()
-  expect(await checkpoint(receiver)).toBe('S0')
+it('rolls back checkpoint advancement when the workspace switches inside its transaction', async () => {
+  storeCursor('S1')
+  const write = receiver.repo.tx.bind(receiver.repo)
+  expect(await poll(receiver, [() => {
+    vi.spyOn(receiver.repo, 'tx').mockImplementationOnce((fn, opts) => write(async tx => {
+      const create = tx.createOrGet.bind(tx)
+      vi.spyOn(tx, 'createOrGet').mockImplementationOnce(async (...args) => {
+        const result = await create(...args)
+        expect(result.inserted).toBe(true)
+        receiver.repo.setActiveWorkspaceId('another-workspace')
+        return result
+      })
+      return fn(tx)
+    }, opts))
+    return {next_batch: 'S2'}
+  }])).toEqual(['S1'])
+  expect(receiver.repo.activeWorkspaceId).toBe('another-workspace')
+  expect(await checkpoint(receiver)).toBeUndefined()
+  expect(await receiver.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeNull()
 })
