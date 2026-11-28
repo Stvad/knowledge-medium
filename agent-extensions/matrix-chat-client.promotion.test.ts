@@ -71,7 +71,7 @@ import matrixContributions, {
   matrixIngestEffect,
   messageNodeId,
   nextBatchKey,
-  publishDeviceCheckpoint,
+  startFresh,
   tokenKey,
   roomIdProp,
 } from './matrix-chat-client.tsx'
@@ -129,8 +129,9 @@ const configureIngest = async (repo: Repo): Promise<void> => {
   await block.set(homeserverProp, HOMESERVER)
   await block.set(roomIdProp, ROOM)
   await block.set(autoStartProp, true)
-  for (let upload; (upload = await sharedDb.db.getNextCrudTransaction());) await upload.complete()
-  await publishDeviceCheckpoint(repo, {...destination, autoStart: true, accessToken: 'secret-token'})
+  await startFresh(repo, {...destination, autoStart: true, accessToken: 'secret-token'}, new AbortController().signal, {
+    http: {authedRequest: async () => ({next_batch: 'cursor-0'})},
+  })
 }
 
 const messageEvent = (eventId: string, body: string) => ({

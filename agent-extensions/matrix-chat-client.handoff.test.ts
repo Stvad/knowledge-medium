@@ -224,6 +224,7 @@ it('bootstraps the original device position after uploads drain and refuses a se
   await upload(sender)
   await download(receiver)
   expect(await checkpoint(receiver)).toBe('S2')
+  await download(sender)
   const initialSync = vi.fn(() => ({next_batch: 'S9'}))
   await expect(fresh(initialSync)).rejects.toThrow(/already.*checkpoint/i)
   expect(initialSync).not.toHaveBeenCalled()
@@ -471,23 +472,30 @@ const adoptPosition = () => {
   return publishDeviceCheckpoint(sender.repo, config)
 }
 
-it('requires the server copy of a message identified by its legacy room property', async () => {
-  const prior = event('legacy')
+it('refuses one-time adoption when the only unconfirmed workspace row lost its Matrix metadata', async () => {
+  const prior = event('pre-upgrade')
   const id = messageNodeId(config.workspaceId, prior.event_id, [0])
   await appendMatrixMessage(sender.repo, config, prior, {}, () => {})
-  await sender.db.execute(`UPDATE blocks SET properties_json =
-    json_set(json_remove(properties_json, '$."matrix-event:room"'), '$."matrix:roomId"', ?) WHERE id = ?`, [config.roomId, id])
   await upload(sender)
+  expect(await omitDescendantEcho('pre-upgrade')).toBe(id)
+  await sender.db.execute(`UPDATE blocks SET properties_json = '{}' WHERE id = ?`, [id])
+  expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeNull()
   await expect(adoptPosition()).rejects.toThrow(/uploads|server cop/i)
   expect(await checkpoint(sender)).toBeUndefined()
 })
 
-it('can publish with an unconfirmed message belonging to another room', async () => {
-  const otherRoom = {...config, roomId: '!elsewhere:matrix.test'}
-  await appendMatrixMessage(sender.repo, otherRoom, event('elsewhere'), {}, () => {})
-  await upload(sender)
-  expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced LIMIT 1')).toBeNull()
-  await adoptPosition()
+it('a running poll advances once its own message is confirmed despite an unconfirmed message in another room', async () => {
+  await seed()
+  await appendMatrixMessage(sender.repo, {...config, roomId: '!elsewhere:matrix.test'}, event('elsewhere'), {}, () => {})
+  const stream = ['current room']
+  expect(await poll(sender, [
+    since => response(since, stream),
+    async since => {
+      await upload(sender)
+      await omitDescendantEcho('elsewhere')
+      return response(since, stream)
+    },
+  ])).toEqual(['S0', 'S1', 'S1'])
   expect(await checkpoint(sender)).toBe('S1')
 })
 
@@ -513,26 +521,30 @@ it('refuses a server echo whose block id matches but whose workspace differs', a
   expect(await checkpoint(sender)).toBeUndefined()
 })
 
-it('ignores room metadata on other record types and messages in another workspace', async () => {
+it('can adopt the device checkpoint with unconfirmed rows in another workspace', async () => {
   const otherWorkspace = {...config, workspaceId: 'another-workspace'}
-  await sender.repo.tx(tx => tx.create({
-    workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'another record',
-    properties: {types: ['another-type'], 'matrix-event:room': config.roomId},
-  }), {scope: ChangeScope.BlockDefault})
   sender.repo.setActiveWorkspaceId(otherWorkspace.workspaceId)
   await appendMatrixMessage(sender.repo, otherWorkspace, event('elsewhere'), {}, () => {})
   sender.repo.setActiveWorkspaceId(config.workspaceId)
   await upload(sender)
+  expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced LIMIT 1')).toBeNull()
   await adoptPosition()
   expect(await checkpoint(sender)).toBe('S1')
 })
 
-it('excludes foreign-workspace children at the boundary of a message tree', async () => {
-  await appendMatrixMessage(sender.repo, config, event('- root\n  - moved'), {}, () => {})
-  await upload(sender)
-  const leaf = await omitDescendantEcho('moved')
-  await sender.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?', ['elsewhere', leaf])
-  await adoptPosition()
+it.each(['deleted', 'foreign-workspace'] as const)('excludes a %s descendant from the running poll receipt check', async state => {
+  await seed()
+  const stream = ['- root\n  - moved']
+  expect(await poll(sender, [
+    since => response(since, stream),
+    async since => {
+      await upload(sender)
+      const leaf = await omitDescendantEcho('moved')
+      if (state === 'deleted') await sender.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [leaf])
+      else await sender.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?', ['elsewhere', leaf])
+      return response(since, stream)
+    },
+  ])).toEqual(['S0', 'S1', 'S1'])
   expect(await checkpoint(sender)).toBe('S1')
 })
 

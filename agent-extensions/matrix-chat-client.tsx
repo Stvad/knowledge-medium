@@ -459,29 +459,24 @@ const checkpointPosition = (row: BlockData | null, config: MatrixDestination): s
 // Dismissing a rejected upload removes its queue entry but leaves the local
 // message intact. Only server echoes can establish that its tree reached peers.
 // The staging table keeps block identities visible in encrypted workspaces too.
-const hasUnconfirmedMessages = (tx: Tx, config: MatrixDestination, processed?: ReadonlySet<string>) => {
-  // On upgrade there is no record of the preceding batch. Subsequent polls
-  // have the actual root IDs, including legacy IDs and roots the user retagged.
-  const roots = processed
-    ? {sql: 'SELECT value FROM json_each(?)', params: [JSON.stringify([...processed])]}
-    : {
-        sql: `SELECT t.block_id FROM block_types t JOIN blocks b ON b.id = t.block_id
-              WHERE t.type = 'matrix-message' AND t.workspace_id = ?
-                AND COALESCE(json_extract(b.properties_json, '$."matrix-event:room"'),
-                             json_extract(b.properties_json, '$."matrix:roomId"')) = ?`,
-        params: [config.workspaceId, config.roomId],
+const hasUnconfirmedBlocks = (tx: Tx, workspaceId: string, processed?: ReadonlySet<string>) => {
+  // A legacy cursor has no ledger of processed IDs. Even an untyped, renamed
+  // block could be an unsent message. Check the workspace once on adoption.
+  const candidates = processed
+    ? {
+        sql: `SELECT value FROM json_each(?)
+              UNION
+              SELECT b.id FROM blocks b JOIN candidates p ON b.parent_id = p.id
+              WHERE b.workspace_id = ? AND b.deleted = 0`,
+        params: [JSON.stringify([...processed]), workspaceId],
       }
+    : {sql: 'SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 0', params: [workspaceId]}
   return tx.readDb.getOptional(
-    `WITH RECURSIVE room_tree(id) AS (
-       ${roots.sql}
-       UNION
-       SELECT b.id FROM blocks b JOIN room_tree p ON b.parent_id = p.id
-         WHERE b.workspace_id = ? AND b.deleted = 0
-     )
-     SELECT 1 FROM room_tree t WHERE NOT EXISTS (
-       SELECT 1 FROM blocks_synced s WHERE s.id = t.id AND s.workspace_id = ?
+    `WITH RECURSIVE candidates(id) AS (${candidates.sql})
+     SELECT 1 FROM candidates c WHERE NOT EXISTS (
+       SELECT 1 FROM blocks_synced s WHERE s.id = c.id AND s.workspace_id = ?
      ) LIMIT 1`,
-    [...roots.params, config.workspaceId, config.workspaceId],
+    [...candidates.params, workspaceId],
   )
 }
 
@@ -492,7 +487,7 @@ const writeCheckpoint = (
   // transactions upload. Keep the shared position behind both queues.
   if (operation !== 'fresh') {
     if (await tx.readDb.getOptional('SELECT 1 FROM ps_crud UNION ALL SELECT 1 FROM ps_crud_rejected LIMIT 1')) return false
-    if (await hasUnconfirmedMessages(tx, config, operation === 'adopt' ? undefined : operation.processed)) return false
+    if (await hasUnconfirmedBlocks(tx, config.workspaceId, operation === 'adopt' ? undefined : operation.processed)) return false
   }
   const id = checkpointId(config)
   if (typeof operation === 'object') {
@@ -523,7 +518,7 @@ export const publishDeviceCheckpoint = async (repo: Repo, config: MatrixConfig) 
   const position = loadNextBatch(config)
   if (!position) throw new Error('This device has no valid saved Matrix position.')
   if (!await writeCheckpoint(repo, config, position, 'adopt', () => verifyDestination(repo, config))) {
-    throw new Error('Wait for device uploads and server copies of the room messages. Resolve rejected uploads before publishing a Matrix checkpoint.')
+    throw new Error('Wait for uploads and a server copy of each live block in this workspace. Resolve rejected or stranded local writes before publishing a Matrix checkpoint.')
   }
 }
 
