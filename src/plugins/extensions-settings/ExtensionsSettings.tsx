@@ -21,7 +21,7 @@ import {Fragment, useContext, useMemo} from 'react'
 import {Button} from '@/components/ui/button.js'
 import {Checkbox} from '@/components/ui/checkbox.js'
 import {Label} from '@/components/ui/label.js'
-import {useExtensionApprovalStatus} from '@/extensions/extensionApprovalStatus.js'
+import {dynamicImportPinInstruction, extensionApprovalAction, useExtensionApprovalStatus, type ExtensionApprovalStatus} from '@/extensions/extensionApprovalStatus.js'
 import type {ToggleNode} from '@/facets/discoverToggleTree.js'
 import {isEnabled, type Overrides, type Togglable} from '@/facets/togglable.js'
 import {appHashForSession, LayoutWsContext} from '@/context/layoutWsContext.js'
@@ -56,7 +56,7 @@ export interface ExtensionsSettingsProps {
   /** Approve / re-approve a user extension on THIS device (the
    *  "Enable here" / "Update" affordance for #67). Optional — when omitted
    *  the trust affordance isn't rendered (e.g. presentational tests). */
-  onApprove?: (handle: Togglable) => void
+  onApprove?: (handle: Togglable, revision: ExtensionApprovalStatus) => void
   workspaceId?: string
 }
 
@@ -113,7 +113,7 @@ interface SectionProps {
   nodes: ReadonlyArray<ToggleNode>
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
-  onApprove?: (handle: Togglable) => void
+  onApprove?: (handle: Togglable, revision: ExtensionApprovalStatus) => void
   workspaceId?: string
 }
 
@@ -142,7 +142,7 @@ interface ToggleRowProps {
   node: ToggleNode
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
-  onApprove?: (handle: Togglable) => void
+  onApprove?: (handle: Togglable, revision: ExtensionApprovalStatus) => void
   workspaceId?: string
   level: number
 }
@@ -155,6 +155,7 @@ const ToggleRow = ({node, overrides, onToggle, onApprove, workspaceId, level}: T
   // the hook returns undefined for system rows (and when no provider is
   // mounted, e.g. presentational tests).
   const approvalStatus = useExtensionApprovalStatus(handle.id)
+  const approvalAction = approvalStatus && extensionApprovalAction(approvalStatus)
   const wsSession = useContext(LayoutWsContext)
   const checkboxId = `system-plugin-toggle-${handle.id}`
   const labelId = `${checkboxId}-label`
@@ -220,16 +221,18 @@ const ToggleRow = ({node, overrides, onToggle, onApprove, workspaceId, level}: T
               <span className="text-xs text-amber-600 dark:text-amber-500">
                 {approvalStatus.kind === 'needs-approval'
                   ? 'Not approved on this device'
-                  : 'Running an older approved version — Update to adopt the latest source'}
+                  : approvalStatus.kind === 'imports-unpinned'
+                    ? `Loads imports from a live URL${approvalAction ? '' : `. ${dynamicImportPinInstruction}`}`
+                    : `Running an older approved version${approvalStatus.importsUnpinned ? ' that loads imports from a live URL' : ''}. Update to adopt the latest source.`}
               </span>
-              <Button
+              {approvalAction && <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={() => onApprove(handle)}
+                onClick={() => onApprove(handle, approvalStatus)}
               >
-                {approvalStatus.kind === 'needs-approval' ? 'Enable here' : 'Update'}
-              </Button>
+                {approvalAction}
+              </Button>}
             </div>
           )}
         </div>

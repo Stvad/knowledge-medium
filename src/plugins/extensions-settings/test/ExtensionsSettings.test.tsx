@@ -300,7 +300,7 @@ describe('ExtensionsSettings', () => {
 
   it('renders an "Enable here" affordance for a user extension that needs approval here', async () => {
     const store = new ExtensionApprovalStatusStore()
-    store.report('block-uuid-1', {kind: 'needs-approval', name: 'Custom Editor', liveHash: 'h'})
+    store.report('block-uuid-1', {kind: 'needs-approval', name: 'Custom Editor', liveSource: 'SRC', liveHash: 'h'})
     const onApprove = vi.fn()
 
     render(
@@ -321,13 +321,14 @@ describe('ExtensionsSettings', () => {
     expect((onApprove.mock.calls[0][0] as {id: string}).id).toBe('block-uuid-1')
   })
 
-  it('renders an "Update" affordance when an approved user extension has drifted', () => {
+  it.each([false, true])('renders an "Update" affordance when an approved user extension has drifted (live imports: %s)', (importsUnpinned) => {
     const store = new ExtensionApprovalStatusStore()
     store.report('block-uuid-1', {
       kind: 'update-available',
       name: 'Custom Editor',
-      liveHash: 'h2',
+      liveSource: 'SRC', liveHash: 'h2',
       approvedHash: 'h1',
+      importsUnpinned,
     })
 
     render(
@@ -343,6 +344,36 @@ describe('ExtensionsSettings', () => {
     )
 
     expect(screen.getByRole('button', {name: /update/i})).toBeInTheDocument()
+    expect(screen.getByText(/older approved version/i)).toBeInTheDocument()
+    const warning = screen.queryByText(/loads imports from a live URL/i)
+    if (importsUnpinned) expect(warning).toBeInTheDocument()
+    else expect(warning).not.toBeInTheDocument()
+  })
+
+  it.each([false, true])('renders the unpinned status and offers Pin imports only for static imports (%s)', (hasStaticUnpinnedImports) => {
+    const store = new ExtensionApprovalStatusStore()
+    store.report('block-uuid-1', {
+      kind: 'imports-unpinned', name: 'Custom Editor', liveSource: 'SRC', liveHash: 'h', hasStaticUnpinnedImports,
+    })
+    render(
+      <ExtensionApprovalStatusProvider store={store}>
+        <ExtensionsSettings
+          tree={[userNode('block-uuid-1', 'Custom Editor')]}
+          overrides={new Map([['block-uuid-1', true]])}
+          onToggle={vi.fn()}
+          onApprove={vi.fn()}
+        />
+      </ExtensionApprovalStatusProvider>,
+    )
+
+    expect(screen.getByText(/loads imports from a live URL/i)).toBeInTheDocument()
+    if (hasStaticUnpinnedImports) {
+      expect(screen.getByRole('button', {name: 'Pin imports'})).toBeInTheDocument()
+      expect(screen.queryByText(/use a static import/i)).not.toBeInTheDocument()
+    } else {
+      expect(screen.queryByRole('button')).not.toBeInTheDocument()
+      expect(screen.getByText(/use a static import/i)).toBeInTheDocument()
+    }
   })
 
   it('groups essentials first within nested children too', () => {

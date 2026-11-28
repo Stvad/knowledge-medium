@@ -32,7 +32,9 @@ import {useCallback} from 'react'
 import type {PropertyEditorProps} from '@/data/api'
 import type {Block} from '@/data/block.js'
 import {useRepo} from '@/context/repo.js'
-import {lookupApproval} from '@/extensions/compileExtensionModule.js'
+import type {ExtensionApprovalStatus} from '@/extensions/dynamicExtensions.js'
+import {shownExtensionSource} from '@/extensions/extensionToggles.js'
+import {hashExtensionSource, lookupApproval} from '@/extensions/compileExtensionModule.js'
 import {approveExtensionHere} from '@/extensions/approveExtensionHere.js'
 import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
 import {applyToggle, type Overrides, type Togglable} from '@/facets/togglable.js'
@@ -50,17 +52,6 @@ export const ExtensionsOverridesEditor = ({
   // `PropertyEditorProps.block` is intentionally `unknown` (the data-layer
   // api avoids importing the Block facade) — narrow it here.
   const prefsBlock = block as Block
-
-  // Approve (or re-approve) a user extension on THIS device: pin the live
-  // source so the loader will run it. The EXPLICIT trust action, shared by
-  // "Enable here" (cross-device) and "Update" (source drifted). Delegates to
-  // the keyed-by-blockId `approveExtensionHere` (also used by the global
-  // prompt toast) so both surfaces establish trust identically.
-  const approveHere = useCallback(
-    (handle: Togglable): Promise<boolean> =>
-      approveExtensionHere(repo, handle.id, handle.name),
-    [repo],
-  )
 
   const handleToggle = useCallback(
     (handle: Togglable, nextState: boolean) => {
@@ -82,7 +73,17 @@ export const ExtensionsOverridesEditor = ({
           // Only a definitively-absent approval triggers a first-time
           // approve; an existing pin is kept. Don't flip intent on if trust
           // couldn't be established.
-          if (approval.status === 'unapproved' && !(await approveHere(handle))) return
+          if (approval.status === 'unapproved') {
+            const liveSource = shownExtensionSource(handle)
+            if (liveSource === undefined) {
+              showError('Open the extension definition to review this version.')
+              return
+            }
+            const liveHash = await hashExtensionSource(liveSource)
+            if (!(await approveExtensionHere(repo, handle.id, {
+              name: handle.name, kind: 'needs-approval', liveSource, liveHash,
+            }))) return
+          }
         }
         // Read-modify-write inside the serialized write-tx (not against the
         // captured `value` snapshot), so an overlapping toggle whose async
@@ -101,19 +102,19 @@ export const ExtensionsOverridesEditor = ({
         }
       })()
     },
-    [approveHere, prefsBlock],
+    [repo, prefsBlock],
   )
 
   // Affordance path: intent is already true, so only the approval changes —
   // dispatch a refresh (only if it succeeded) so the loader re-resolves and
   // the pinned version starts running / updates.
   const handleApprove = useCallback(
-    (handle: Togglable) => {
+    (handle: Togglable, revision: ExtensionApprovalStatus) => {
       void (async () => {
-        if (await approveHere(handle)) refreshAppRuntime()
+        if (await approveExtensionHere(repo, handle.id, revision)) refreshAppRuntime()
       })()
     },
-    [approveHere],
+    [repo],
   )
 
   if (loading) {

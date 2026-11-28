@@ -147,6 +147,16 @@ describe('ExtensionsOverridesEditor', () => {
     expect(revokeSpy).not.toHaveBeenCalled()
   })
 
+  it('requires another click when a disabled definition changes after rendering its row', async () => {
+    useToggleTreeMock.mockReturnValue({tree: [{handle: userHandle, children: []}], loading: false})
+    mockRepo.load.mockResolvedValue({...userBlock, content: 'changed after render'})
+    renderEditor()
+    await userEvent.click(screen.getByRole('checkbox', {name: /block-user|extension/i}))
+    await vi.waitFor(() => expect(showErrorSpy).toHaveBeenCalledWith(expect.stringContaining('changed')))
+    expect(approveSpy).not.toHaveBeenCalled()
+    expect(blockSet).not.toHaveBeenCalled()
+  })
+
   it('surfaces an error and does NOT set intent when the approval fails', async () => {
     const tree: ToggleNode[] = [{handle: userHandle, children: []}]
     useToggleTreeMock.mockReturnValue({tree, loading: false})

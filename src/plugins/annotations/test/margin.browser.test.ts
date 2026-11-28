@@ -169,18 +169,24 @@ it('scrolls by each wheel delta over an active card and the blank margin', async
   const offsetAtSelection = await scrollTop()
   await firstPill.click({timeout: 5_000})
   await expect.poll(() => firstPill.getAttribute('aria-expanded')).toBe('true')
-  await renderFrames()
+  await first.getByRole('button', {name: 'Clear comment selection'}).waitFor()
   expect(await first.evaluate(element => element.contains(document.activeElement))).toBe(false)
   expect(await scrollTop()).toBe(offsetAtSelection)
+
+  const offsets = [18, 36, 24, 42, 32]
+  // Keep the pointer inside the moving card for the entire wheel sequence.
+  const settled = await box(first)
+  await first.hover({position: {x: settled.width / 2, y: (settled.height - Math.max(...offsets)) / 2}})
   const start = await box(first)
-  const onCard = {x: start.x + start.width / 2, y: start.y + 14}
-  await page.mouse.move(onCard.x, onCard.y)
-  for (const delta of [18, 18, -12, 18, -10]) {
-    expect(await first.evaluate((el, {x, y}) => el.contains(document.elementFromPoint(x, y)), onCard)).toBe(true)
-    await wheelOutline(delta)
+  const onCard = await page.evaluate(() => (window as unknown as {__marginTestPointer: {x: number, y: number}}).__marginTestPointer)
+  let previousOffset = 0
+  for (const offset of offsets) {
+    await expect.poll(() => first.evaluate((el, {x, y}) => el.contains(document.elementFromPoint(x, y)), onCard))
+      .toBe(true)
+    await wheelOutline(offset - previousOffset)
+    await expect.poll(async () => Math.abs((await box(first)).y - start.y + offset)).toBeLessThan(2)
+    previousOffset = offset
   }
-  const end = await box(first)
-  expect(Math.abs(end.y - start.y + 32)).toBeLessThan(2)
 
   const sparse = card(fixture.sparse)
   await positionCard(sparse, 380)

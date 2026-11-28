@@ -1,30 +1,9 @@
-/**
- * Approve (or re-approve) a user extension on THIS device: pin its live
- * source so the loader will run it. This is the EXPLICIT device-local trust
- * action shared by every "Enable here" / "Update" affordance — the settings
- * toggle rows (`ExtensionsOverridesEditor`) AND the global prompt toast
- * (`extensionPromptMount`).
- *
- * Keyed strictly by `blockId`: it loads THAT block's current content and
- * approves THAT block. Nothing here is shared across extensions, so enabling
- * one extension can never touch another's trust state — the guarantee the
- * global surface needs to avoid the mis-keyed-dismissal bug.
- *
- * Returns whether trust was established. Surfaces a toast on failure (store
- * unreadable / block missing / approval write failed) so callers can avoid
- * setting "enabled" intent against a non-existent approval (which would
- * silently loop on needs-approval — #67 review).
- *
- * Fails closed when the device-local approval store is UNREADABLE. The loader
- * reports `needs-approval` on a transient approval-read failure too
- * (`readApproval` can't tell "no approval" from "couldn't read"), so the
- * prompt that led here may be masking an EXISTING trusted pin — blindly
- * approving would overwrite it with the (possibly drifted) live source.
- * `lookupApproval` distinguishes the cases; we only pin when the store is
- * genuinely readable. This matches the settings checkbox enable path.
- */
+import {ChangeScope} from '@/data/api'
+import type {ExtensionApprovalStatus} from './dynamicExtensions.js'
+import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
 import {
   approveExtension,
+  hashExtensionSource,
   lookupApproval,
 } from '@/extensions/compileExtensionModule.js'
 import type {Repo} from '@/data/repo'
@@ -33,28 +12,46 @@ import {showError} from '@/utils/toast.js'
 export const approveExtensionHere = async (
   repo: Repo,
   blockId: string,
-  name: string,
+  {name, kind, liveSource, liveHash}: Pick<ExtensionApprovalStatus, 'name' | 'kind' | 'liveSource' | 'liveHash'>,
 ): Promise<boolean> => {
   try {
-    // Fail closed on an unreadable approval store (see the header) — before
-    // loading or writing anything.
+    // A read failure may hide an existing pin.
     if ((await lookupApproval(blockId)).status === 'unreadable') {
       showError(
         `Couldn't enable "${name}" — couldn't read its approval state. Try again.`,
       )
       return false
     }
-    // The block load is inside the try too: a transient DB read failure must
-    // resolve to `false` + a toast like every other failure, not reject —
-    // callers only handle the resolved-false path (the global prompt's
-    // `void approve(...).then(...)` would otherwise turn it into an unhandled
-    // rejection and drop the retry affordance).
     const block = await repo.load(blockId)
-    if (!block) {
+    if (!block || block.deleted) {
       showError(`Couldn't enable "${name}" — its definition block wasn't found.`)
       return false
     }
-    await approveExtension(blockId, block.content ?? '')
+    const changed = () => {
+      refreshAppRuntime()
+      showError(`“${name}” changed. Review the new version before approving it.`)
+      return false
+    }
+    if (block.content !== liveSource || await hashExtensionSource(liveSource) !== liveHash) return changed()
+    if (kind === 'imports-unpinned') {
+      const {pinExtensionImports} = await import('@knowledge-medium/agent-cli/freezeExtensionImports')
+      const pinned = await pinExtensionImports(liveSource)
+      const written = await repo.tx(async tx => {
+        const current = await tx.get(blockId)
+        if (current?.content !== liveSource || current.deleted) return false
+        await tx.update(blockId, {content: pinned.source})
+        return true
+      }, {scope: ChangeScope.BlockDefault, description: 'Pin extension imports'})
+      if (!written) return changed()
+      try {
+        await approveExtension(blockId, pinned.source, undefined, pinned.vendored)
+      } catch (error) {
+        refreshAppRuntime()
+        throw new Error(`Imports were pinned, but the device approval failed: ${error instanceof Error ? error.message : error}`, {cause: error})
+      }
+    } else {
+      await approveExtension(blockId, liveSource)
+    }
     return true
   } catch (error) {
     console.error(`Failed to approve extension ${blockId}`, error)
