@@ -18,9 +18,12 @@ import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dyn
 import { getPluginPrefsBlock, pluginPrefsBlockId } from '@/data/stateBlocks.js'
 import { pluginBlockId } from '@/extensions/pluginIds.js'
 import { propertyEditorOverridesFacet, definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
+import { DeletedConflictError } from '@/data/api/errors.js'
+import { abortableSleep } from '@/utils/abortableSleep.js'
 import { showError, showInfo, showSuccess } from '@/utils/toast.js'
 import { useRepo } from '@/context/repo.js'
 import type { Block } from '@/data/block.js'
+import type { Repo } from '@/data/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import type { BlockRenderer } from '@/types.js'
 import { keyAtEnd, keysBetween, originalSiblingKeys } from '@/data/orderKey.js'
@@ -59,6 +62,7 @@ const POLL_ERROR_DELAY_MS = 5_000
 // their writes instead of duplicating the message. Picked once; never change.
 const MATRIX_NS = '9839e327-a96a-4974-acb1-128fc44878b8'
 
+const STOPPED_PREFIX = 'knowledge-medium:matrix:stopped:v1:'
 const TOKEN_PREFIX = 'knowledge-medium:matrix:token:v2:'
 // Pre-binding storage is read only by setup and the legacy config migration.
 const LEGACY_TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
@@ -193,6 +197,23 @@ const matrixMessageType = seedType({
   properties: [eventIdProp, eventRoomProp, eventUrlProp, eventAuthorProp, eventTimestampProp],
 })
 
+const checkpointProp = seedProperty({
+  seedKey: extensionPropertySeedKey('checkpoint-next-batch'),
+  revision: 1,
+  name: 'matrix-checkpoint:nextBatch',
+  preset: 'string',
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+const checkpointType = seedType({
+  seedKey: extensionTypeSeedKey('checkpoint'),
+  revision: 1,
+  id: 'matrix-checkpoint',
+  label: 'Matrix room checkpoint',
+  hideFromCompletion: true,
+  properties: [homeserverProp, roomIdProp, checkpointProp],
+})
+
 // Mapping for the one-time rename of the legacy `matrix:*` event-metadata
 // keys onto the reserved `matrix-event:*` namespace.
 const EVENT_KEY_RENAMES: ReadonlyArray<readonly [string, string]> = [
@@ -227,6 +248,8 @@ const destinationKey = ({workspaceId, baseUrl, roomId}: MatrixDestination) =>
   JSON.stringify([workspaceId, baseUrl, roomId])
 export const tokenKey = (destination: MatrixDestination) =>
   TOKEN_PREFIX + destinationKey(destination)
+export const stoppedKey = (destination: MatrixDestination) =>
+  STOPPED_PREFIX + destinationKey(destination)
 export const nextBatchKey = (destination: MatrixDestination) =>
   `knowledge-medium:matrix-messages:state:v2:${destinationKey(destination)}`
 
@@ -280,10 +303,10 @@ const clearLegacyTokens = () => {
   window.localStorage.removeItem(LEGACY_TOKEN_KEY)
 }
 
-const bindToken = (destination: MatrixDestination, token: string) => {
+const bindToken = (destination: MatrixDestination, token: string, bindLegacy: boolean) => {
   const storage = window.localStorage
   const checkpointKey = nextBatchKey(destination)
-  if (storage.getItem(checkpointKey) === null) {
+  if (bindLegacy && storage.getItem(checkpointKey) === null) {
     const cursor = legacyCheckpoint(destination)
     if (cursor !== null) storage.setItem(checkpointKey, cursor)
   }
@@ -322,7 +345,7 @@ const destinationFromPrefs = (prefs: Block): MatrixDestination => ({
 
 const loadConfig = (prefs: Block): MatrixConfigCandidate => {
   const destination = destinationFromPrefs(prefs)
-  return {...destination, accessToken: loadToken(destination), autoStart: prefs.get(autoStartProp)}
+  return {...destination, accessToken: loadToken(destination), autoStart: prefs.get(autoStartProp) && !window.localStorage.getItem(stoppedKey(destination))}
 }
 
 const MATRIX_DIAGNOSTIC_ID = 'matrix-chat-client'
@@ -393,11 +416,18 @@ const matrixDiagnosticSource: DiagnosticSourceContribution = {
 // ---------------------------------------------------------------------------
 // long-poll cursor (localStorage)
 
+const validBatch = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
+
+const syncPosition = (body: {next_batch?: unknown} | null | undefined): string => {
+  if (!validBatch(body?.next_batch)) throw new Error('Matrix returned an invalid sync position.')
+  return body.next_batch
+}
+
 const decodeNextBatch = (raw: string | null): string | null => {
   if (!raw) return null
   try {
     const state = JSON.parse(raw)
-    return typeof state?.nextBatch === 'string' ? state.nextBatch : null
+    return validBatch(state?.nextBatch) ? state.nextBatch : null
   } catch {
     return null
   }
@@ -409,16 +439,82 @@ const loadNextBatch = (config: MatrixConfig) => decodeNextBatch(window.localStor
 const saveNextBatch = (config: MatrixConfig, nextBatch: string) =>
   window.localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch, savedAt: Date.now()}))
 
+export const checkpointId = (config: MatrixDestination) =>
+  pluginBlockId(config.workspaceId, MATRIX_NS, 'checkpoint:' + destinationKey(config))
+
+const readCheckpoint = (db: Pick<Tx['readDb'], 'getOptional'>, config: MatrixDestination) =>
+  db.getOptional<{deleted: number, position: unknown}>(
+    `SELECT deleted, json_extract(properties_json, '$."${checkpointProp.name}"') AS position FROM blocks WHERE id = ?`,
+    [checkpointId(config)],
+  )
+
+const checkpointPosition = (row: Awaited<ReturnType<typeof readCheckpoint>>) =>
+  row && !row.deleted && validBatch(row.position) ? row.position : null
+
+const syncGapReason = async (repo: Repo, workspaceId: string, tx?: Tx) => {
+  const gap = await repo.workspaceViewGap(workspaceId, tx)
+  if (gap) return gap.reason
+  // A cold connection can report idle before its first download starts.
+  const status = (repo.db as {currentStatus?: {connected: boolean, hasSynced?: boolean}}).currentStatus
+  return status?.connected && !status.hasSynced ? 'The first workspace download has not completed.' : null
+}
+
+const undeleteCheckpoint = 'Undelete the Matrix room checkpoint block to resume from it.'
+
+const advanceCheckpoint = (repo: Repo, config: MatrixConfig, position: string, verify: () => void) =>
+  repo.tx(async tx => {
+    const counts = await tx.readDb.get<{pending: number, rejected: number}>(
+      'SELECT (SELECT count(*) FROM ps_crud) AS pending, (SELECT count(*) FROM ps_crud_rejected) AS rejected',
+    )
+    // A rejected Matrix message the user dismissed can be skipped by the next writer.
+    if (counts.pending || counts.rejected) return counts
+    const id = checkpointId(config)
+    const {inserted} = await tx.createOrGet({
+      id, workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'Matrix room checkpoint',
+      properties: addBlockTypeToProperties({
+        [homeserverProp.name]: config.baseUrl, [roomIdProp.name]: config.roomId, [checkpointProp.name]: position,
+      }, checkpointType.id),
+    }, {systemMint: true}).catch(error => {
+      if (error instanceof DeletedConflictError) throw new Error(undeleteCheckpoint)
+      throw error
+    })
+    if (!inserted) await tx.setProperty(id, checkpointProp, position)
+    verify()
+    return null
+  }, {scope: ChangeScope.BlockDefault, skipUndo: true, description: 'Advance Matrix room checkpoint'})
+
+export const startFresh = async (repo: Repo, config: MatrixConfig, signal: AbortSignal, client: any) => {
+  const requireNewRoom = async (tx?: Tx) => {
+    const gap = await syncGapReason(repo, config.workspaceId, tx)
+    if (gap) throw new Error(`Waiting for sync before starting fresh. ${gap}`)
+    const db = tx?.readDb ?? repo.db
+    const checkpoint = await readCheckpoint(db, config)
+    if (checkpoint?.deleted) throw new Error(undeleteCheckpoint)
+    if (checkpoint || loadNextBatch(config)) throw new Error('This room already has a Matrix position. Resume ingest.')
+    if (await db.getOptional(
+      `SELECT 1 FROM blocks WHERE workspace_id = ? AND (
+         (json_extract(properties_json, '$."matrix-event:room"') = ? AND EXISTS (
+           SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'matrix-message'))
+         OR (json_extract(properties_json, '$."matrix:roomId"') = ?
+           AND json_extract(properties_json, '$."matrix:eventId"') IS NOT NULL)
+       ) LIMIT 1`,
+      [config.workspaceId, config.roomId, config.roomId],
+    )) throw new Error('This room already has ingested Matrix messages. Recover its saved position to resume.')
+    signal.throwIfAborted()
+    if (repo.activeWorkspaceId !== config.workspaceId || loadToken(config) !== config.accessToken) {
+      throw new Error('The Matrix destination or device credential changed.')
+    }
+  }
+  await requireNewRoom()
+  const position = syncPosition(await fetchMatrixSync(config, null, signal, client))
+  await repo.tx(async tx => {
+    await requireNewRoom(tx)
+    saveNextBatch(config, position)
+  }, {scope: ChangeScope.BlockDefault, skipUndo: true, description: 'Start Matrix ingest from now'})
+}
+
 // ---------------------------------------------------------------------------
 // matrix sync
-
-const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
-  const timeout = window.setTimeout(resolve, ms)
-  signal.addEventListener('abort', () => {
-    window.clearTimeout(timeout)
-    reject(new DOMException('Aborted', 'AbortError'))
-  }, {once: true})
-})
 
 const syncFilter = (config: MatrixConfig) => ({
   room: {
@@ -1025,11 +1121,10 @@ const isRetryableError = (error: unknown): boolean => {
 }
 
 export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
-  let nextBatch = loadNextBatch(config)
-  // `toasted` gates the one-per-streak toast (loud, actionable errors only);
-  // `degraded` tracks whether a warning is currently shown so recovery clears it.
+  let nextBatch: string | null = null
+  let needsCheckpoint = false
+  let heldPolls = 0
   let toasted = false
-  let degraded = false
   clearMatrixDiagnostic()
 
   const stopped = new Error('Matrix poll stopped')
@@ -1039,39 +1134,61 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
   }
   while (isCurrent()) {
     try {
+      if (!nextBatch) {
+        const shared = checkpointPosition(await readCheckpoint(repo.db, config))
+        nextBatch = loadNextBatch(config) ?? shared
+        // An existing baseline can replay the tail after a restart. Idle restarts need no graph write.
+        needsCheckpoint = !shared
+        if (!nextBatch) {
+          const gap = await syncGapReason(repo, config.workspaceId)
+          verifyWorkspace()
+          if (gap) {
+            setMatrixDiagnostic(matrixWarningDiagnostic('Matrix ingest is waiting for sync', gap))
+            await abortableSleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
+            continue
+          }
+          throw new Error(`No valid Matrix position. Resume the original writer or, for a new room, choose Start fresh. ${undeleteCheckpoint}`)
+        }
+      }
+      verifyWorkspace()
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
-      const timeline = nextBatch ? syncBody?.rooms?.join?.[config.roomId]?.timeline : undefined
+      const timeline = syncBody?.rooms?.join?.[config.roomId]?.timeline
       if (timeline && !Array.isArray(timeline.events)) throw new Error('Matrix timeline has no events array')
-      const newBatch = syncBody?.next_batch
+      const newBatch = syncPosition(syncBody)
       // With no prev_batch, page from this sync's upper bound. The overlap
       // with its timeline is safe because each message is checked by identity.
-      const gap = nextBatch && timeline?.limited
+      const gap = timeline?.limited
         ? await fetchGapEvents(config, timeline.prev_batch === undefined ? newBatch : timeline.prev_batch, nextBatch, signal, matrixClient, verifyWorkspace)
         : null
       for (const batch of [gap ?? [], timeline?.events ?? []]) {
         for (const event of batch) {
-          if (event?.type === 'm.room.message') await appendMatrixMessage(repo, config, event, matrixClient, verifyWorkspace)
+          if (event?.type === 'm.room.message') {
+            await appendMatrixMessage(repo, config, event, matrixClient, verifyWorkspace)
+            needsCheckpoint = true
+          }
         }
       }
 
-      if (typeof newBatch === 'string') {
-        verifyWorkspace()
-        saveNextBatch(config, newBatch)
-        nextBatch = newBatch
-        if (gap) setMatrixDiagnostic({
-          severity: 'ok', summary: 'Matrix history gap recovered',
-          detail: `History events checked: ${gap.length}.`,
+      verifyWorkspace()
+      saveNextBatch(config, newBatch)
+      nextBatch = newBatch
+      const held = needsCheckpoint ? await advanceCheckpoint(repo, config, newBatch, verifyWorkspace) : null
+      verifyWorkspace()
+      needsCheckpoint = Boolean(held)
+      heldPolls = held ? heldPolls + 1 : 0
+      if (held && heldPolls >= 3) {
+        setMatrixDiagnostic(matrixWarningDiagnostic('Matrix checkpoint held', `Pending uploads: ${held.pending}. Rejected uploads: ${held.rejected}. Ingest continues on this device.`))
+      } else if (gap) {
+        setMatrixDiagnostic({
+          severity: 'ok', summary: 'Matrix history gap recovered', detail: `History events checked: ${gap.length}.`,
         })
+      } else if (matrixDiagnosticSnapshot?.severity === 'warning') {
+        clearMatrixDiagnostic()
       }
-      if (degraded) {
-        degraded = false
-        toasted = false
-        if (!gap) clearMatrixDiagnostic()
-      }
+      toasted = false
     } catch (error) {
       if (error === stopped || !isCurrent()) return
       const message = error instanceof Error ? error.message : String(error)
-      degraded = true
       if (isRetryableError(error)) {
         console.warn('[matrix-messages] transient poll error (will retry):', message)
         setMatrixDiagnostic(retryErrorMatrixDiagnostic(message))
@@ -1085,7 +1202,7 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
           showError(`Matrix ingest error: ${message}`)
         }
       }
-      await sleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
+      await abortableSleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
     }
   }
 }
@@ -1154,7 +1271,7 @@ export const matrixIngestEffect = {
       }
 
       const onStorage = (event: StorageEvent) => {
-        if (event.key === null || event.key.startsWith(TOKEN_PREFIX)) refresh()
+        if (event.key === null || event.key.startsWith(TOKEN_PREFIX) || event.key.startsWith(STOPPED_PREFIX)) refresh()
       }
       window.addEventListener('storage', onStorage)
       const unsubscribeBlock = prefs.subscribe(refresh)
@@ -1259,8 +1376,8 @@ const MatrixSetupDialog = () => {
       await prefs.set(connectedHintProp, true)
       if (repo.activeWorkspaceId !== destination.workspaceId) throw new Error('The active workspace changed. Reopen Matrix settings.')
       if (bindPending && eligibleLegacyToken(destination) !== selectedToken) throw new Error('The saved device token changed. Reopen Matrix settings.')
-      if (selectedToken) bindToken(destination, selectedToken)
-      requestRestart()
+      if (selectedToken) bindToken(destination, selectedToken, bindPending)
+      resumeDevice(destination)
       showSuccess('Matrix connected.')
       setSetupOpen(false)
     } catch (error) {
@@ -1316,7 +1433,7 @@ const MatrixSetupDialog = () => {
           </div>
           {destination && workspace && <p className="break-all">Destination: {destination.baseUrl} · {destination.roomId} · workspace {workspace.name}</p>}
         </div>
-        {pendingToken() && <p>Binding or saving a token clears the old unscoped credentials on this device.</p>}
+        {pendingToken() && <p>On the original workspace, bind the saved device token to keep its room position. Saving a pasted token uses this workspace’s position. Both clear the old unscoped credentials.</p>}
         <Button variant='ghost' disabled={saving} onClick={forgetDeviceTokens}>Forget all Matrix tokens on this device</Button>
         <DialogFooter>
           <Button variant='ghost' onClick={() => setSetupOpen(false)} disabled={saving}>Cancel</Button>
@@ -1344,6 +1461,11 @@ const subscribeCredential = (notify: () => void) => {
     window.removeEventListener(RESTART_EVENT, notify)
     window.removeEventListener('storage', notify)
   }
+}
+
+const resumeDevice = (destination: MatrixDestination) => {
+  window.localStorage.removeItem(stoppedKey(destination))
+  requestRestart()
 }
 
 const ConnectedEditor = ({value, onChange, block}: PropertyEditorProps<boolean>) => {
@@ -1376,7 +1498,7 @@ const ConnectedEditor = ({value, onChange, block}: PropertyEditorProps<boolean>)
       <Button
         variant='outline'
         size='sm'
-        onClick={requestRestart}
+        onClick={() => resumeDevice(destinationFromPrefs(prefs))}
         disabled={!tokenPresent}
       >Restart ingest</Button>
     </div>
@@ -1427,31 +1549,47 @@ const startAction = {
   context: ActionContextTypes.GLOBAL,
   handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
     const prefs = await prefsBlock(uiStateBlock.repo)
-    if (prefs) await prefs.set(autoStartProp, true)
-    requestRestart()
+    if (!prefs) return
+    const destination = destinationFromPrefs(prefs)
+    await prefs.set(autoStartProp, true)
+    resumeDevice(destination)
   },
 }
 
 const stopAction = {
   id: 'matrix.stop',
-  description: 'Matrix: stop message ingest',
-  context: ActionContextTypes.GLOBAL,
-  handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
-    const prefs = await prefsBlock(uiStateBlock.repo)
-    if (prefs) await prefs.set(autoStartProp, false)
-    requestRestart()
-  },
-}
-
-const resetPositionAction = {
-  id: 'matrix.reset-position',
-  description: 'Matrix: reset message ingest position',
+  description: 'Matrix: stop message ingest on this device',
   context: ActionContextTypes.GLOBAL,
   handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
     const prefs = await prefsBlock(uiStateBlock.repo)
     if (!prefs) return
-    window.localStorage.setItem(nextBatchKey(destinationFromPrefs(prefs)), JSON.stringify({nextBatch: null, savedAt: Date.now()}))
+    window.localStorage.setItem(stoppedKey(destinationFromPrefs(prefs)), '1')
     requestRestart()
+  },
+}
+
+const startFreshAction = {
+  id: 'matrix.reset-position',
+  description: 'Matrix: Start fresh from now (new room)',
+  context: ActionContextTypes.GLOBAL,
+  handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
+    const repo = uiStateBlock.repo
+    const prefs = await prefsBlock(repo)
+    if (!prefs) return
+    const candidate = loadConfig(prefs)
+    if (!candidate.accessToken) {
+      showError(missingTokenMatrixDiagnostic.detail!)
+      return
+    }
+    const config = {...candidate, accessToken: candidate.accessToken}
+    try {
+      if (!window.confirm('Start Matrix ingest from now? Earlier messages will be skipped.')) return
+      await startFresh(repo, config, new AbortController().signal, createMatrixClient(config))
+      requestRestart()
+      showSuccess('Matrix ingest started from now.')
+    } catch (error) {
+      showError(error instanceof Error ? error.message : String(error))
+    }
   },
 }
 
@@ -1550,6 +1688,8 @@ const matrixAudioGutterItem: BlockGutterItemContribution = ctx =>
 export default [
   typeSeedsFacet.of(matrixChatPrefsType, {source}),
   typeSeedsFacet.of(matrixMessageType, {source}),
+  typeSeedsFacet.of(checkpointType, {source}),
+  definitionSeedsFacet.of(checkpointProp, {source}),
 
   definitionSeedsFacet.of(homeserverProp, {source}),
   definitionSeedsFacet.of(roomIdProp, {source}),
@@ -1577,5 +1717,5 @@ export default [
   actionsFacet.of(connectAction, {source}),
   actionsFacet.of(startAction, {source}),
   actionsFacet.of(stopAction, {source}),
-  actionsFacet.of(resetPositionAction, {source}),
+  actionsFacet.of(startFreshAction, {source}),
 ]

@@ -22,8 +22,8 @@ vi.mock('@/data/stateBlocks.js', () => ({
 }))
 
 import contributions, {
-  autoStartProp, homeserverProp, matrixIngestEffect,
-  nextBatchKey, pollLoop, roomIdProp, tokenKey,
+  autoStartProp, checkpointId, homeserverProp, matrixIngestEffect,
+  nextBatchKey, pollLoop, roomIdProp, stoppedKey, tokenKey,
 } from './matrix-chat-client.tsx'
 
 const a = {workspaceId: 'first', baseUrl: 'https://matrix.test', roomId: '!local:matrix.test'}
@@ -43,7 +43,7 @@ function makePrefs(workspaceId: string) {
   const data = {workspaceId}
   const listeners = new Set<(row: typeof data) => void>()
   return {
-    id: workspaceId, data,
+    id: workspaceId, data, status: () => 'ready',
     load: async () => data,
     peek: () => data,
     get: (prop: {name: string}) => values.get(prop.name),
@@ -59,14 +59,18 @@ function makePrefs(workspaceId: string) {
   }
 }
 
-function makeRepo() {
+function makeRepo(destination = a) {
   const prefs = new Map([a, otherWorkspace].map(d => [d.workspaceId, makePrefs(d.workspaceId)]))
   const listeners = new Set<() => void>()
   return {
-    activeWorkspaceId: a.workspaceId, user: {id: 'fixture-user'}, prefs, block: (id: string) => prefs.get(id),
+    activeWorkspaceId: destination.workspaceId, user: {id: 'fixture-user'}, prefs,
+    block: (id: string) => prefs.get(id),
     db: {
       getAll: async () => [],
-      getOptional: async (_sql: string, [id]: string[]) => id === a.workspaceId ? {name: workspaceName} : null,
+      getOptional: async (_sql: string, [id]: string[]) => {
+        if (id === checkpointId(destination)) return {deleted: 0, position: 'shared-position'}
+        return id === destination.workspaceId ? {name: workspaceName} : null
+      },
     },
     tx: vi.fn(async (run: (tx: {setProperty: (id: string, prop: {name: string}, value: unknown) => void}) => Promise<void>) => {
       await run({setProperty: (id, prop, value) => prefs.get(id)!.set(prop, value)})
@@ -82,6 +86,13 @@ function makeRepo() {
       listeners.forEach(notify => notify())
     },
   }
+}
+
+function runAction(id: string, repo: ReturnType<typeof makeRepo>) {
+  const action = contributions.find(c => (c.value as {id?: string}).id === id)!.value as unknown as {
+    handler: (ctx: {uiStateBlock: {repo: ReturnType<typeof makeRepo>}}) => Promise<void>
+  }
+  return action.handler({uiStateBlock: {repo}})
 }
 
 function openSetup(repo: ReturnType<typeof makeRepo>) {
@@ -127,7 +138,8 @@ describe('Matrix device authorization', () => {
     const repo = makeRepo()
     localStorage.setItem(tokenKey(a), 'bound-token')
     stop = matrixIngestEffect.start({repo})
-    await vi.waitFor(() => expect(createClient).toHaveBeenCalledWith({baseUrl: a.baseUrl, accessToken: 'bound-token'}))
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
+    expect(createClient).toHaveBeenCalledWith({baseUrl: a.baseUrl, accessToken: 'bound-token'})
     expect(diagnostics.getSnapshot()).toBeNull()
     const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
     expect(signal.aborted).toBe(false)
@@ -185,37 +197,132 @@ describe('Matrix device authorization', () => {
     },
   )
 
-  it('shows the authorized destination when saving a newly entered token', async () => {
-    const repo = makeRepo()
-    const prefs = repo.prefs.get(a.workspaceId)!
+  it('uses the receiving workspace checkpoint when saving a new token beside a later unscoped cursor', async () => {
+    const repo = makeRepo(otherWorkspace)
+    const prefs = repo.prefs.get(otherWorkspace.workspaceId)!
     prefs.set(homeserverProp, legacyBaseUrl)
-    localStorage.setItem(legacyCursorKey, cursorState('previous'))
+    localStorage.setItem(legacyCursorKey, cursorState('later-unscoped'))
     localStorage.setItem(legacyTokenKey, 'unselected-token')
+    localStorage.setItem(stoppedKey(a), '1')
+    localStorage.setItem(stoppedKey(otherWorkspace), '1')
+    stop = matrixIngestEffect.start({repo})
     openSetup(repo)
     await correctLegacyOrigin()
     fireEvent.change(screen.getByLabelText('Access token'), {target: {value: 'new-token'}})
     expectDestination()
     fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-    await vi.waitFor(() => expect(localStorage.getItem(tokenKey(a))).toBe('new-token'))
-    expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('previous'))
-    expect(localStorage.getItem(legacyCursorKey)).toBe(cursorState('previous'))
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
+    expect(authedRequest.mock.calls[0].slice(1, 3)).toEqual(['/sync', expect.objectContaining({since: 'shared-position'})])
+    expect(localStorage.getItem(tokenKey(otherWorkspace))).toBe('new-token')
+    expect(localStorage.getItem(stoppedKey(otherWorkspace))).toBeNull()
+    expect(localStorage.getItem(stoppedKey(a))).toBe('1')
+    expect(localStorage.getItem(nextBatchKey(otherWorkspace))).toBeNull()
+    expect(localStorage.getItem(legacyCursorKey)).toBe(cursorState('later-unscoped'))
     expect(localStorage.getItem(legacyTokenKey)).toBeNull()
   })
 
-  it('keeps a reset position when the pair still has a legacy checkpoint', async () => {
+  it('resumes the saved device cursor when Connect keeps the existing token', async () => {
     const repo = makeRepo()
-    localStorage.setItem(legacyTokenKey, 'pending-token')
-    localStorage.setItem(legacyCursorKey, cursorState('previous'))
-    localStorage.setItem(nextBatchKey(a), cursorState('current'))
-    const reset = contributions.find(c => (c.value as {id?: string}).id === 'matrix.reset-position')!.value as unknown as {
-      handler: (ctx: {uiStateBlock: {repo: ReturnType<typeof makeRepo>}}) => Promise<void>
-    }
-    await reset.handler({uiStateBlock: {repo}})
+    localStorage.setItem(tokenKey(a), 'bound-token')
+    localStorage.setItem(nextBatchKey(a), cursorState('local'))
+    localStorage.setItem(stoppedKey(a), '1')
+    stop = matrixIngestEffect.start({repo})
     openSetup(repo)
-    fireEvent.click(await screen.findByRole('button', {name: 'Bind saved device token'}))
-    await vi.waitFor(() => expect(localStorage.getItem(tokenKey(a))).toBe('pending-token'))
-    expect(JSON.parse(localStorage.getItem(nextBatchKey(a))!).nextBatch).toBeNull()
-    expect(localStorage.getItem(legacyCursorKey)).toBe(cursorState('previous'))
+    await screen.findByDisplayValue(a.roomId)
+    expect((screen.getByLabelText('Access token') as HTMLInputElement).value).toBe('')
+    fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
+    expect(authedRequest.mock.calls[0][2].since).toBe('local')
+    expect(localStorage.getItem(stoppedKey(a))).toBeNull()
+    expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('local'))
+    expect(localStorage.getItem(tokenKey(a))).toBe('bound-token')
+  })
+
+  it('stops and restarts this device without losing its credential or changing the synced auto-start preference', async () => {
+    const repo = makeRepo()
+    const elsewhere = {...a, roomId: '!other:matrix.test'}
+    localStorage.setItem(tokenKey(a), 'active')
+    localStorage.setItem(nextBatchKey(a), cursorState('local'))
+    const prefs = repo.prefs.get(a.workspaceId)!
+    const set = vi.spyOn(prefs, 'set')
+    stop = matrixIngestEffect.start({repo})
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
+    const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
+    await runAction('matrix.stop', repo)
+    expect(signal.aborted).toBe(true)
+    expect(localStorage.getItem(stoppedKey(a))).toBe('1')
+    expect(localStorage.getItem(stoppedKey(elsewhere))).toBeNull()
+    expect(localStorage.getItem(tokenKey(a))).toBe('active')
+    expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('local'))
+    expect(set).not.toHaveBeenCalled()
+    expect(prefs.get(autoStartProp)).toBe(true)
+
+    // Reloaded tabs observe the persisted pause before opening a poll.
+    stop()
+    const get = vi.spyOn(prefs, 'get')
+    stop = matrixIngestEffect.start({repo})
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith(autoStartProp))
+    expect(authedRequest).toHaveBeenCalledOnce()
+    await runAction('matrix.start', repo)
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledTimes(2))
+    expect(localStorage.getItem(stoppedKey(a))).toBeNull()
+    expect(authedRequest.mock.calls[1][2].since).toBe('local')
+  })
+
+  it('resumes the paused destination from the settings Restart button', async () => {
+    const repo = makeRepo()
+    const prefs = repo.prefs.get(a.workspaceId)!
+    const set = vi.spyOn(prefs, 'set')
+    localStorage.setItem(tokenKey(a), 'bound')
+    localStorage.setItem(stoppedKey(a), '1')
+    localStorage.setItem(stoppedKey(otherWorkspace), '1')
+    const editor = contributions.map(c => c.value).find(c => 'Editor' in c && c.label === 'Matrix') as {
+      Editor: ComponentType<{block: typeof prefs, value: boolean, onChange: () => void}>
+    }
+    render(createElement(editor.Editor, {block: prefs, value: true, onChange: vi.fn()}))
+    const get = vi.spyOn(prefs, 'get')
+    stop = matrixIngestEffect.start({repo})
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith(autoStartProp))
+    expect(authedRequest).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Restart ingest'}))
+    expect(localStorage.getItem(stoppedKey(a))).toBeNull()
+    expect(localStorage.getItem(stoppedKey(otherWorkspace))).toBe('1')
+    expect(localStorage.getItem(tokenKey(a))).toBe('bound')
+    expect(set).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
+    expect(authedRequest.mock.calls[0][2].since).toBe('shared-position')
+  })
+
+  it.each([['start', 'matrix.start'], ['stop', 'matrix.stop'], ['Start fresh', 'matrix.reset-position']])(
+    'ignores %s without an active workspace', async (_, action) => {
+      const repo = makeRepo()
+      repo.setActiveWorkspaceId('')
+      await expect(runAction(action, repo)).resolves.toBeUndefined()
+      expect(repo.tx).not.toHaveBeenCalled()
+    },
+  )
+
+  it('asks for a device credential before offering Start fresh', async () => {
+    const repo = makeRepo()
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirm)
+    const error = vi.spyOn(toast, 'showError')
+    await runAction('matrix.reset-position', repo)
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/token/i))
+    expect(confirm).not.toHaveBeenCalled()
+    expect(createClient).not.toHaveBeenCalled()
+  })
+
+  it('cancels Start fresh before contacting Matrix or changing a checkpoint', async () => {
+    const repo = makeRepo()
+    localStorage.setItem(tokenKey(a), 'bound')
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirm)
+    await runAction('matrix.reset-position', repo)
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(createClient).not.toHaveBeenCalled()
+    expect(repo.tx).not.toHaveBeenCalled()
   })
 
   it('preserves an existing scoped checkpoint when binding the saved token', async () => {
@@ -277,7 +384,7 @@ describe('Matrix device authorization', () => {
     expect(localStorage.getItem(legacyTokenKey)).toBe('pending')
   })
 
-  it('resumes the legacy cursor when another device already normalized the synced origin', async () => {
+  it('preserves the legacy cursor when another device already normalized the synced origin', async () => {
     const repo = makeRepo()
     localStorage.setItem(legacyTokenKey, 'pending')
     localStorage.setItem(legacyCursorKey, cursorState('old'))
@@ -387,20 +494,35 @@ describe('Matrix device authorization', () => {
     expect(localStorage.getItem('unrelated')).toBe('keep')
   })
 
-  it('starts and stops when another tab binds and disconnects this destination', async () => {
+  it.each(['pause', 'disconnect'] as const)('aborts a second tab on %s and discards its late poll response', async reason => {
     const repo = makeRepo()
     const reads = vi.spyOn(repo.prefs.get(a.workspaceId)!, 'get')
     stop = matrixIngestEffect.start({repo})
     await vi.waitFor(() => expect(reads).toHaveBeenCalledWith(autoStartProp))
     const key = tokenKey(a)
+    localStorage.setItem(nextBatchKey(a), cursorState('local'))
+    let deliver!: (body: unknown) => void
+    const response = new Promise(resolve => { deliver = resolve })
+    authedRequest.mockReturnValueOnce(response)
     localStorage.setItem(key, 'another-tab')
     window.dispatchEvent(new StorageEvent('storage', {key}))
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
     expect(createClient).toHaveBeenCalledWith({baseUrl: a.baseUrl, accessToken: 'another-tab'})
     const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
-    localStorage.removeItem(key)
-    window.dispatchEvent(new StorageEvent('storage', {key}))
+    expect(signal.aborted).toBe(false)
+    if (reason === 'pause') {
+      localStorage.setItem(stoppedKey(a), '1')
+      window.dispatchEvent(new StorageEvent('storage', {key: stoppedKey(a)}))
+    } else {
+      localStorage.removeItem(key)
+      window.dispatchEvent(new StorageEvent('storage', {key}))
+      expect(diagnostics.getSnapshot()?.summary).toBe('Matrix token is missing')
+    }
     expect(signal.aborted).toBe(true)
-    expect(diagnostics.getSnapshot()?.summary).toBe('Matrix token is missing')
+    deliver({next_batch: 'late-reply'})
+    await response
+    expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('local'))
+    expect(repo.tx).not.toHaveBeenCalled()
   })
 
   it('refuses a non-https homeserver', async () => {
@@ -445,6 +567,7 @@ describe('Matrix device authorization', () => {
       authedRequest.mockImplementationOnce(() => new Promise(resolve => { deliver = resolve }))
       const run = pollLoop(repo, {...a, accessToken: 'fixture-token', autoStart: true},
         controller.signal, {http: {authedRequest}})
+      await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
       expect(authedRequest.mock.calls[0][2].since).toBe('original')
       repo.activeWorkspaceId = otherWorkspace.workspaceId
       const events = kind === 'message' ? [{event_id: '$fixture', type: 'm.room.message'}] : []

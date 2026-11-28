@@ -177,6 +177,14 @@ To allowlist an extension or take a new version, the operator:
 
 **Rollout.** No mixed-version machinery. The host is in the drain set: an extension that imports a new kernel export means deploy, update the checkout, restart the host.
 
+### Moving an existing Matrix room from a tab to the host
+
+1. Reinstall and approve the updated Matrix extension on the original tab. Reload or close older copies. If the original tab still offers **Bind saved device token**, use it there to retain its legacy room position. Drain pending uploads and resolve rejections. The next completed poll publishes the **Matrix room checkpoint** automatically. A persistent hold appears in Matrix diagnostics with both queue counts.
+2. On a write-enabled host with extension loading available, select the owner’s preferences page and allowlist the reviewed extension. With the daemon stopped, run `pnpm headless storage set <config.json> '<key>'` and enter the same Matrix access token. The key is `knowledge-medium:matrix:token:v2:` followed by the compact JSON array `["<workspace-id>","https://<homeserver-origin>","<room-id>"]`.
+3. Start the host and let it sync. It uses its own valid cursor if present, otherwise the downloaded checkpoint. Check the Matrix diagnostic, then run **Matrix: stop message ingest on this device** in the old browser. This stops its other tabs and preserves the synced auto-start preference. Send a distinctive room message and verify it appears once. To switch back, run **Matrix: start message ingest** on the original tab.
+
+**Start fresh from now** skips earlier history and is only for a new room. For an existing room with no position, wait for sync or resume its original writer. If the checkpoint was deleted, undelete the **Matrix room checkpoint** block. Its homeserver origin, room ID and opaque sync position are workspace data, encrypted with the block properties in an encrypted workspace. The access token stays on each device.
+
 ## 8. Where tab and host differ
 
 Everything else is the same code on both: the runtime controller and resolver, the loader and its gates, the record shape, the transpile and its import rule, the freezer, the reconciler, every data facet, and the extensions' own source.

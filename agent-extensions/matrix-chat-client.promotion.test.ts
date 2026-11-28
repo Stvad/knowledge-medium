@@ -120,10 +120,6 @@ const setup = async (): Promise<Repo> => {
   return repo
 }
 
-/** Configure the extension the way the setup dialog would, and pre-seed the
- *  cursor: ingest deliberately ignores the events of a cursor-less first sync
- *  (that call only establishes a position), so without one no message is ever
- *  read. */
 const configureIngest = async (repo: Repo): Promise<void> => {
   window.localStorage.setItem(tokenKey(destination), 'secret-token')
   window.localStorage.setItem(

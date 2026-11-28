@@ -58,9 +58,9 @@ afterEach(() => {
 
 it('skips schema registration when the workspace changes during the initial identity read', async () => {
   const {repo, switchWorkspace, run} = fixture()
-  repo.db.getOptional.mockImplementationOnce(async () => { switchWorkspace(); return null })
+  repo.db.getOptional.mockResolvedValueOnce(null).mockImplementationOnce(async () => { switchWorkspace(); return null })
   await run()
-  expect(repo.db.getOptional).toHaveBeenCalledOnce()
+  expect(repo.db.getOptional).toHaveBeenNthCalledWith(2, expect.any(String), expect.arrayContaining(['$example']))
   expect(writes.schemas).not.toHaveBeenCalled()
 })
 

@@ -70,11 +70,12 @@ const run = async (...replies: unknown[]) => {
 
 it('pages across empty responses, keeps S0 through fetches and writes, and appends oldest-first', async () => {
   const write = repo.tx.bind(repo)
-  const duringWrite: string[] = []
+  const duringMessageWrite: string[] = []
   vi.spyOn(repo, 'tx').mockImplementation(async (fn, opts) => {
-    duringWrite.push(cursor())
+    const before = cursor()
+    const count = (await contents()).length
     const result = await write(fn, opts)
-    duringWrite.push(cursor())
+    if ((await contents()).length > count) duringMessageWrite.push(before, cursor())
     return result
   })
   const requests = await run(
@@ -87,7 +88,7 @@ it('pages across empty responses, keeps S0 through fetches and writes, and appen
   expect(requests.slice(1, 4)).toEqual(['P1', 'P2', 'P3'].map(from => ({
     method: 'GET', path: historyPath, cursor: 'S0', query: expect.objectContaining({from, to: 'S0', dir: 'b'}),
   })))
-  expect(new Set(duringWrite)).toEqual(new Set(['S0']))
+  expect(new Set(duringMessageWrite)).toEqual(new Set(['S0']))
   expect(requests.at(-1)?.query.since).toBe('S1')
   expect(cursor()).toBe('S1')
   expect(await contents()).toEqual(['one', 'two', 'three', 'four', 'five'])
@@ -111,11 +112,9 @@ it('retries a failed history fetch from the last saved sync position', async () 
   expect(await contents()).toEqual(['older', 'newer'])
 })
 
-it('skips fresh-sync history, then backfills a limited interval in an empty graph', async () => {
+it('backfills a limited interval from the shared position in a room with no imported messages', async () => {
+  await run(sync('S0', []))
   localStorage.removeItem(nextBatchKey(config))
-  const baseline = await run(sync('S0', ['ignored'], limited))
-  expect(baseline.map(r => r.path)).toEqual(['/sync', '/sync'])
-  expect(await contents()).toEqual([])
   const requests = await run(sync('S1', ['newer'], limited), {chunk: [event('older')], end: 'S0'})
   expect(requests.map(r => r.path)).toEqual(['/sync', historyPath, '/sync'])
   expect(requests[1].query.to).toBe('S0')
