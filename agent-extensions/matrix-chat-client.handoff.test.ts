@@ -241,12 +241,13 @@ it.each(['workspace', 'credential', 'abort'] as const)(
   'abandons the fresh response when %s changes during the request', async change => {
     localStorage.setItem(tokenKey(config), config.accessToken)
     const controller = new AbortController()
-    await expect(fresh(() => {
+    const attempt = fresh(() => {
       if (change === 'workspace') sender.repo.setActiveWorkspaceId('another-workspace')
       if (change === 'credential') localStorage.setItem(tokenKey(config), 'replacement')
       if (change === 'abort') controller.abort()
       return {next_batch: 'S9'}
-    }, controller.signal)).rejects.toThrow()
+    }, controller.signal)
+    await expect(attempt).rejects.toThrow(change === 'abort' ? /abort/i : /destination or device credential changed/i)
     expect(await checkpoint(sender)).toBeUndefined()
   },
 )
@@ -338,7 +339,11 @@ it('refuses an empty sync position instead of polling from the beginning', async
   expect(await checkpoint(receiver)).toBe('S0')
 })
 
-it('checks the bound credential before a fresh request', async () => {
+it.each(['credential', 'workspace'])('checks the bound %s before a fresh request', async change => {
+  if (change === 'workspace') {
+    localStorage.setItem(tokenKey(config), config.accessToken)
+    sender.repo.setActiveWorkspaceId('another-workspace')
+  }
   const initialSync = vi.fn(() => ({next_batch: 'S0'}))
   await expect(fresh(initialSync)).rejects.toThrow(/credential/i)
   expect(initialSync).not.toHaveBeenCalled()
@@ -506,4 +511,48 @@ it('refuses a server echo whose block id matches but whose workspace differs', a
     .toEqual({workspace_id: 'elsewhere'})
   await expect(adoptPosition()).rejects.toThrow(/uploads|server cop/i)
   expect(await checkpoint(sender)).toBeUndefined()
+})
+
+it('ignores room metadata on other record types and messages in another workspace', async () => {
+  const otherWorkspace = {...config, workspaceId: 'another-workspace'}
+  await sender.repo.tx(tx => tx.create({
+    workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'another record',
+    properties: {types: ['another-type'], 'matrix-event:room': config.roomId},
+  }), {scope: ChangeScope.BlockDefault})
+  sender.repo.setActiveWorkspaceId(otherWorkspace.workspaceId)
+  await appendMatrixMessage(sender.repo, otherWorkspace, event('elsewhere'), {}, () => {})
+  sender.repo.setActiveWorkspaceId(config.workspaceId)
+  await upload(sender)
+  await adoptPosition()
+  expect(await checkpoint(sender)).toBe('S1')
+})
+
+it('excludes foreign-workspace children at the boundary of a message tree', async () => {
+  await appendMatrixMessage(sender.repo, config, event('- root\n  - moved'), {}, () => {})
+  await upload(sender)
+  const leaf = await omitDescendantEcho('moved')
+  await sender.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?', ['elsewhere', leaf])
+  await adoptPosition()
+  expect(await checkpoint(sender)).toBe('S1')
+})
+
+it('holds the processed message identity when a local edit removes its Matrix metadata', async () => {
+  await seed()
+  const stream = ['edited']
+  await poll(sender, [
+    since => response(since, stream),
+    async since => {
+      const id = messageNodeId(config.workspaceId, '$edited', [0])
+      await sender.db.execute("UPDATE blocks SET properties_json = '{}' WHERE id = ?", [id])
+      await quarantineSenderUploads()
+      await sender.db.execute('DELETE FROM ps_crud_rejected')
+      expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [id])).toBeNull()
+      return response(since, stream)
+    },
+  ])
+  expect(await checkpoint(sender)).toBe('S0')
+  await upload(sender)
+  await download(receiver)
+  expect(await poll(receiver, [since => response(since, stream)])).toEqual(['S0', 'S1'])
+  expect(await messages(receiver)).toEqual(stream)
 })

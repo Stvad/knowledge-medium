@@ -226,6 +226,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   handleStore: 'shared object (facade never mints into it — `runQuery` override)',
   instanceId: 'data field',
   invalidationRules: 'data field',
+  localOnly: 'immutable replica configuration shared with the real repo',
   isReadOnly: 'data field (writes go through the delegated setReadOnly)',
   mutators: 'data field',
   newId: 'pure generator function (no this)',

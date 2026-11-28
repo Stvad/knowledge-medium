@@ -459,33 +459,43 @@ const checkpointPosition = (row: BlockData | null, config: MatrixDestination): s
 // Dismissing a rejected upload removes its queue entry but leaves the local
 // message intact. Only server echoes can establish that its tree reached peers.
 // The staging table keeps block identities visible in encrypted workspaces too.
-const hasUnconfirmedMessages = (tx: Tx, config: MatrixDestination) => tx.readDb.getOptional(
-  `WITH RECURSIVE room_tree(id) AS (
-     SELECT t.block_id FROM block_types t JOIN blocks b ON b.id = t.block_id
-       WHERE t.type = 'matrix-message' AND t.workspace_id = ?
-         AND COALESCE(json_extract(b.properties_json, '$."matrix-event:room"'),
-                      json_extract(b.properties_json, '$."matrix:roomId"')) = ?
-     UNION
-     SELECT b.id FROM blocks b JOIN room_tree p ON b.parent_id = p.id
-       WHERE b.workspace_id = ? AND b.deleted = 0
-   )
-   SELECT 1 FROM room_tree t WHERE NOT EXISTS (
-     SELECT 1 FROM blocks_synced s WHERE s.id = t.id AND s.workspace_id = ?
-   ) LIMIT 1`,
-  [config.workspaceId, config.roomId, config.workspaceId, config.workspaceId],
-)
+const hasUnconfirmedMessages = (tx: Tx, config: MatrixDestination, processed?: ReadonlySet<string>) => {
+  // On upgrade there is no record of the preceding batch. Subsequent polls
+  // have the actual root IDs, including legacy IDs and roots the user retagged.
+  const roots = processed
+    ? {sql: 'SELECT value FROM json_each(?)', params: [JSON.stringify([...processed])]}
+    : {
+        sql: `SELECT t.block_id FROM block_types t JOIN blocks b ON b.id = t.block_id
+              WHERE t.type = 'matrix-message' AND t.workspace_id = ?
+                AND COALESCE(json_extract(b.properties_json, '$."matrix-event:room"'),
+                             json_extract(b.properties_json, '$."matrix:roomId"')) = ?`,
+        params: [config.workspaceId, config.roomId],
+      }
+  return tx.readDb.getOptional(
+    `WITH RECURSIVE room_tree(id) AS (
+       ${roots.sql}
+       UNION
+       SELECT b.id FROM blocks b JOIN room_tree p ON b.parent_id = p.id
+         WHERE b.workspace_id = ? AND b.deleted = 0
+     )
+     SELECT 1 FROM room_tree t WHERE NOT EXISTS (
+       SELECT 1 FROM blocks_synced s WHERE s.id = t.id AND s.workspace_id = ?
+     ) LIMIT 1`,
+    [...roots.params, config.workspaceId, config.workspaceId],
+  )
+}
 
 const writeCheckpoint = (
-  repo: Repo, config: MatrixConfig, position: string, operation: 'fresh' | 'adopt' | 'advance', verify: () => void,
+  repo: Repo, config: MatrixConfig, position: string, operation: 'fresh' | 'adopt' | {processed: ReadonlySet<string>}, verify: () => void,
 ): Promise<boolean> => repo.tx(async (tx: Tx) => {
   // A refused message transaction can leave the upload queue before later
   // transactions upload. Keep the shared position behind both queues.
   if (operation !== 'fresh') {
     if (await tx.readDb.getOptional('SELECT 1 FROM ps_crud UNION ALL SELECT 1 FROM ps_crud_rejected LIMIT 1')) return false
-    if (await hasUnconfirmedMessages(tx, config)) return false
+    if (await hasUnconfirmedMessages(tx, config, operation === 'adopt' ? undefined : operation.processed)) return false
   }
   const id = checkpointId(config)
-  if (operation === 'advance') {
+  if (typeof operation === 'object') {
     checkpointPosition(await tx.get(id), config)
     verify()
     await tx.setProperty(id, checkpointProp, position)
@@ -954,14 +964,14 @@ const ensureMatrixTagBlock = async (
 // Keep property matches type-scoped because only a cursor predating the key rename can replay an untyped legacy tombstone.
 const handledEvent = (
   db: Pick<Tx['readDb'], 'getOptional'>, workspaceId: string, eventId: string,
-) => db.getOptional(
-  `SELECT 1 FROM blocks WHERE id = ? AND workspace_id = ?
+) => db.getOptional<{id: string}>(
+  `SELECT id FROM blocks WHERE id = ? AND workspace_id = ?
    UNION ALL
-   SELECT 1 FROM (
-     SELECT b.properties_json FROM block_types t JOIN blocks b ON b.id = t.block_id
+   SELECT id FROM (
+     SELECT b.id, b.properties_json FROM block_types t JOIN blocks b ON b.id = t.block_id
      WHERE t.workspace_id = ? AND t.type = 'matrix-message'
      UNION ALL
-     SELECT properties_json FROM blocks WHERE workspace_id = ? AND deleted = 1
+     SELECT id, properties_json FROM blocks WHERE workspace_id = ? AND deleted = 1
        AND EXISTS (SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'matrix-message')
    ) WHERE ? IN (json_extract(properties_json, '$."matrix-event:id"'), json_extract(properties_json, '$."matrix:eventId"'))
    LIMIT 1`,
@@ -970,12 +980,13 @@ const handledEvent = (
 
 export const appendMatrixMessage = async (
   repo: any, config: MatrixConfig, event: any, matrixClient: any, verifyWorkspace: () => void,
-): Promise<void> => {
+): Promise<string | undefined> => {
   const eventId = typeof event.event_id === 'string' ? event.event_id : null
   if (!eventId) return
   const {workspaceId} = config
   verifyWorkspace()
-  if (await handledEvent(repo.db, workspaceId, eventId)) return
+  const handled = await handledEvent(repo.db, workspaceId, eventId)
+  if (handled) return handled.id
   const iso = todayIso(new Date(eventTimestamp(event)))
 
   // Promotion INVENTS property names from message text (`key:: value`), so no
@@ -990,8 +1001,9 @@ export const appendMatrixMessage = async (
   const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
   for (const note of promotionNotes) console.warn('[matrix] promoted property:', note)
 
-  await repo.tx(async (tx: Tx) => {
-    if (await handledEvent(tx.readDb, workspaceId, eventId)) return
+  return repo.tx(async (tx: Tx) => {
+    const arrived = await handledEvent(tx.readDb, workspaceId, eventId)
+    if (arrived) return arrived.id
     verifyWorkspace()
     const dailyId = await getOrCreateDailyNoteInTx(tx, repo.snapshotTypeRegistries(), workspaceId, iso)
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso, verifyWorkspace)
@@ -1015,6 +1027,7 @@ export const appendMatrixMessage = async (
         [eventTimestampProp.name]: eventTimestamp(event),
       },
     )
+    return messageNodeId(workspaceId, eventId, [0])
   }, {scope: ChangeScope.BlockDefault, description: 'matrix message ingest'})
 }
 
@@ -1136,7 +1149,7 @@ const isRetryableError = (error: unknown): boolean => {
 
 export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
   let nextBatch = repo.localOnly ? loadNextBatch(config) : null
-  let checkpointDue = false
+  const processed = new Set<string>()
   // `toasted` gates the one-per-streak toast (loud, actionable errors only);
   // `degraded` tracks whether a warning is currently shown so recovery clears it.
   let toasted = false
@@ -1164,14 +1177,14 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
       for (const batch of [gap ?? [], timeline?.events ?? []]) {
         for (const event of batch) {
           if (event?.type === 'm.room.message') {
-            await appendMatrixMessage(repo, config, event, matrixClient, verifyWorkspace)
-            checkpointDue = true
+            const root = await appendMatrixMessage(repo, config, event, matrixClient, verifyWorkspace)
+            if (root && !repo.localOnly) processed.add(root)
           }
         }
       }
 
-      if (checkpointDue && !repo.localOnly) {
-        checkpointDue = !await writeCheckpoint(repo, config, newBatch, 'advance', verifyWorkspace)
+      if (processed.size && await writeCheckpoint(repo, config, newBatch, {processed}, verifyWorkspace)) {
+        processed.clear()
       }
       verifyWorkspace()
       saveNextBatch(config, newBatch)
