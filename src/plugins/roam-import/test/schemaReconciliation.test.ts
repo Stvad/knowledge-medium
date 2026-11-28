@@ -372,16 +372,16 @@ describe('automatic promotion identity', () => {
     expect(keyRead).not.toHaveBeenCalled()
   })
 
-  it('refuses inside the write transaction if the device falls behind after preflight', async () => {
+  it.each(['none', 'e2ee'] as const)('refuses inside the write transaction when the late view is stale (%s)', async mode => {
     const {repo} = env
-    const ws = 'newly-sealed-workspace'
+    const ws = `late-gap-${mode}`
     repo.setActiveWorkspaceId(ws)
     await getOrCreatePropertiesPage(repo, ws)
     expect(await repo.workspaceViewGap(ws)).toBeNull()
     const write = repo.tx.bind(repo)
     vi.spyOn(repo, 'tx').mockImplementationOnce(async (fn, opts) => {
       // Both the mode and the staged rows can change while the writer waits for the lock.
-      await seedWorkspaceRow(env.h.db, ws, repo.user.id, 'e2ee')
+      await seedWorkspaceRow(env.h.db, ws, repo.user.id, mode)
       await env.h.db.execute("INSERT INTO blocks_synced_changes (id, op) VALUES ('late-definition', 'upsert')")
       return write(fn, opts)
     })
