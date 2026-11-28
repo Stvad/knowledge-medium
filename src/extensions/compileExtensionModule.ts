@@ -48,8 +48,10 @@ export const createCompileCache = (): CompileCache => ({
 const defaultCache = createCompileCache()
 
 export type CompileImpl = (content: string) => Promise<ExtensionModule>
+export type BeforeExtensionEvaluation = () => Promise<void>
+
 export interface ExtensionCompilePlatform {
-  instantiate: (record: CompiledRecord, blockId: string) => Promise<ExtensionModule>
+  instantiate: (record: CompiledRecord, blockId: string, beforeEvaluate?: BeforeExtensionEvaluation) => Promise<ExtensionModule>
   allowUnpinnedLive: boolean
 }
 
@@ -297,10 +299,12 @@ function prepareRecord(blockId: string, source: string, frozen?: CompiledRecord[
     compileImplOverride ? async content => ({compiled: content, pinnedImports: new Map()}) : undefined)
 }
 
-async function instantiateRecord(blockId: string, record: CompiledRecord): Promise<CompileResult> {
+async function instantiateRecord(
+  blockId: string, record: CompiledRecord, beforeEvaluate?: BeforeExtensionEvaluation,
+): Promise<CompileResult> {
   if (record.importsUnpinned && !platform.allowUnpinnedLive) throw new Error('Unpinned HTTPS import')
   const module = compileImplOverride ? await compileImplOverride(record.approvedSource)
-    : await platform.instantiate(record, blockId)
+    : await platform.instantiate(record, blockId, beforeEvaluate)
   return {module, contentHash: record.sourceHash}
 }
 
@@ -324,6 +328,7 @@ export async function loadApprovedExtension(
   cache: CompileCache = defaultCache,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
   reportUnpinned?: (record: CompiledRecord) => void,
+  beforeEvaluate?: BeforeExtensionEvaluation,
 ): Promise<CompileResult> {
   let record = approval
   if (approval.compilerVersion !== COMPILER_VERSION && !compileImplOverride) {
@@ -331,7 +336,7 @@ export async function loadApprovedExtension(
   }
   // Keep the pin action available even if the live CDN fails during module linking.
   if (record.importsUnpinned) reportUnpinned?.(record)
-  return resolveCachedModule(cache, record.sourceHash, blockId, () => instantiateRecord(blockId, record))
+  return resolveCachedModule(cache, record.sourceHash, blockId, () => instantiateRecord(blockId, record, beforeEvaluate))
 }
 
 /**

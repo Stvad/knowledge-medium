@@ -25,7 +25,7 @@ Queried read-only on the owner's tab replica (all its workspaces), 2026-11-27 **
 
 So the whole case is two background effects. This design builds for them and for the general loading path they need. It does not build for a population that does not exist.
 
-## 3. What already exists
+## 3. Before slices 0–2
 
 - **The loader.** `dynamicExtensionsExtension` (`src/extensions/dynamicExtensions.ts`) applies two gates. Gate 1 is the synced enable intent (an overrides map keyed by block id), checked before compiling. Gate 2 is a device-local approval (#67) that pins the approved source, its hash and its compiled output. The loader validates the export, prefixes provenance (`block:<id>`), binds seeds, and reports a pin that differs from the live source as `update-available`. The approval store is injectable through `persistent`, and an in-memory implementation exists (`InMemoryCompiledModuleCache`) **[read]**.
 - **The runtime around it is React-bound.** `AppRuntimeProvider.tsx` resolves with the boundary-aware `resolveAppRuntime`, batches the error and approval stores, installs the runtime on the Repo, and drives `EffectReconciler` (`src/extensions/liveRuntime.ts`, itself React-free) **[read]**.
@@ -153,7 +153,7 @@ To allowlist an extension or take a new version, the operator:
 
 **Time zone.** The host chooses daily notes by local date (`formatIsoDate` **[read]**), so the service unit sets `TZ` to the owner's zone; the launcher passes the environment through. `health` reports the effective zone. This applies to the host's existing `daily-note` verb too (#1901).
 
-**Health.** `health.extensions` is one more contributor to the host's existing `hostHealth` composition, beside the upload hold and media. The command response includes `host.extensions`, with one entry per configured block and the eligible effect IDs declared by that block. The state is `running`, `update-available` or `refused`. A refusal has a fixed reason, including `missing-block`, `not-writable`, `unpinned-import`, `forbidden-import` and `load-error`. The report remains available with the gate closed. Extension diagnostics and raw load exceptions are excluded from this surface.
+**Health.** `health.extensions` is one more contributor to the host's existing `hostHealth` composition, beside the upload hold and media. The command response includes `host.extensions`, with one entry per configured block and the eligible effect IDs declared by that block. The state is `running`, `update-available` or `refused`. A refusal has a fixed reason, including `missing-block`, `not-writable`, `starting`, `unpinned-import`, `forbidden-import` and `load-error`. The report remains available with the gate closed. Extension diagnostics and raw load exceptions are excluded from this surface.
 
 ## 7. What the host honours
 
@@ -185,7 +185,7 @@ Everything else is the same code on both: the runtime controller and resolver, t
 |---|---|---|
 | Who grants an approval: a click in the tab, the config on the host | Different trust anchors ([§4](#4-trust)) | One record shape and store interface |
 | When a grant takes effect: at once in a tab, at restart on the host | The host has no UI to approve in | Config is read at boot |
-| Instantiation: blob URLs, or `vm` modules with a linker | A browser and Node load modules differently | Same compiled text, same import rule, native ESM linking on both. The host links `@/` modules as snapshots (`SyntheticModule`), so a later reassignment of a `let` export is not seen; kernel modules export functions and constants |
+| Instantiation: blob URLs, or `vm` modules with a linker | A browser and Node load modules differently | Same compiled text, same import rule, native ESM linking on both. The host links `@/` modules as snapshots (`SyntheticModule`), so a later reassignment of a `let` export is not seen; kernel modules export functions and constants. The React server and static browser facades use React's edge builds under Node, which expose the same API without keeping the daemon alive through a MessagePort |
 | Modules the host refuses beyond the shared rule | The compile, approval and command modules are an escape from the host's verb table | Enforced in the host's linker |
 | Overrides: the user's in a tab, the allowlist's on the host | The host reads no per-user intent | A nested toggle on the host takes its default |
 | Which effects start: all in a tab, allowlisted and writable on the host | The host runs unattended with an OS-level grant | The same controller, given a filter |
@@ -255,8 +255,7 @@ Deferred:
 
 | Unverified | Settled in |
 |---|---|
-| How the contributors processor attributes effect writes, which go through `repo.tx` directly rather than `executeCommand`'s contributor binding | slice 2 |
-| The `vm` instantiator with the full host running and real extensions, beyond the probe | slice 2 |
-| Whether `NODE_ENV=production` takes effect under vite-node for the host's React | slice 2 |
+| Contributor metadata when an effect edits a previously attributed row. A fresh fixture row uses the host account’s authorship fields and has no explicit creator-contributor value **[measured]**. | first attributed effect update |
+| The `vm` instantiator with installed production extensions. The launcher test exercises the full host with a fixture **[measured]**. | slice 3 |
 | Marginal memory of loaded extensions on the running host, the pinned SDK included, and whether that bundle runs under Node | slice 3, on the target |
 | Whether `target=es2024` keeps giving one self-contained file across esm.sh versions and packages. The freezer checks rather than assumes, so a change is a refusal, never a wrong load | slice 0, then on every pin |

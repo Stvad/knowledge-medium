@@ -6,21 +6,19 @@ import {appEffectsFacet, type AppEffect} from '@/extensions/core.js'
 import {isExtensionContribution} from '@/extensions/dynamicExtensions.js'
 import {ExtensionImportError} from '@/extensions/extensionImportPolicy.js'
 import {normalizeExtensionSource} from '@/extensions/normalizeExtensionSource.js'
-import type {AppExtension, FacetContribution, FacetRuntime} from '@/facets/facet.js'
+import {resolveFacetRuntimeSync, type AppExtension, type FacetContribution, type FacetRuntime} from '@/facets/facet.js'
 import {declaresExtensionType} from '@/data/blockTypes.js'
 import type {BlockData} from '@/types'
 import type {HeadlessConfig} from './config'
 import {prepareExtensionApprovals, type ApprovalRefusal} from './extensionApprovals'
 import {instantiateHostExtension} from './extensionVm'
 
-type Refusal = ApprovalRefusal | 'not-writable' | 'missing-block' | 'load-error'
+type Refusal = ApprovalRefusal | 'not-writable' | 'starting' | 'missing-block' | 'load-error'
 type ExtensionState = {state: 'running' | 'update-available'} | {state: 'refused', reason: Refusal}
-
-const batch = {beginBatch() {}, commitBatch() {}, abandonBatch() {}}
 
 export async function prepareHostExtensions(
   config: HeadlessConfig, context: AppRuntimeContext, baseExtensions: readonly AppExtension[],
-  baseRuntime: FacetRuntime, onRuntime: (runtime: FacetRuntime) => void,
+  onRuntime: (runtime: FacetRuntime) => void,
   signal: AbortSignal,
 ) {
   const blocks = config.extensions?.map(({block}) => block) ?? []
@@ -38,14 +36,9 @@ export async function prepareHostExtensions(
   for (const [block, reason] of refusals) console.warn('Headless extension refused', block, reason)
   const restorePlatform = setExtensionCompilePlatform({
     allowUnpinnedLive: false,
-    instantiate(record, block) {
-      const current = admission
-      const check = () => {
-        signal.throwIfAborted()
-        if (!current) throw new Error('Extension evaluation requires writable admission')
-        current.signal.throwIfAborted()
-      }
-      return instantiateHostExtension(block, record, manifest, specifier => import(/* @vite-ignore */ specifier), check)
+    instantiate(record, block, beforeEvaluate) {
+      if (!beforeEvaluate) throw new Error('Extension evaluation requires writable admission')
+      return instantiateHostExtension(block, record, manifest, specifier => import(/* @vite-ignore */ specifier), beforeEvaluate)
     },
   })
 
@@ -76,8 +69,9 @@ export async function prepareHostExtensions(
     effectIds.clear()
     if (mounted) {
       mounted = false
-      onRuntime(baseRuntime)
-      context.repo.setFacetRuntime(baseRuntime)
+      const runtime = resolveFacetRuntimeSync(baseExtensions, context)
+      onRuntime(runtime)
+      context.repo.setFacetRuntime(runtime)
     }
   }
 
@@ -90,32 +84,35 @@ export async function prepareHostExtensions(
       if (signal.aborted) return
       const attempt = new AbortController()
       admission = attempt
+      const evaluationSignal = AbortSignal.any([signal, attempt.signal])
+      const beforeEvaluate = async () => {
+        evaluationSignal.throwIfAborted()
+        await refreshAdmission()
+        evaluationSignal.throwIfAborted()
+      }
       const loaded = new Set<string>()
       const failed = new Map<string, Refusal>()
       void controller.resolve({
         baseExtensions, context, overrides, persistent, cache: createCompileCache(),
-        signal: attempt.signal, evaluationSignal: attempt.signal,
+        signal: evaluationSignal, evaluationSignal, beforeEvaluate,
         onRuntime(runtime) {
           mounted = true
           onRuntime(runtime)
         },
-        errorStore: {...batch, reportError(block, error) {
-          failed.set(block, error instanceof ExtensionImportError ? error.reason : 'load-error')
-        }},
-        approvalStore: {...batch, report() {}},
         logLoadError(block, error) {
-          console.warn('Headless extension refused', block, error instanceof ExtensionImportError ? error.reason : 'load-error')
+          const reason = error instanceof ExtensionImportError ? error.reason : 'load-error'
+          failed.set(block, reason)
+          console.warn('Headless extension refused', block, reason)
         },
         onBlockLoaded: block => loaded.add(block),
         async beforePublish() {
-          if (!attempt.signal.aborted) await refreshAdmission()
-          if (signal.aborted) attempt.abort()
+          if (!evaluationSignal.aborted) await refreshAdmission()
         },
       }).then(async runtime => {
-        if (!runtime || attempt.signal.aborted || signal.aborted) return
+        if (!runtime || evaluationSignal.aborted) return
         for (const block of blocks) {
           const approval = await persistent.read(block)
-          if (attempt.signal.aborted || signal.aborted) return
+          if (evaluationSignal.aborted) return
           const refusal = refusals.get(block) ?? failed.get(block)
           if (refusal) states.set(block, {state: 'refused', reason: refusal})
           else if (!approval || !loaded.has(block)) states.set(block, {state: 'refused', reason: 'missing-block'})
@@ -137,7 +134,7 @@ export async function prepareHostExtensions(
     health() {
       return blocks.map(block => ({
         block, effectIds: effectIds.get(block) ?? [],
-        ...(states.get(block) ?? {state: 'refused', reason: refusals.get(block) ?? 'not-writable'}),
+        ...(states.get(block) ?? {state: 'refused', reason: refusals.get(block) ?? (admission ? 'starting' : 'not-writable')}),
       }))
     },
     stop() {

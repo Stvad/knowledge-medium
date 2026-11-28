@@ -114,7 +114,7 @@ export async function serveDatabase(
     const runtime = new LiveRuntimeHandle(baseRuntime)
     active.setFacetRuntime(baseRuntime)
     extensions = await prepareHostExtensions(config, runtimeContext, staticDataExtensions,
-      baseRuntime, next => runtime.setCurrent(next), signal)
+      next => runtime.setCurrent(next), signal)
     signal.throwIfAborted()
     const commit = resolveAppVersion().sha
     const context = createAgentRuntimeContext({

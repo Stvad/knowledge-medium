@@ -202,10 +202,10 @@ it('preserves watcher visibility across an ordinary workspace update with blocks
 })
 
 it.each([
-  ['download-only host', false, 'editor', false],
-  ['viewer', true, 'viewer', false],
-  ['upload hold', true, 'editor', true],
-] as const)('withholds writable admission for a %s even when reads open', async (_, writable, role, held) => {
+  ['a download-only host', false, 'editor', false],
+  ['a viewer', true, 'viewer', false],
+  ['an upload hold', true, 'editor', true],
+] as const)('withholds writable admission for %s even when reads open', async (_, writable, role, held) => {
   const {db} = fixture
   await syncServer(db)([serverWorkspace(workspace), {...member, data: {...member.data, role}}])
   const {repo} = createTestRepo({db, user, isReadOnly: true})

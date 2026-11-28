@@ -3,6 +3,7 @@ import {
   hashExtensionSource,
   loadApprovedExtension,
   readApproval,
+  type BeforeExtensionEvaluation,
   type CompileCache,
   type ExtensionModule,
 } from '@/extensions/compileExtensionModule.js'
@@ -77,6 +78,7 @@ export interface DynamicExtensionsOptions {
   errorReporter?: ExtensionLoadErrorReporter
   logLoadError?: ExtensionLoadErrorReporter
   evaluationSignal?: AbortSignal
+  beforeEvaluate?: BeforeExtensionEvaluation
   onBlockLoaded?: (blockId: string) => void
   /** Reports the device-local trust status of enabled blocks that aren't
    *  running as-authored (needs-approval / update-available) so the
@@ -150,14 +152,20 @@ export const dynamicExtensionsExtension = (
     workspaceId,
     safeMode,
     overrides,
-    errorReporter, logLoadError = logBlockLoadError, evaluationSignal, onBlockLoaded,
+    errorReporter,
+    logLoadError = logBlockLoadError,
+    evaluationSignal,
+    beforeEvaluate,
+    onBlockLoaded,
     approvalStatusReporter,
     cache,
     persistent,
     verifyLiveSource,
   } = options
   const effectiveOverrides: Overrides = overrides ?? new Map()
-  const reportError = (blockId: string, error: Error) => {
+  const reportError = (blockId: string, thrown: unknown) => {
+    if (evaluationSignal?.aborted) return
+    const error = asError(thrown)
     errorReporter?.(blockId, error)
     logLoadError(blockId, error)
   }
@@ -183,23 +191,25 @@ export const dynamicExtensionsExtension = (
       })
       return null
     }
-    const liveHash = await hashExtensionSource(block.content)
     let hasStaticUnpinnedImports: boolean | undefined
     try {
       evaluationSignal?.throwIfAborted()
       const loaded = await loadApprovedExtension(block.id, approval, cache, persistent, record => {
         hasStaticUnpinnedImports = record.hasStaticUnpinnedImports ?? false
-      })
+      }, beforeEvaluate)
       return loaded.module
     } finally {
-      const revision = {name: extensionDisplayName(block), liveSource: block.content, liveHash}
-      if (liveHash !== approval.sourceHash) {
-        approvalStatusReporter?.(block.id, {
-          ...revision, kind: 'update-available', approvedHash: approval.sourceHash,
-          importsUnpinned: hasStaticUnpinnedImports !== undefined,
-        })
-      } else if (hasStaticUnpinnedImports !== undefined) {
-        approvalStatusReporter?.(block.id, {...revision, kind: 'imports-unpinned', hasStaticUnpinnedImports})
+      if (approvalStatusReporter) {
+        const liveHash = await hashExtensionSource(block.content)
+        const revision = {name: extensionDisplayName(block), liveSource: block.content, liveHash}
+        if (liveHash !== approval.sourceHash) {
+          approvalStatusReporter(block.id, {
+            ...revision, kind: 'update-available', approvedHash: approval.sourceHash,
+            importsUnpinned: hasStaticUnpinnedImports !== undefined,
+          })
+        } else if (hasStaticUnpinnedImports !== undefined) {
+          approvalStatusReporter(block.id, {...revision, kind: 'imports-unpinned', hasStaticUnpinnedImports})
+        }
       }
     }
   }
@@ -253,11 +263,11 @@ export const dynamicExtensionsExtension = (
       }
       const exported = module.default as AppExtension
       const handle = userExtensionToggle(block)
-      const validated = validateAndPrefix(handle.of(exported), block.id, reportError, evaluationSignal)
+      const validated = validateAndPrefix(handle.of(exported), block.id, reportError, beforeEvaluate)
       onBlockLoaded?.(block.id)
       collected.push(validated ?? shell.of([]))
     } catch (error) {
-      if (!evaluationSignal?.aborted) reportError(block.id, asError(error))
+      reportError(block.id, error)
       collected.push(shell.of([]))
     }
   }
@@ -287,15 +297,15 @@ export const dynamicExtensionsExtension = (
 const validateAndPrefix = (
   extension: AppExtension,
   blockId: string,
-  errorReporter: ExtensionLoadErrorReporter,
-  evaluationSignal?: AbortSignal,
+  errorReporter: (blockId: string, error: unknown) => void,
+  beforeEvaluate?: BeforeExtensionEvaluation,
 ): AppExtension => {
   if (extension === null || extension === undefined || extension === false) {
     return null
   }
 
   if (Array.isArray(extension)) {
-    const mapped = extension.map((child) => validateAndPrefix(child, blockId, errorReporter, evaluationSignal))
+    const mapped = extension.map((child) => validateAndPrefix(child, blockId, errorReporter, beforeEvaluate))
     const boundary = getBoundary(extension)
     if (boundary) attachBoundary(mapped, boundary)
     return mapped
@@ -312,21 +322,21 @@ const validateAndPrefix = (
     // with no attribution. Catch + report here so the deferred path mirrors the
     // synchronous one, recovering to `null` (pruned, per the nullish grammar).
     return async (context) => {
-      if (evaluationSignal?.aborted) return null
       try {
+        if (beforeEvaluate) await beforeEvaluate()
         const inner = await (extension as (
           ctx: typeof context,
         ) => AppExtension | Promise<AppExtension>)(context)
-        return validateAndPrefix(inner, blockId, errorReporter, evaluationSignal)
+        return validateAndPrefix(inner, blockId, errorReporter, beforeEvaluate)
       } catch (error) {
-        if (!evaluationSignal?.aborted) errorReporter(blockId, asError(error))
+        errorReporter(blockId, error)
         return null
       }
     }
   }
 
   if (isFacetContribution(extension)) {
-    return prefixContributionSource(extension, blockId, errorReporter, evaluationSignal)
+    return prefixContributionSource(extension, blockId, errorReporter, beforeEvaluate)
   }
 
   throw new Error(
@@ -356,8 +366,8 @@ export const isExtensionContribution = (source: unknown, blockId: string): boole
 const prefixContributionSource = (
   contribution: FacetContribution<unknown>,
   blockId: string,
-  errorReporter: ExtensionLoadErrorReporter,
-  evaluationSignal?: AbortSignal,
+  errorReporter: (blockId: string, error: unknown) => void,
+  beforeEvaluate?: BeforeExtensionEvaluation,
 ): FacetContribution<unknown> => {
   const blockSource = extensionContributionSource(blockId)
   const composed = contribution.source
@@ -376,12 +386,18 @@ const prefixContributionSource = (
     source: composed,
   }
   if (contribution.enables !== undefined) {
-    result.enables = validateAndPrefix(contribution.enables, blockId, errorReporter, evaluationSignal)
+    result.enables = validateAndPrefix(contribution.enables, blockId, errorReporter, beforeEvaluate)
   }
   return result
 }
 
-const asError = (error: unknown): Error => error instanceof Error ? error : new Error(String(error))
+function asError(error: unknown): Error {
+  try {
+    return error instanceof Error ? error : new Error(String(error))
+  } catch {
+    return new Error('Extension threw a value without an error message')
+  }
+}
 
 const logBlockLoadError: ExtensionLoadErrorReporter = (blockId, error) => {
   console.error(`Failed to load extension block ${blockId}`, error)

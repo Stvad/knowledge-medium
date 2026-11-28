@@ -1,4 +1,5 @@
 import {resolveExtensionImport, vendoredImportSpecifier, ExtensionImportError, type ExtensionImportManifest} from '@/extensions/extensionImportPolicy.js'
+import {extensionSourceFilename} from '@/extensions/transpileExtension.js'
 import type {CompiledRecord} from '@/extensions/compiledModuleCache.js'
 import {SourceTextModule, SyntheticModule, type Module} from 'node:vm'
 
@@ -22,7 +23,7 @@ export async function instantiateHostExtension(
   record: CompiledRecord,
   manifest: ExtensionImportManifest,
   importNamespace: ImportNamespace,
-  checkAdmission: () => void,
+  checkAdmission: () => Promise<void>,
 ): Promise<Record<string, unknown>> {
   const modules = new Map<string, Promise<Module>>()
   const dynamicEvaluations = new Map<Module, Promise<unknown>>()
@@ -58,7 +59,7 @@ export async function instantiateHostExtension(
   }
 
   const entry = new SourceTextModule(record.compiled, {
-    identifier: `km-extension://${blockId.replace(/[^A-Za-z0-9._-]/g, '_')}.tsx`,
+    identifier: `km-extension://${extensionSourceFilename(blockId)}`,
     initializeImportMeta(meta, module) { meta.url = module.identifier },
     async importModuleDynamically(specifier) {
       const dependency = await link(specifier)
@@ -67,7 +68,7 @@ export async function instantiateHostExtension(
         if (!evaluation) {
           evaluation = (async () => {
             if (dependency.status === 'unlinked') await dependency.link(link)
-            checkAdmission()
+            await checkAdmission()
             await dependency.evaluate()
           })()
           dynamicEvaluations.set(dependency, evaluation)
@@ -78,7 +79,7 @@ export async function instantiateHostExtension(
     },
   })
   await entry.link(link)
-  checkAdmission()
+  await checkAdmission()
   await entry.evaluate()
   return entry.namespace as Record<string, unknown>
 }
