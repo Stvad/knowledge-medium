@@ -27,3 +27,11 @@ await assert.rejects(
   }),
   /Writable admission ended during linking/,
 )
+
+admitted = true
+const lazy = await evaluate("export default () => import('@/extensions/core.js')", check)
+const invoke = lazy.default as () => Promise<{value: number}>
+admitted = false
+await assert.rejects(invoke(), /Writable admission ended during linking/)
+const admittedLazy = await evaluate("export default () => import('@/extensions/core.js')", async () => {})
+assert.equal((await (admittedLazy.default as typeof invoke)()).value, 42)

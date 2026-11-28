@@ -361,7 +361,7 @@ Confirm the queue drains, checkpoint application resumes, and the peer sees the 
 ### Granting an extension
 
 1. Review the extension source at a trusted commit. The code can read the workspace key and session and act as the daemon’s OS user. Review code fetching or evaluation, static-plugin re-exports, browser globals and each HTTPS import’s URL and SHA-256 pin.
-2. Install the reviewed revision as an extension block in the workspace. Copy the file from the reviewed commit to a location writable only by the operator and readable by the daemon. Use that file for the grant. The block’s synced contents are used for drift detection.
+2. Install the reviewed revision as an extension block in the workspace. Copy the file from the reviewed commit to a location writable only by the operator and readable by the daemon. Use that file for the grant. The daemon’s effective user must own both the config and the reviewed file. The daemon refuses either file if its group or others can write to it. The block’s synced contents are used for drift detection.
 3. Set `"writable": true` on a host with an editor or owner membership. Add the block ID and reviewed file to the config. Relative paths resolve beside that config.
 
    ```json

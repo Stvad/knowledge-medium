@@ -6,7 +6,7 @@ import {BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams} from '@/data/blockSchem
 import {typesProp} from '@/data/properties'
 import {makeBlockData} from '@/data/test/factories'
 import {fixtureModule, fixtureSource, fixtureUrl} from './test/extensionFixture'
-import {mkdtemp, readdir, rm, writeFile} from 'node:fs/promises'
+import {chmod, mkdtemp, readdir, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {promisify} from 'node:util'
@@ -95,6 +95,7 @@ it('runs only reviewed bytes, reports normalized synced drift and refuses invali
       ['fixture-missing-export', `import {notAnExport} from '@/extensions/core.js'; console.info(notAnExport)`],
       ['fixture-throws', `throw new Error('private evaluation error'); export default null`],
       ['fixture-absent', unsafeSource],
+      ['fixture-permissions', unsafeSource],
     ])
     await Promise.all([
       ...[...grants].map(([block, source]) => writeFile(join(dir, `${block}.tsx`), source)),
@@ -105,10 +106,11 @@ it('runs only reviewed bytes, reports normalized synced drift and refuses invali
       writeFile(tokenFile, JSON.stringify({profiles: {test: {token}}})),
       writeFile(initial, JSON.stringify([
         ...[...grants].filter(([block]) => block !== 'fixture-absent').map(([block, source]) =>
-          stageExtension(block, source + '\n  ', 1)),
+          stageExtension(block, block === 'fixture-reviewed' ? unsafeSource + '\n// first revision' : source, 1)),
         stageExtension('fixture-unlisted', unsafeSource, 1),
       ])),
     ])
+    await chmod(join(dir, 'fixture-permissions.tsx'), 0o620)
     bridge = await startBridge(dir)
     host = run(process.execPath, [join(import.meta.dirname, 'launch.ts'), 'run', config], {
       env: {
@@ -140,10 +142,10 @@ it('runs only reviewed bytes, reports normalized synced drift and refuses invali
     await Promise.race([
       vi.waitFor(async () => {
         expect(await health()).toMatchObject({host: {closedReason: null, extensions: [
-          refused('fixture-non-error', 'load-error'), running, refused('fixture-unpinned', 'unpinned-import'), refused('fixture-forbidden', 'forbidden-import'),
+          refused('fixture-non-error', 'load-error'), {...running, state: 'update-available'}, refused('fixture-unpinned', 'unpinned-import'), refused('fixture-forbidden', 'forbidden-import'),
           refused('fixture-host-forbidden', 'forbidden-import'), refused('fixture-missing-export', 'load-error'),
           refused('fixture-throws', 'load-error'), refused('fixture-absent', 'missing-block'),
-          refused('fixture-unreadable', 'reviewed-file-unreadable'),
+          refused('fixture-permissions', 'reviewed-file-permissions'), refused('fixture-unreadable', 'reviewed-file-unreadable'),
         ]}})
         expect(await effectWrites()).toEqual([{content: 'reviewed-effect', created_by: 'member', updated_by: 'member', creators: null}])
       }, {timeout: 32_000}),
@@ -152,9 +154,13 @@ it('runs only reviewed bytes, reports normalized synced drift and refuses invali
     expect(cdnRequests).toEqual(['/fixture.mjs'])
     const {stdout: rss} = await run('ps', ['-o', 'rss=', '-p', String(host.child.pid)])
     console.info(`Headless host RSS with fixture: ${Number(rss.trim())} KiB`)
-    // Both SQL and the observer see a staged server edit. The existing effect
-    // stays mounted and the synced source never becomes a module.
-    await writeFile(changes, JSON.stringify([stageExtension('fixture-reviewed', unsafeSource, 2)]))
+    await writeFile(changes, JSON.stringify([stageExtension('fixture-reviewed', fixtureSource + '\n  ', 2)]))
+    host.child.kill('SIGUSR2')
+    await vi.waitFor(async () => {
+      expect(await health()).toMatchObject({host: {extensions: expect.arrayContaining([running])}})
+    }, {timeout: 5_000})
+    // A later server edit changes the status without restarting the effect.
+    await writeFile(changes, JSON.stringify([stageExtension('fixture-reviewed', unsafeSource, 3)]))
     host.child.kill('SIGUSR2')
     await vi.waitFor(async () => {
       const result = await health()
@@ -174,12 +180,14 @@ it('runs only reviewed bytes, reports normalized synced drift and refuses invali
     }, {timeout: 5_000})
     host.child.kill('SIGTERM')
     const result = await host
+    expect(await readdir(join(dir, 'device'))).not.toContain(PID_FILENAME)
     const stdout = result.stdout.toString()
     const stderr = result.stderr.toString()
     expect(stdout.match(/fixture reviewed module evaluated/g)).toHaveLength(1)
     expect(stdout.match(/fixture reviewed effect stopped/g)).toHaveLength(1)
     expect(stdout).not.toContain('fixture synced module evaluated')
     expect(stderr).toContain('Headless extension update-available fixture-reviewed')
+    expect(stderr).toContain('Headless extension refused fixture-throws load-error')
     expect(stderr).not.toContain('private evaluation error')
   } finally {
     host?.child.kill('SIGKILL')

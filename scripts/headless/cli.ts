@@ -84,3 +84,8 @@ try {
   console.error(error instanceof Error ? error.message : 'Headless host failed')
   process.exitCode = 1
 }
+// The PID lock and host resources are released before any extension-owned handles are discarded.
+await Promise.all([process.stdout, process.stderr].map(stream =>
+  new Promise<void>(resolve => { stream.write('', () => resolve()) }),
+))
+process.exit()

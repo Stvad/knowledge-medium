@@ -29,7 +29,7 @@ type ReportBatch = Pick<BatchableKeyedStore<unknown>, 'beginBatch' | 'commitBatc
 /** Hands the runtime to the host before Repo installation. Reconcile after installation. */
 type RuntimeListener = (runtime: FacetRuntime) => void
 
-interface RuntimeResolutionOptions extends Pick<DynamicExtensionsOptions, 'cache' | 'persistent' | 'logLoadError' | 'evaluationSignal' | 'beforeEvaluate' | 'onBlockLoaded'> {
+interface RuntimeResolutionOptions extends Pick<DynamicExtensionsOptions, 'cache' | 'persistent' | 'logLoadError' | 'beforeEvaluate' | 'onBlockLoaded'> {
   baseExtensions: readonly AppExtension[]
   context: AppRuntimeContext
   overrides: Overrides
@@ -40,6 +40,7 @@ interface RuntimeResolutionOptions extends Pick<DynamicExtensionsOptions, 'cache
   beforePublish?: () => Promise<void>
   onRuntime?: RuntimeListener
   onLoadError?: ExtensionLoadErrorReporter
+  logResolveError?: (error: unknown) => void
 }
 
 export class AppRuntimeController {
@@ -54,7 +55,8 @@ export class AppRuntimeController {
 
   async resolve({
     baseExtensions, context, overrides, cache, persistent, errorStore, approvalStore,
-    signal, beforePublish, onRuntime, onLoadError, logLoadError, evaluationSignal, beforeEvaluate, onBlockLoaded,
+    signal, beforePublish, onRuntime, onLoadError, logLoadError, beforeEvaluate, onBlockLoaded,
+    logResolveError = error => console.error('Failed to resolve app runtime', error),
   }: RuntimeResolutionOptions): Promise<FacetRuntime | undefined> {
     if (signal.aborted) return
 
@@ -73,7 +75,7 @@ export class AppRuntimeController {
         baseExtensions,
         dynamicExtensionsExtension({
           repo, workspaceId, safeMode, overrides, cache, persistent,
-          logLoadError, evaluationSignal, beforeEvaluate, onBlockLoaded,
+          logLoadError, beforeEvaluate, onBlockLoaded,
           errorReporter: (blockId, error) => {
             if (signal.aborted) return
             errorStore?.reportError(blockId, error)
@@ -94,7 +96,7 @@ export class AppRuntimeController {
       this.publish(repo, runtime, onRuntime)
       return runtime
     } catch (error) {
-      console.error('Failed to resolve app runtime', error)
+      logResolveError(error)
       // A superseded resolution no longer owns the stores' batches.
       if (!signal.aborted) {
         errorStore?.abandonBatch()

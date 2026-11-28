@@ -77,7 +77,6 @@ export interface DynamicExtensionsOptions {
   overrides?: Overrides
   errorReporter?: ExtensionLoadErrorReporter
   logLoadError?: ExtensionLoadErrorReporter
-  evaluationSignal?: AbortSignal
   beforeEvaluate?: BeforeExtensionEvaluation
   onBlockLoaded?: (blockId: string) => void
   /** Reports the device-local trust status of enabled blocks that aren't
@@ -154,7 +153,6 @@ export const dynamicExtensionsExtension = (
     overrides,
     errorReporter,
     logLoadError = logBlockLoadError,
-    evaluationSignal,
     beforeEvaluate,
     onBlockLoaded,
     approvalStatusReporter,
@@ -164,7 +162,6 @@ export const dynamicExtensionsExtension = (
   } = options
   const effectiveOverrides: Overrides = overrides ?? new Map()
   const reportError = (blockId: string, thrown: unknown) => {
-    if (evaluationSignal?.aborted) return
     const error = asError(thrown)
     errorReporter?.(blockId, error)
     logLoadError(blockId, error)
@@ -193,7 +190,6 @@ export const dynamicExtensionsExtension = (
     }
     let hasStaticUnpinnedImports: boolean | undefined
     try {
-      evaluationSignal?.throwIfAborted()
       const loaded = await loadApprovedExtension(block.id, approval, cache, persistent, record => {
         hasStaticUnpinnedImports = record.hasStaticUnpinnedImports ?? false
       }, beforeEvaluate)
@@ -225,7 +221,6 @@ export const dynamicExtensionsExtension = (
   const collected: AppExtension[] = []
 
   for (const block of extensionBlocks) {
-    if (evaluationSignal?.aborted) break
     // Pre-compile skip — `userExtensionToggle.id` is always `block.id`
     // and `defaultEnabled` is always false, so an enabled state requires
     // an explicit `true` in the overrides map. This check is what makes

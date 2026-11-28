@@ -159,10 +159,14 @@ export async function serveDatabase(
     })
     await untilAbort(signal)
   } finally {
-    extensions?.stop()
-    extensions = undefined
     try {
-      await bridge?.close()
+      const loadingExtensions = extensions
+      extensions = undefined
+      try {
+        loadingExtensions?.stop()
+      } finally {
+        await bridge?.close()
+      }
     } finally {
       watchEventsRegistry.disposeAll()
       watchEventsRegistry.setTransport(null)

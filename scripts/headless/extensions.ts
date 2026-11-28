@@ -30,15 +30,20 @@ export async function prepareHostExtensions(
   const states = new Map<string, ExtensionState>()
   const effectIds = new Map<string, string[]>()
   const subscriptions: Array<() => void> = []
-  let admission: AbortController | undefined
+  let admission: {abort: AbortController, beforeEvaluate: () => Promise<void>} | undefined
   let mounted = false
 
   for (const [block, reason] of refusals) console.warn('Headless extension refused', block, reason)
   const restorePlatform = setExtensionCompilePlatform({
     allowUnpinnedLive: false,
-    instantiate(record, block, beforeEvaluate) {
-      if (!beforeEvaluate) throw new Error('Extension evaluation requires writable admission')
-      return instantiateHostExtension(block, record, manifest, specifier => import(/* @vite-ignore */ specifier), beforeEvaluate)
+    async instantiate(record, block, beforeEvaluate) {
+      const checkAdmission = admission?.beforeEvaluate
+      const grant = await persistent.read(block)
+      if (grant?.sourceHash !== record.sourceHash) throw new Error('Extension record does not match the host grant')
+      if (!checkAdmission || (beforeEvaluate && beforeEvaluate !== checkAdmission)) {
+        throw new Error('Extension evaluation requires writable admission')
+      }
+      return instantiateHostExtension(block, grant, manifest, specifier => import(/* @vite-ignore */ specifier), checkAdmission)
     },
   })
 
@@ -61,7 +66,7 @@ export async function prepareHostExtensions(
   }
 
   function suspend() {
-    admission?.abort()
+    admission?.abort.abort()
     admission = undefined
     for (const off of subscriptions.splice(0)) off()
     controller.dispose()
@@ -83,18 +88,30 @@ export async function prepareHostExtensions(
       }
       if (signal.aborted) return
       const attempt = new AbortController()
-      admission = attempt
       const evaluationSignal = AbortSignal.any([signal, attempt.signal])
       const beforeEvaluate = async () => {
         evaluationSignal.throwIfAborted()
         await refreshAdmission()
         evaluationSignal.throwIfAborted()
       }
+      admission = {abort: attempt, beforeEvaluate}
+      const reportFailure = () => {
+        if (evaluationSignal.aborted) return
+        console.warn('Headless extension runtime load-error')
+        try {
+          suspend()
+        } catch {
+          console.warn('Headless extension runtime restore-error')
+        }
+        for (const block of blocks) {
+          states.set(block, {state: 'refused', reason: refusals.get(block) ?? 'load-error'})
+        }
+      }
       const loaded = new Set<string>()
       const failed = new Map<string, Refusal>()
       void controller.resolve({
         baseExtensions, context, overrides, persistent, cache: createCompileCache(),
-        signal: evaluationSignal, evaluationSignal, beforeEvaluate,
+        signal: evaluationSignal, beforeEvaluate, logResolveError: reportFailure,
         onRuntime(runtime) {
           mounted = true
           onRuntime(runtime)
@@ -102,7 +119,6 @@ export async function prepareHostExtensions(
         logLoadError(block, error) {
           const reason = error instanceof ExtensionImportError ? error.reason : 'load-error'
           failed.set(block, reason)
-          console.warn('Headless extension refused', block, reason)
         },
         onBlockLoaded: block => loaded.add(block),
         async beforePublish() {
@@ -114,9 +130,12 @@ export async function prepareHostExtensions(
           const approval = await persistent.read(block)
           if (evaluationSignal.aborted) return
           const refusal = refusals.get(block) ?? failed.get(block)
-          if (refusal) states.set(block, {state: 'refused', reason: refusal})
-          else if (!approval || !loaded.has(block)) states.set(block, {state: 'refused', reason: 'missing-block'})
-          else {
+          if (refusal) {
+            if (failed.has(block)) console.warn('Headless extension refused', block, refusal)
+            states.set(block, {state: 'refused', reason: refusal})
+          } else if (!approval || !loaded.has(block)) {
+            states.set(block, {state: 'refused', reason: 'missing-block'})
+          } else {
             states.set(block, {state: 'running'})
             trackDrift(block, approval.approvedSource)
           }
@@ -129,7 +148,7 @@ export async function prepareHostExtensions(
           effectIds.set(owner, ids)
         }
         controller.reconcile(runtime, context, contribution => ownerOf(contribution) !== undefined)
-      }).catch(() => console.warn('Headless extension runtime load-error'))
+      }).catch(reportFailure)
     },
     health() {
       return blocks.map(block => ({
@@ -138,8 +157,11 @@ export async function prepareHostExtensions(
       }))
     },
     stop() {
-      suspend()
-      restorePlatform()
+      try {
+        suspend()
+      } finally {
+        restorePlatform()
+      }
     },
   }
 }

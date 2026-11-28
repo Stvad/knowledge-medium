@@ -1,7 +1,7 @@
-import {readFile} from 'node:fs/promises'
 import {dirname, resolve} from 'node:path'
 import {normalizeProfileName} from '@knowledge-medium/agent-cli/config'
 import {z} from 'zod'
+import {readOperatorFile} from './operatorFile.ts'
 
 export const DEVICE_STORAGE_FILENAME = 'device.sqlite'
 export const PID_FILENAME = 'headless.pid'
@@ -42,7 +42,7 @@ export type HeadlessConfig =
 
 export const readConfig = async (file: string): Promise<HeadlessConfig> => {
   // The refinement makes the parse exactly one KeySource arm.
-  const config = configSchema.parse(JSON.parse(await readFile(file, 'utf8'))) as HeadlessConfig
+  const config = configSchema.parse(JSON.parse(await readOperatorFile(file, 'config'))) as HeadlessConfig
   config.stateDir = resolve(dirname(file), config.stateDir)
   for (const entry of config.extensions ?? []) entry.file = resolve(dirname(file), entry.file)
   if (config.mode === 'e2ee' && config.keyFile !== undefined) config.keyFile = resolve(dirname(file), config.keyFile)

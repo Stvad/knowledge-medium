@@ -1,7 +1,7 @@
-import {mkdtemp, rm, writeFile} from 'node:fs/promises'
+import {chmod, mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {afterAll, beforeAll, expect, it} from 'vitest'
+import {afterAll, beforeAll, expect, it, vi} from 'vitest'
 import {readConfig} from './config'
 
 let dir: string
@@ -59,4 +59,27 @@ it('resolves reviewed copies beside the config and rejects ambiguous grants', as
   await expect(read({...config, extensions: [entry, {...entry, file: 'other.ts'}]}))
     .rejects.toThrow('Each extension block must be listed only once')
   await expect(read({...config, extensions: [{...entry, source: 'export default null'}]})).rejects.toThrow('source')
+})
+
+it.each([['group', 0o620], ['other', 0o602]] as const)('refuses a config writable by %s', async (_, mode) => {
+  const file = join(dir, 'writable-config.json')
+  await writeFile(file, JSON.stringify({...common, mode: 'plaintext'}))
+  await chmod(file, mode)
+  await expect(readConfig(file)).rejects.toThrow(/^config-file-permissions$/)
+})
+
+it('refuses a config owned by a different effective user', async () => {
+  const file = join(dir, 'foreign-config.json')
+  await writeFile(file, JSON.stringify({...common, mode: 'plaintext'}), {mode: 0o600})
+  await expect(readConfig(file)).resolves.toMatchObject({mode: 'plaintext'})
+  const owner = vi.spyOn(process, 'geteuid').mockReturnValue(process.geteuid!() + 1)
+  try {
+    await expect(readConfig(file)).rejects.toThrow(/^config-file-permissions$/)
+  } finally {
+    owner.mockRestore()
+  }
+})
+
+it('reports an unreadable config without printing its file path', async () => {
+  await expect(readConfig(join(dir, 'missing-config.json'))).rejects.toThrow(/^config-file-unreadable$/)
 })

@@ -5,8 +5,9 @@ import {ExtensionImportError, type ExtensionImportManifest} from '@/extensions/e
 import {InMemoryCompiledModuleCache} from '@/extensions/compiledModuleCache.js'
 import {normalizeExtensionSource} from '@/extensions/normalizeExtensionSource.js'
 import type {HeadlessConfig} from './config'
+import {OperatorFilePermissionsError, readOperatorFile} from './operatorFile'
 
-export type ApprovalRefusal = 'reviewed-file-unreadable' | 'compile-error' | 'invalid-pinned-import'
+export type ApprovalRefusal = 'reviewed-file-unreadable' | 'reviewed-file-permissions' | 'compile-error' | 'invalid-pinned-import'
   | ExtensionImportError['reason']
 
 export const approvalRefusal = (error: unknown): ApprovalRefusal => {
@@ -49,9 +50,9 @@ export async function prepareExtensionApprovals(config: HeadlessConfig, manifest
   for (const {block, file} of config.extensions ?? []) {
     let source: string
     try {
-      source = await readFile(file, 'utf8')
-    } catch {
-      refusals.set(block, 'reviewed-file-unreadable')
+      source = await readOperatorFile(file, 'reviewed')
+    } catch (error) {
+      refusals.set(block, error instanceof OperatorFilePermissionsError ? 'reviewed-file-permissions' : 'reviewed-file-unreadable')
       continue
     }
     try {
