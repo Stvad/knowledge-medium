@@ -11,6 +11,7 @@ import { ActiveContextsProvider, useActiveContextsDispatch } from '@/shortcuts/A
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { KEYBINDING_OVERRIDE_USER_SOURCE, keybindingOverridesFacet } from '@/shortcuts/keybindingOverrides'
+import { runActionById } from '@/shortcuts/runAction'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types'
 import { vimLinkHintsPlugin } from './index'
 
@@ -130,14 +131,20 @@ it('on a touchscreen shows automatic hints during keyboard use and hides them on
 
 it('opens on the first toggle key on a touchscreen', () => {
   vi.spyOn(navigator, 'maxTouchPoints', 'get').mockReturnValue(5)
-  const {shell} = setup()
+  const {shell, view, tree} = setup()
+  act(() => runActionById('vim.block.toggle-link-hints', new CustomEvent('command-pallet-trigger')))
+  expect(hint('First')).toBeNull()
+  press(shell, 'f', {trusted: true})
+  expect(hint('First')).toBe('a')
+  press(shell, 'f', {trusted: true})
   expect(hint('First')).toBeNull()
   press(shell, 'f', {trusted: true})
   expect(hint('First')).toBe('a')
   pointerDown(shell, 'touch')
   expect(hint('First')).toBeNull()
+  view.rerender(tree(false, 'other'))
   press(shell, 'f', {trusted: true})
-  expect(hint('First')).toBe('a')
+  expect(hint('Other instance')).toBe('a')
 })
 
 it('reveals only the focused block’s own visible links and follows through the original click handler', () => {

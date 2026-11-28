@@ -54,18 +54,22 @@ export function LinkHints() {
     // On touchscreens, use keyboard input outside editors as evidence
     // that hint keys are usable. A subsequent touch or pen press hides them.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.isTrusted && !isImeKeyEvent(event) && acceptsHintKeys(event.target)) setUsingKeyboard(true)
+      if (usingKeyboard || !event.isTrusted || isImeKeyEvent(event) || !acceptsHintKeys(event.target)) return
+      // Discard any toggle requested while hints were unavailable.
+      linkHintsToggle.close()
+      setUsingKeyboard(true)
     }
     const onPointerDown = (event: PointerEvent) => {
       if (event.pointerType === 'touch' || event.pointerType === 'pen') setUsingKeyboard(false)
     }
-    document.addEventListener('keydown', onKeyDown, true)
+    // Share the hint handler's phase so this key cannot reach a newly installed handler.
+    document.addEventListener('keydown', onKeyDown)
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => {
-      document.removeEventListener('keydown', onKeyDown, true)
+      document.removeEventListener('keydown', onKeyDown)
       document.removeEventListener('pointerdown', onPointerDown, true)
     }
-  }, [touchCapable])
+  }, [touchCapable, usingKeyboard])
 
   useLayoutEffect(() => {
     if (!hintsAvailable || !blockId || !letters) {
