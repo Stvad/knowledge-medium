@@ -824,8 +824,11 @@ describe('list properties', () => {
 
   it('refuses to clear a list with an annotated member', async () => {
     const repo = await setup(refListProperty)
-    await seed({id: ownerId, properties: {[refListProperty.name]: ['first', 'second']}}, field(),
-      value('value-a', '((first))'), value('value-b', '((second))'), value('note', 'keep', 'value-b'))
+    const members = ['first', 'second']
+    await seed({
+      id: ownerId, properties: {[refListProperty.name]: members},
+      references: members.map(id => ({id, alias: id, sourceField: refListProperty.name})),
+    }, field(), value('value-a', '((first))'), value('value-b', '((second))'), value('note', 'keep', 'value-b'))
     await expectCommittedRefusal(repo, tx => clearPropertyValue(tx, ownerId, fieldId), 'resolve-in-outline')
   })
 })

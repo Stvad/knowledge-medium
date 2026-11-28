@@ -6,13 +6,12 @@ import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension.js'
 import {diagnosticsFacet, type DiagnosticSourceContribution} from '@/plugins/diagnostics/facet.js'
 import matrixContributions, {nextBatchKey, pollLoop} from './matrix-chat-client.tsx'
 
-vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({}))
-
 const config = {
   workspaceId: 'workspace', baseUrl: 'https://matrix.test', roomId: '!room:matrix.test',
   accessToken: 'fixture', autoStart: true,
 }
-const historyPath = '/rooms/!room%3Amatrix.test/messages'
+const syncPath = '/_matrix/client/v3/sync'
+const historyPath = '/_matrix/client/v3/rooms/!room%3Amatrix.test/messages'
 const diagnostics = matrixContributions.find(c => c.facet.id === diagnosticsFacet.id)!.value as DiagnosticSourceContribution
 const cursor = () => JSON.parse(localStorage.getItem(nextBatchKey(config)) ?? 'null')?.nextBatch
 const event = (body: string) => ({
@@ -33,7 +32,7 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(config.workspaceId)
   localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch: 'S0'}))
 })
-afterEach(() => { vi.restoreAllMocks(); localStorage.clear() })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear() })
 
 const contents = async () => (await h.db.getAll<{content: string}>(
   `SELECT content FROM blocks WHERE json_extract(properties_json, '$."matrix-event:id"') IS NOT NULL
@@ -48,18 +47,26 @@ const run = async (...replies: unknown[]) => {
   const unsubscribe = diagnostics.subscribe(() => {
     if (diagnostics.getSnapshot()?.severity === 'warning') queueMicrotask(() => controller.abort())
   })
-  const http = {authedRequest: async (method: string, path: string, query: Record<string, string>) => {
-    requests.push({method, path, query, cursor: cursor()})
+  vi.stubGlobal('fetch', async (url: URL, options: RequestInit) => {
+    expect(url.origin).toBe(config.baseUrl)
+    expect(options).toMatchObject({
+      signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer',
+      headers: {Accept: 'application/json', Authorization: 'Bearer fixture'},
+    })
+    requests.push({
+      method: options.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams),
+      cursor: cursor(),
+    })
     if (!replies.length) {
       controller.abort()
-      return {}
+      return Response.json({})
     }
     const reply = replies.shift()
-    if (reply instanceof Error) throw reply
-    return reply
-  }}
+    if (reply instanceof Response) return reply
+    return Response.json(reply)
+  })
   try {
-    await pollLoop(repo, config, controller.signal, {http})
+    await pollLoop(repo, config, controller.signal)
     expect(replies).toHaveLength(0)
     return requests
   } finally {
@@ -84,11 +91,16 @@ it('pages across empty responses, keeps S0 through fetches and writes, and appen
     {chunk: [], end: 'P3'},
     {chunk: [event('two'), event('one')]},
   )
-  expect(requests.map(r => r.path)).toEqual(['/sync', historyPath, historyPath, historyPath, '/sync'])
+  expect(requests.map(r => r.path)).toEqual([syncPath, historyPath, historyPath, historyPath, syncPath])
   expect(requests.slice(1, 4)).toEqual(['P1', 'P2', 'P3'].map(from => ({
     method: 'GET', path: historyPath, cursor: 'S0', query: expect.objectContaining({from, to: 'S0', dir: 'b'}),
   })))
   expect(new Set(duringMessageWrite)).toEqual(new Set(['S0']))
+  expect(requests[0].query).toMatchObject({since: 'S0', timeout: '30000'})
+  expect(JSON.parse(requests[0].query.filter).room).toMatchObject({
+    rooms: [config.roomId], timeline: {types: ['m.room.message'], limit: 30},
+  })
+  expect(requests[1].query).toMatchObject({filter: JSON.stringify({types: ['m.room.message']}), limit: '100'})
   expect(requests.at(-1)?.query.since).toBe('S1')
   expect(cursor()).toBe('S1')
   expect(await contents()).toEqual(['one', 'two', 'three', 'four', 'five'])
@@ -104,11 +116,14 @@ it('recovers an older missing event beyond a newer known event', async () => {
 
 it('retries a failed history fetch from the last saved sync position', async () => {
   const batch = sync('S1', ['newer'], limited)
-  await run(batch, Object.assign(new Error('temporary failure'), {httpStatus: 500}))
+  await run(batch, new Response('<h1>Upstream unavailable</h1>', {status: 503}))
+  expect(diagnostics.getSnapshot()).toMatchObject({
+    summary: 'Matrix ingest is retrying', detail: 'Matrix HTTP 503',
+  })
   expect(cursor()).toBe('S0')
   expect(await contents()).toEqual([])
   const requests = await run(batch, {chunk: [event('older')]})
-  expect(requests.filter(r => r.path === '/sync').map(r => r.query.since)).toEqual(['S0', 'S1'])
+  expect(requests.filter(r => r.path === syncPath).map(r => r.query.since)).toEqual(['S0', 'S1'])
   expect(await contents()).toEqual(['older', 'newer'])
 })
 
@@ -116,7 +131,7 @@ it('backfills a limited interval from the shared position in a room with no impo
   await run(sync('S0', []))
   localStorage.removeItem(nextBatchKey(config))
   const requests = await run(sync('S1', ['newer'], limited), {chunk: [event('older')], end: 'S0'})
-  expect(requests.map(r => r.path)).toEqual(['/sync', historyPath, '/sync'])
+  expect(requests.map(r => r.path)).toEqual([syncPath, historyPath, syncPath])
   expect(requests[1].query.to).toBe('S0')
   expect(await contents()).toEqual(['older', 'newer'])
 })
@@ -139,4 +154,31 @@ it('uses the sync upper bound when the server omits prev_batch', async () => {
   expect(requests[1]).toMatchObject({path: historyPath, query: {from: 'S1', to: 'S0', dir: 'b'}})
   expect(cursor()).toBe('S1')
   expect(await contents()).toEqual(['latest'])
+})
+
+it.each([
+  [401, 'M_UNKNOWN_TOKEN', 'Token expired', 'Matrix ingest error'],
+  [429, 'M_LIMIT_EXCEEDED', 'Slow down', 'Matrix ingest is retrying'],
+] as const)('classifies Matrix HTTP %i without advancing the cursor', async (status, errcode, error, summary) => {
+  await run(Response.json({errcode, error}, {status}))
+  expect(diagnostics.getSnapshot()).toMatchObject({
+    summary, detail: `Matrix HTTP ${status}: ${errcode}: ${error}`,
+  })
+  expect(cursor()).toBe('S0')
+  expect(await contents()).toEqual([])
+})
+
+it('preserves opaque sync and pagination tokens on the wire', async () => {
+  const since = 's+/?&=☃'
+  const from = 'p+/?&=☃'
+  localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch: since}))
+  const requests = await run(sync('S1', [], {limited: true, prev_batch: from}), {chunk: [], end: since})
+  expect(requests[0].query.since).toBe(since)
+  expect(requests[1].query).toMatchObject({from, to: since})
+  expect(cursor()).toBe('S1')
+})
+
+it('reports the HTTP status when a server returns malformed Matrix error fields', async () => {
+  await run(Response.json({errcode: {}, error: ''}, {status: 401}))
+  expect(diagnostics.getSnapshot()).toMatchObject({summary: 'Matrix ingest error', detail: 'Matrix HTTP 401'})
 })

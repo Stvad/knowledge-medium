@@ -60,6 +60,7 @@ import {
   layoutSessionBlockIdForKey,
   layoutSessionsContainerBlockId,
   pluginPrefsBlockId,
+  pluginPrefsBlockUnder,
   readPluginPref,
   resetBlockSelection,
   userPageBlockId,
@@ -273,10 +274,13 @@ describe('getPluginPrefsBlock', () => {
       (await env.h.db.getAll<{n: number}>('SELECT count(*) AS n FROM blocks'))[0].n
     const before = await blockCount()
 
+    const prefsHandle = pluginPrefsBlockUnder(env.repo, userPageBlockId(WS, USER.id), examplePrefsType)
+    expect(await prefsHandle.load()).toBeNull()
     expect(await readPluginPref(env.repo, userPageBlockId(WS, USER.id), examplePrefsType, showPropertiesProp)).toBe(showPropertiesProp.defaultValue)
     expect(await blockCount()).toBe(before)
 
     const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+    expect(prefsHandle).toBe(pluginPrefs)
     expect(pluginPrefs.id).toBe(pluginPrefsBlockId(WS, USER.id, examplePrefsType.id))
     const fresh = await setup([examplePrefsType])
     try {

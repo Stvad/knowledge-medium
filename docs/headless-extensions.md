@@ -1,6 +1,6 @@
 # Installed extensions in the headless host
 
-> **Status:** Approved by the owner (2026-11-27). Slices 0–2 are implemented. The owner decisions are in [§9](#9-decisions). Last verified against code: 2026-11-27.
+> **Status:** Approved by the owner (2026-11-27). Slices 0–2 and the slice-3 code are implemented. The owner’s Matrix cutover is pending. The owner decisions are in [§9](#9-decisions). Last verified against code: 2026-11-27.
 > Claims are tagged as in [headless-client.md](headless-client.md). **[read]** means seen in the code. **[measured]** means run or queried, and the entry says where. **[reasoned]** means inferred; the slice that would verify it is named.
 
 ## 1. Goal
@@ -101,7 +101,7 @@ The tab's provider becomes a thin React wrapper over it, and the host calls the 
 
 The setters become one platform setter, `setExtensionCompilePlatform({instantiate, allowUnpinnedLive})`. The second option is the D3 transition flag, true only for a tab during the transition. Every extension block gets its own module instances on both platforms, vendored modules included. Compiling the reviewed files at boot costs about 70 ms per extension **[measured]**.
 
-**Globals.** The host provides `window` with its file-backed `localStorage`, and no other browser global: no `document`, `location`, `indexedDB`, `requestIdleCallback` or `requestAnimationFrame`. Dropping the eval shim's partial `document` is what lets the Matrix module load ([§3](#3-what-already-exists)). It is safe because `eval`, the shim's only consumer that needs it, is refused on the host. The host runs with `NODE_ENV=production`, so React matches a production tab. The Tailwind utilities load that the compile path starts on every resolution (`ensureExtensionUtilitiesCss`) moves into the tab's provider, its only consumer; on the host it ran PostCSS for about 0.7 s **[measured]**.
+**Globals.** The host provides `window` with its file-backed `localStorage`, and no other browser global: no `document`, `location`, `indexedDB`, `requestIdleCallback` or `requestAnimationFrame`. The Matrix UI imports reach Login through the Repo context. Login imports its storage hook directly because the react-use barrel initializes CSS against `document` when `window` exists. It is safe because `eval`, the shim's only consumer that needs it, is refused on the host. The host runs with `NODE_ENV=production`, so React matches a production tab. The Tailwind utilities load that the compile path starts on every resolution (`ensureExtensionUtilitiesCss`) moves into the tab's provider, its only consumer; on the host it ran PostCSS for about 0.7 s **[measured]**.
 
 **UI imports are loaded, not avoided.** Matrix's dialog, button and toast modules load in Node **[measured]**. One review covers the whole file, so loading them is no separate trust question. A headless entry module or a per-extension "headless" declaration would split every extension for a population of two.
 
@@ -166,22 +166,25 @@ To allowlist an extension or take a new version, the operator:
 
 **Device storage.** `pnpm headless storage set <config> <key>` writes one `localStorage` value from stdin, prompting as `login` does and never echoing it. It takes the state directory's pidfile, so it cannot run beside the daemon. Nothing in the host is Matrix-specific.
 
-**Per-user prefs.** The host sets `preferencesPage` to the owner's user page, and the slice-3 Matrix edit reads its config with `readPluginPref(repo, preferencesRootId(repo, ws), …)`. That reads without creating anything, so the host follows the owner's homeserver and room and mints no prefs block of its own. A tab's reads are unchanged.
+**Per-user prefs.** Set the host’s optional `preferencesPage` to the owner’s user page block ID. Matrix subscribes to the block returned by `pluginPrefsBlockUnder(repo, preferencesRootId(repo, ws), matrixChatPrefsType)`. Changes to that row update the poll, and reading it creates no blocks. When the setting is absent, including in a tab, the lookup resolves to the acting user’s own page.
 
 <a id="matrix-ingest"></a>**What slice 3 needs from the Matrix extension** ([§9](#9-decisions) D4). One device ingests a room by default, and ingest stays correct when several do, as tabs already do today. These are fixes to the extension, tracked in its issues:
-- *Several writers converge* (#1905, #1907). Today, writers whose property schemas differ, such as a tab and the host with its narrower seed set, can duplicate a message's child rows. Two writers promoting a brand-new key mint two definitions.
-- *Replays and gaps are safe* (#1900). A cursor copy, history paging or a crash before the cursor save all replay events, and a gap longer than 30 messages is skipped today.
+- *Several writers converge* (#1905, #1907). Stable child IDs keep writers with different property schemas from duplicating message children. Concurrent promotion of the same new key resolves to one definition.
+- *Replays and gaps are safe* (#1900). A cursor copy, history paging or a crash before the cursor save can replay events. The ingest deduplicates those events and pages a limited timeline before advancing the cursor.
 - *A handoff loses nothing* (#1908). Ingest moves to the host by handing over the credential, without dropping the gap.
 - *The token is bound to its destination* (rule 6). Its config re-reads on change, and its stop path cancels cleanly.
-- *Host-safe code.* It drops the device-flagged `migrateEventNamespace` (0 rows pending, 1,402 migrated on the owner's replica **[measured]**), uses no `window.location`, and pins its SDK import.
+- *Host-safe code.* It drops the device-flagged `migrateEventNamespace` (0 rows pending, 1,402 migrated on the owner's replica **[measured]**), uses no browser location during ingest, and uses native fetch for Matrix requests. New messages retain links to the app on both platforms. Roam reference links keep their existing label-only rendering.
 
 **Rollout.** No mixed-version machinery. The host is in the drain set: an extension that imports a new kernel export means deploy, update the checkout, restart the host.
 
 ### Moving an existing Matrix room from a tab to the host
 
-1. Reinstall and approve the updated Matrix extension on the original tab. Reload or close older copies. If the original tab still offers **Bind saved device token**, use it there to retain its legacy room position. Drain pending uploads and resolve rejections. The next completed poll publishes the **Matrix room checkpoint** automatically. A persistent hold appears in Matrix diagnostics with both queue counts.
-2. On a write-enabled host with extension loading available, select the owner’s preferences page and allowlist the reviewed extension. With the daemon stopped, run `pnpm headless storage set <config.json> '<key>'` and enter the same Matrix access token. The key is `knowledge-medium:matrix:token:v2:` followed by the compact JSON array `["<workspace-id>","https://<homeserver-origin>","<room-id>"]`.
-3. Start the host and let it sync. It uses its own valid cursor if present, otherwise the downloaded checkpoint. Check the Matrix diagnostic, then run **Matrix: stop message ingest on this device** in the old browser. This stops its other tabs and preserves the synced auto-start preference. Send a distinctive room message and verify it appears once. To switch back, run **Matrix: start message ingest** on the original tab.
+1. Drain the host’s upload queue and stop the daemon. Deploy the app and update the host checkout to the reviewed revision first: the Matrix effect imports `pluginPrefsBlockUnder`. Reload the original tab onto the deployed app, then install the reviewed `agent-extensions/matrix-chat-client.tsx` over the **existing extension block** with `pnpm agent --profile <tab> install-extension agent-extensions/matrix-chat-client.tsx '<existing label>' --verify`. Approve the update, confirm it is running, and reload or close older tabs. If offered **Bind saved device token**, use it on the original tab to retain its legacy position.
+2. Leave that writer running. Verify auto-start is enabled for the room, drain its pending uploads, resolve rejections, and confirm that the **Matrix room checkpoint** for that homeserver and room holds a sync position and has uploaded. Matrix diagnostics in the original tab show persistent checkpoint holds.
+3. As the daemon’s OS user, copy the reviewed source from the commit to a local file. Set `"writable": true`, `"preferencesPage": "<owner user page block id>"` and `"extensions": [{"block": "<existing extension block id>", "file": "reviewed/matrix-chat-client.tsx"}]` in the host config, preserving other grants. The account needs editor or owner membership. The daemon user must own the config and reviewed file, with group/other write disabled. Set the service’s `TZ` to the owner’s zone.
+4. With the daemon stopped, run `pnpm headless storage set <config.json> 'knowledge-medium:matrix:token:v2:["<workspace-id>","https://<homeserver-origin>","<room-id>"]'` and enter the same Matrix access token on stdin. Substitute the actual values, using the normalized HTTPS origin and compact JSON. Keep the existing device state directory.
+5. Start the daemon with `pnpm headless run <config.json>` or its service unit. Run `pnpm agent --profile <host> health`. Wait for `host.closedReason: null`, `host.readOnly: false`, the expected time zone, and a `running` grant listing `matrix-chat-client.ingest`. The host resumes its valid device cursor first, otherwise the downloaded checkpoint. Health reports effect registration; the next step verifies ingest.
+6. Run **Matrix: stop message ingest on this device** on the original browser and pause any other writers. Send one distinctive new room message. Verify it appears once in the graph and host health returns to `uploadQueueBlocks: 0` with `rejectedUploads: 0`. To switch back, drain and stop the host and run **Matrix: start message ingest** on the original device. Its credential and cursor are still there.
 
 **Start fresh from now** skips earlier history and is only for a new room. For an existing room with no position, wait for sync or resume its original writer. If the checkpoint was deleted, undelete the **Matrix room checkpoint** block. Its homeserver origin, room ID and opaque sync position are workspace data, encrypted with the block properties in an encrypted workspace. The access token stays on each device.
 
@@ -249,8 +252,9 @@ Each gate clause and each refusal gets a named test, mutation-checked per AGENTS
 
    It is verified on a local stack with fixture extensions and the parity test.
 3. **Matrix on the host.** The extension work in [§7](#matrix-ingest), then reinstall, re-approve in tabs, allowlist it and hand ingest over (#1908).
-   - Memory is measured in two steps on the target: the running host with the SDK stubbed, then with the pinned SDK. Loading the extension's `@/` imports alone cost about 290 MB RSS over a bare vite-node process on a laptop **[measured]**.
-   - If the SDK's browser build does not run under Node, or costs too much, replace its three calls (`createClient`, the `/sync` request, `mxcUrlToHttp` **[read]**) with `fetch` in the extension.
+   - The slice-0 freezer accepted the 1,164,790-byte Matrix SDK 38.0.0 bundle. The real host VM linked it, ingested a fixture message and held the next sync request **[measured]**. The shipped transport uses native fetch for sync and history paging, and constructs media URLs locally.
+   - **[measured]** RSS in MiB for two fresh launches per variant on arm64 macOS with Node 26.5.0. The bare writable host was admitted. Each granted host had ingested the same message and was holding its next poll. After 1.5 s idle and two forced collections, the process medians were **527 / 530 bare**, **642 / 638 with an SDK stub**, **704 / 685 with the pinned SDK**, and **630 / 639 with fetch**. In matching runs fetch added 103 / 109 MiB over bare and saved 74 / 46 MiB against the SDK. Startup samples without forced collection varied more (bare 425–491, stub 616–640, SDK 516–672, fetch 512–617 MiB). The owner’s VM and live graph are unmeasured.
+   - A launcher test provisions the bound token through stdin, delivers a duplicate event, checks one message and the untouched owner prefs, and restarts the device ahead of the shared checkpoint. A synced change to the owner’s settings cancels the pending poll while the host still answers health **[measured]**.
 
 Deferred:
 - synced vendored bytes, multi-module closures and bundling, and peer dependencies mapped to the importmap;
@@ -264,6 +268,5 @@ Deferred:
 | Unverified | Settled in |
 |---|---|
 | Contributor metadata when an effect edits a previously attributed row. A fresh fixture row uses the host account’s authorship fields and has no explicit creator-contributor value **[measured]**. | first attributed effect update |
-| The `vm` instantiator with installed production extensions. The launcher test exercises the full host with a fixture **[measured]**. | slice 3 |
-| Marginal memory of loaded extensions on the running host, the pinned SDK included, and whether that bundle runs under Node | slice 3, on the target |
+| RSS with the owner’s real graph on the target VM. Local launcher measurements are in §10. | owner cutover |
 | Whether `target=es2024` keeps giving one self-contained file across esm.sh versions and packages. The freezer checks rather than assumes, so a change is a refusal, never a wrong load | slice 0, then on every pin |

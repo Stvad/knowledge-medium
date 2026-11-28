@@ -7,17 +7,32 @@ import {RepoContext} from '@/context/repo.js'
 import type {Repo} from '@/data/repo.js'
 import {diagnosticsFacet, type DiagnosticSourceContribution} from '@/plugins/diagnostics/facet.js'
 
-const {createClient, authedRequest, dailyNote} = vi.hoisted(() => {
-  const authedRequest = vi.fn()
-  return {authedRequest, createClient: vi.fn(() => ({http: {authedRequest}})), dailyNote: vi.fn()}
-})
-vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({createClient}))
+const {fetchReply, dailyNote} = vi.hoisted(() => ({fetchReply: vi.fn(), dailyNote: vi.fn()}))
+const request = (index = 0) => fetchReply.mock.calls[index] as [URL, RequestInit]
+const cursorAt = (index = 0) => request(index)[0].searchParams.get('since')
+
+function pendingReply() {
+  const readJson = vi.fn()
+  let deliver!: (response: Response) => void
+  fetchReply.mockReturnValueOnce(new Promise<Response>(resolve => { deliver = resolve }))
+  return async (body: unknown) => {
+    const response = Response.json(body)
+    const json = response.json.bind(response)
+    vi.spyOn(response, 'json').mockImplementation(() => {
+      readJson()
+      return json()
+    })
+    deliver(response)
+    await vi.waitFor(() => expect(readJson).toHaveBeenCalled())
+  }
+}
 vi.mock('@/plugins/daily-notes/dailyNotes.js', async importOriginal => ({
   ...await importOriginal<typeof import('@/plugins/daily-notes/dailyNotes.js')>(),
   getOrCreateDailyNoteInTx: dailyNote,
 }))
 vi.mock('@/data/stateBlocks.js', () => ({
-  pluginPrefsBlockId: (workspaceId: string) => workspaceId,
+  preferencesRootId: (_repo: unknown, workspaceId: string) => workspaceId,
+  pluginPrefsBlockUnder: (repo: ReturnType<typeof makeRepo>, page: string) => repo.prefs.get(page),
   getPluginPrefsBlock: async (repo: ReturnType<typeof makeRepo>, workspaceId: string) => repo.prefs.get(workspaceId),
 }))
 
@@ -95,10 +110,18 @@ function runAction(id: string, repo: ReturnType<typeof makeRepo>) {
   return action.handler({uiStateBlock: {repo}})
 }
 
-function openSetup(repo: ReturnType<typeof makeRepo>) {
-  const connect = contributions.find(c => (c.value as {id?: string}).id === 'matrix.connect')!.value as unknown as {handler: () => void}
+function mountTab(repo: ReturnType<typeof makeRepo>) {
   const mount = contributions.find(c => (c.value as {id?: string}).id === 'matrix.setup-dialog')!.value as {component: ComponentType}
-  render(createElement(RepoContext.Provider, {value: repo as unknown as Repo}, createElement(mount.component)))
+  return render(createElement(RepoContext.Provider, {value: repo as unknown as Repo}, createElement(mount.component)))
+}
+
+function openSetup(repo: ReturnType<typeof makeRepo>) {
+  mountTab(repo)
+  openMountedSetup()
+}
+
+function openMountedSetup() {
+  const connect = contributions.find(c => (c.value as {id?: string}).id === 'matrix.connect')!.value as unknown as {handler: () => void}
   act(() => connect.handler())
 }
 
@@ -118,7 +141,11 @@ let stop: (() => void) | undefined
 beforeEach(() => {
   localStorage.clear()
   vi.clearAllMocks()
-  authedRequest.mockImplementation(() => new Promise(() => {}))
+  fetchReply.mockReset().mockImplementation(() => new Promise(() => {}))
+  vi.stubGlobal('fetch', async (url: URL, options: RequestInit) => {
+    const reply = await fetchReply(url, options)
+    return reply instanceof Response ? reply : Response.json(reply)
+  })
 })
 afterEach(() => {
   cleanup()
@@ -138,10 +165,11 @@ describe('Matrix device authorization', () => {
     const repo = makeRepo()
     localStorage.setItem(tokenKey(a), 'bound-token')
     stop = matrixIngestEffect.start({repo})
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    expect(createClient).toHaveBeenCalledWith({baseUrl: a.baseUrl, accessToken: 'bound-token'})
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    expect(request()[0].origin).toBe(a.baseUrl)
+    expect(request()[1].headers).toMatchObject({Authorization: 'Bearer bound-token'})
     expect(diagnostics.getSnapshot()).toBeNull()
-    const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
+    const signal = request()[1].signal as AbortSignal
     expect(signal.aborted).toBe(false)
     if (changed.workspaceId !== repo.activeWorkspaceId) {
       repo.setActiveWorkspaceId(changed.workspaceId)
@@ -152,8 +180,7 @@ describe('Matrix device authorization', () => {
     }
     await vi.waitFor(() => expect(diagnostics.getSnapshot()?.summary).toBe('Matrix token is missing'))
     expect(signal.aborted).toBe(true)
-    expect(createClient).toHaveBeenCalledTimes(1)
-    expect(authedRequest).toHaveBeenCalledTimes(1)
+    expect(fetchReply).toHaveBeenCalledTimes(1)
   })
 
   it.each(['unscoped token', 'legacy config'] as const)(
@@ -171,6 +198,7 @@ describe('Matrix device authorization', () => {
         prefs.set(roomIdProp, '')
       }
       localStorage.setItem(legacyCursorKey, cursorState('prior-position'))
+      mountTab(repo)
       stop = matrixIngestEffect.start({repo})
       await vi.waitFor(() => {
         expect(reads).toHaveBeenCalledWith(autoStartProp)
@@ -178,16 +206,17 @@ describe('Matrix device authorization', () => {
         expect(diagnostics.getSnapshot()?.summary).toBe('Matrix ingest is not configured')
       })
       expect(JSON.parse(localStorage.getItem(legacyConfigKey)!)).toEqual({...blobPrefs, accessToken: embedded})
-      expect(createClient).not.toHaveBeenCalled()
+      expect(fetchReply).not.toHaveBeenCalled()
       expect(localStorage.getItem(nextBatchKey(a))).toBeNull()
-      openSetup(repo)
+      openMountedSetup()
       await correctLegacyOrigin()
       const bind = await screen.findByRole('button', {name: 'Bind saved device token'})
       expectDestination()
       fireEvent.click(bind)
-      await vi.waitFor(() => expect(authedRequest).toHaveBeenCalled())
-      expect(createClient).toHaveBeenCalledWith({baseUrl: a.baseUrl, accessToken: 'pending-token'})
-      expect(authedRequest.mock.calls[0][2].since).toBe('prior-position')
+      await vi.waitFor(() => expect(fetchReply).toHaveBeenCalled())
+      expect(request()[0].origin).toBe(a.baseUrl)
+      expect(request()[1].headers).toMatchObject({Authorization: 'Bearer pending-token'})
+      expect(cursorAt(0)).toBe('prior-position')
       expect(localStorage.getItem(legacyTokenKey)).toBeNull()
       expect(JSON.parse(localStorage.getItem(legacyConfigKey)!)).toEqual(blobPrefs)
       expect(localStorage.getItem(legacyCursorKey)).toBe(cursorState('prior-position'))
@@ -211,8 +240,9 @@ describe('Matrix device authorization', () => {
     fireEvent.change(screen.getByLabelText('Access token'), {target: {value: 'new-token'}})
     expectDestination()
     fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    expect(authedRequest.mock.calls[0].slice(1, 3)).toEqual(['/sync', expect.objectContaining({since: 'shared-position'})])
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    expect(request()[0].pathname).toBe('/_matrix/client/v3/sync')
+    expect(cursorAt()).toBe('shared-position')
     expect(localStorage.getItem(tokenKey(otherWorkspace))).toBe('new-token')
     expect(localStorage.getItem(stoppedKey(otherWorkspace))).toBeNull()
     expect(localStorage.getItem(stoppedKey(a))).toBe('1')
@@ -231,8 +261,8 @@ describe('Matrix device authorization', () => {
     await screen.findByDisplayValue(a.roomId)
     expect((screen.getByLabelText('Access token') as HTMLInputElement).value).toBe('')
     fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    expect(authedRequest.mock.calls[0][2].since).toBe('local')
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    expect(cursorAt(0)).toBe('local')
     expect(localStorage.getItem(stoppedKey(a))).toBeNull()
     expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('local'))
     expect(localStorage.getItem(tokenKey(a))).toBe('bound-token')
@@ -246,8 +276,8 @@ describe('Matrix device authorization', () => {
     const prefs = repo.prefs.get(a.workspaceId)!
     const set = vi.spyOn(prefs, 'set')
     stop = matrixIngestEffect.start({repo})
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    const signal = request()[1].signal as AbortSignal
     await runAction('matrix.stop', repo)
     expect(signal.aborted).toBe(true)
     expect(localStorage.getItem(stoppedKey(a))).toBe('1')
@@ -262,11 +292,11 @@ describe('Matrix device authorization', () => {
     const get = vi.spyOn(prefs, 'get')
     stop = matrixIngestEffect.start({repo})
     await vi.waitFor(() => expect(get).toHaveBeenCalledWith(autoStartProp))
-    expect(authedRequest).toHaveBeenCalledOnce()
+    expect(fetchReply).toHaveBeenCalledOnce()
     await runAction('matrix.start', repo)
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledTimes(2))
     expect(localStorage.getItem(stoppedKey(a))).toBeNull()
-    expect(authedRequest.mock.calls[1][2].since).toBe('local')
+    expect(cursorAt(1)).toBe('local')
   })
 
   it('resumes the paused destination from the settings Restart button', async () => {
@@ -283,15 +313,15 @@ describe('Matrix device authorization', () => {
     const get = vi.spyOn(prefs, 'get')
     stop = matrixIngestEffect.start({repo})
     await vi.waitFor(() => expect(get).toHaveBeenCalledWith(autoStartProp))
-    expect(authedRequest).not.toHaveBeenCalled()
+    expect(fetchReply).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', {name: 'Restart ingest'}))
     expect(localStorage.getItem(stoppedKey(a))).toBeNull()
     expect(localStorage.getItem(stoppedKey(otherWorkspace))).toBe('1')
     expect(localStorage.getItem(tokenKey(a))).toBe('bound')
     expect(set).not.toHaveBeenCalled()
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    expect(authedRequest.mock.calls[0][2].since).toBe('shared-position')
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    expect(cursorAt(0)).toBe('shared-position')
   })
 
   it.each([['start', 'matrix.start'], ['stop', 'matrix.stop'], ['Start fresh', 'matrix.reset-position']])(
@@ -311,7 +341,7 @@ describe('Matrix device authorization', () => {
     await runAction('matrix.reset-position', repo)
     expect(error).toHaveBeenCalledWith(expect.stringMatching(/token/i))
     expect(confirm).not.toHaveBeenCalled()
-    expect(createClient).not.toHaveBeenCalled()
+    expect(fetchReply).not.toHaveBeenCalled()
   })
 
   it('cancels Start fresh before contacting Matrix or changing a checkpoint', async () => {
@@ -321,7 +351,7 @@ describe('Matrix device authorization', () => {
     vi.stubGlobal('confirm', confirm)
     await runAction('matrix.reset-position', repo)
     expect(confirm).toHaveBeenCalledOnce()
-    expect(createClient).not.toHaveBeenCalled()
+    expect(fetchReply).not.toHaveBeenCalled()
     expect(repo.tx).not.toHaveBeenCalled()
   })
 
@@ -399,11 +429,10 @@ describe('Matrix device authorization', () => {
     const repo = makeRepo()
     localStorage.setItem(tokenKey(a), 'bound-token')
     stop = matrixIngestEffect.start({repo})
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    const signal = request()[1].signal as AbortSignal
     repo.prefs.get(a.workspaceId)!.set(homeserverProp, legacyBaseUrl)
     expect(signal.aborted).toBe(true)
-    expect(createClient).toHaveBeenCalledTimes(1)
     expect(diagnostics.getSnapshot()?.summary).toBe('Matrix ingest is not configured')
   })
 
@@ -449,7 +478,7 @@ describe('Matrix device authorization', () => {
       expect(reads).toHaveBeenCalledWith(autoStartProp)
       expect(diagnostics.getSnapshot()?.summary).toBe('Matrix token is missing')
     })
-    expect(createClient).not.toHaveBeenCalled()
+    expect(fetchReply).not.toHaveBeenCalled()
     openSetup(repo)
     fireEvent.click(await screen.findByRole('button', {name: 'Bind saved device token'}))
     await vi.waitFor(() => expect(localStorage.getItem(tokenKey(a))).toBe('pending'))
@@ -460,11 +489,11 @@ describe('Matrix device authorization', () => {
     const repo = makeRepo()
     localStorage.setItem(tokenKey(a), 'bound-token')
     stop = matrixIngestEffect.start({repo})
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    const signal = request()[1].signal as AbortSignal
     repo.prefs.get(a.workspaceId)!.set({name: 'unrelated'}, 'edit')
     expect(signal.aborted).toBe(false)
-    expect(authedRequest).toHaveBeenCalledOnce()
+    expect(fetchReply).toHaveBeenCalledOnce()
   })
 
   it('forgets all device tokens while retaining cursors and unrelated settings', async () => {
@@ -496,19 +525,19 @@ describe('Matrix device authorization', () => {
 
   it.each(['pause', 'disconnect'] as const)('aborts a second tab on %s and discards its late poll response', async reason => {
     const repo = makeRepo()
+    mountTab(repo)
     const reads = vi.spyOn(repo.prefs.get(a.workspaceId)!, 'get')
     stop = matrixIngestEffect.start({repo})
     await vi.waitFor(() => expect(reads).toHaveBeenCalledWith(autoStartProp))
     const key = tokenKey(a)
     localStorage.setItem(nextBatchKey(a), cursorState('local'))
-    let deliver!: (body: unknown) => void
-    const response = new Promise(resolve => { deliver = resolve })
-    authedRequest.mockReturnValueOnce(response)
+    const replyWith = pendingReply()
     localStorage.setItem(key, 'another-tab')
     window.dispatchEvent(new StorageEvent('storage', {key}))
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    expect(createClient).toHaveBeenCalledWith({baseUrl: a.baseUrl, accessToken: 'another-tab'})
-    const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    expect(request()[0].origin).toBe(a.baseUrl)
+    expect(request()[1].headers).toMatchObject({Authorization: 'Bearer another-tab'})
+    const signal = request()[1].signal as AbortSignal
     expect(signal.aborted).toBe(false)
     if (reason === 'pause') {
       localStorage.setItem(stoppedKey(a), '1')
@@ -519,10 +548,22 @@ describe('Matrix device authorization', () => {
       expect(diagnostics.getSnapshot()?.summary).toBe('Matrix token is missing')
     }
     expect(signal.aborted).toBe(true)
-    deliver({next_batch: 'late-reply'})
-    await response
+    await replyWith({next_batch: 'late-reply'})
     expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('local'))
     expect(repo.tx).not.toHaveBeenCalled()
+  })
+
+  it('refreshes a running tab when another tab clears storage', async () => {
+    const repo = makeRepo()
+    mountTab(repo)
+    localStorage.setItem(tokenKey(a), 'bound-token')
+    stop = matrixIngestEffect.start({repo})
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    const signal = request()[1].signal!
+    localStorage.clear()
+    window.dispatchEvent(new StorageEvent('storage', {key: null}))
+    expect(signal.aborted).toBe(true)
+    expect(diagnostics.getSnapshot()?.summary).toBe('Matrix token is missing')
   })
 
   it('refuses a non-https homeserver', async () => {
@@ -532,7 +573,23 @@ describe('Matrix device authorization', () => {
     repo.prefs.get(a.workspaceId)!.set(homeserverProp, insecure.baseUrl)
     stop = matrixIngestEffect.start({repo})
     await vi.waitFor(() => expect(diagnostics.getSnapshot()?.summary).toMatch(/configured|https/i))
-    expect(createClient).not.toHaveBeenCalled()
+    expect(fetchReply).not.toHaveBeenCalled()
+  })
+
+  it('keeps ingest stopped when the initial prefs load finishes after cleanup', async () => {
+    const repo = makeRepo()
+    const prefs = repo.prefs.get(a.workspaceId)!
+    let resolve!: (row: typeof prefs.data) => void
+    const promise = new Promise<typeof prefs.data>(done => { resolve = done })
+    vi.spyOn(prefs, 'load').mockReturnValue(promise)
+    localStorage.setItem(tokenKey(a), 'bound-token')
+    const dispose = matrixIngestEffect.start({repo})
+    dispose()
+    resolve(prefs.data)
+    await promise
+    await runAction('matrix.start', repo)
+    expect(fetchReply).not.toHaveBeenCalled()
+    expect(prefs.get(autoStartProp)).toBe(true)
   })
 
   it('abandons an outstanding poll across a switch away and back', async () => {
@@ -540,18 +597,14 @@ describe('Matrix device authorization', () => {
     localStorage.setItem(tokenKey(a), 'fixture-token')
     localStorage.setItem(nextBatchKey(a), cursorState('original'))
     localStorage.setItem(nextBatchKey(otherWorkspace), cursorState('other'))
-    let deliver!: (body: unknown) => void
-    const response = new Promise(resolve => { deliver = resolve })
-    authedRequest.mockReturnValueOnce(response)
+    const replyWith = pendingReply()
     stop = matrixIngestEffect.start({repo})
-    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-    const signal = authedRequest.mock.calls[0][4].abortSignal as AbortSignal
+    await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+    const signal = request()[1].signal as AbortSignal
     expect(signal.aborted).toBe(false)
     repo.setActiveWorkspaceId(otherWorkspace.workspaceId)
     repo.setActiveWorkspaceId(a.workspaceId)
-    deliver({next_batch: 'stale'})
-    // The poll awaited this same SDK promise before we registered our continuation.
-    await response
+    await replyWith({next_batch: 'stale'})
     expect(signal.aborted).toBe(true)
     expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('original'))
     expect(localStorage.getItem(nextBatchKey(otherWorkspace))).toBe(cursorState('other'))
@@ -564,11 +617,11 @@ describe('Matrix device authorization', () => {
       localStorage.setItem(nextBatchKey(a), cursorState('original'))
       localStorage.setItem(nextBatchKey(otherWorkspace), cursorState('other'))
       let deliver!: (body: unknown) => void
-      authedRequest.mockImplementationOnce(() => new Promise(resolve => { deliver = resolve }))
-      const run = pollLoop(repo, {...a, accessToken: 'fixture-token', autoStart: true},
-        controller.signal, {http: {authedRequest}})
-      await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
-      expect(authedRequest.mock.calls[0][2].since).toBe('original')
+      fetchReply.mockImplementationOnce(() => new Promise(resolve => { deliver = resolve }))
+      const config = {...a, accessToken: 'fixture-token', autoStart: true}
+      const run = pollLoop(repo, config, controller.signal)
+      await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
+      expect(cursorAt(0)).toBe('original')
       repo.activeWorkspaceId = otherWorkspace.workspaceId
       const events = kind === 'message' ? [{event_id: '$fixture', type: 'm.room.message'}] : []
       deliver({next_batch: 'advanced', rooms: {join: {[a.roomId]: {timeline: {events}}}}})
@@ -576,7 +629,7 @@ describe('Matrix device authorization', () => {
         await run
         expect(dailyNote).not.toHaveBeenCalled()
         expect(repo.tx).not.toHaveBeenCalled()
-        expect(authedRequest).toHaveBeenCalledTimes(1)
+        expect(fetchReply).toHaveBeenCalledTimes(1)
         expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('original'))
         expect(localStorage.getItem(nextBatchKey(otherWorkspace))).toBe(cursorState('other'))
       } finally {

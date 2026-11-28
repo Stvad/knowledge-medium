@@ -349,6 +349,10 @@ export const preferencesRootId = (repo: Repo, workspaceId: string): string => {
   return page?.workspaceId === workspaceId ? page.userPageId : userPageBlockId(workspaceId, repo.user.id)
 }
 
+/** Resolve a plugin prefs handle without loading or creating the prefs subtree. */
+export const pluginPrefsBlockUnder = (repo: Repo, userPageId: string, type: TypeContribution): Block =>
+  repo.block(pluginPrefsBlockIdUnder(userPageId, type.id))
+
 /** One plugin preference under the user page `userPageId` (usually
  *  `preferencesRootId`), read without creating the prefs subtree: the stored
  *  value, or the schema's default while there is none. For read paths; a

@@ -6,7 +6,6 @@ const writes = vi.hoisted(() => ({
   schemas: vi.fn(async () => []),
   tag: vi.fn(async () => ({id: 'tag'})),
 }))
-vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({createClient: vi.fn()}))
 vi.mock('@/plugins/daily-notes/dailyNotes.js', async importOriginal => ({
   ...await importOriginal<typeof import('@/plugins/daily-notes/dailyNotes.js')>(),
   getOrCreateDailyNoteInTx: writes.dailyNote,
@@ -42,7 +41,7 @@ function fixture(body = 'example') {
   }
   const event = {type: 'm.room.message', event_id: '$example', content: {msgtype: 'm.text', body}}
   const batch = {next_batch: 'after', rooms: {join: {[config.roomId]: {timeline: {events: [event]}}}}}
-  const client = {http: {authedRequest: vi.fn().mockResolvedValueOnce(batch)}}
+  const client = {get: vi.fn().mockResolvedValueOnce(batch)}
   const switchWorkspace = () => { repo.activeWorkspaceId = 'second' }
   const run = () => {
     localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch: 'before'}))

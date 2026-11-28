@@ -13,40 +13,17 @@
 // at all.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// The extension imports the matrix SDK from a URL, which no test runner can
-// fetch. Only two of its methods are on the ingest path.
-//
-// The stub answers BY CURSOR, the way a homeserver does, and that is what
-// makes a stall observable: a client that does not advance its cursor is
-// handed the same events again, forever. A stub that ignored `since` would
-// hand out the next message instead, and no test here could see a stall.
+// The homeserver answers by cursor so a stalled poll sees the same events.
 const timeline = new Map<string, unknown>()
-vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({
-  createClient: () => ({
-    mxcUrlToHttp: (url: string) => url,
-    http: {
-      authedRequest: (
-        _method: string,
-        _path: string,
-        query: {since?: string},
-        _body: unknown,
-        opts: {abortSignal?: AbortSignal},
-      ) => {
-        const body = query.since === undefined ? undefined : timeline.get(query.since)
-        if (body !== undefined) return Promise.resolve(body)
-        // Nothing to deliver from this position: behave like a long poll that
-        // only ends when the caller aborts, rather than spinning the loop.
-        return new Promise((_resolve, reject) => {
-          opts.abortSignal?.addEventListener(
-            'abort',
-            () => reject(new DOMException('Aborted', 'AbortError')),
-            {once: true},
-          )
-        })
-      },
-    },
-  }),
-}))
+const mockFetch = async (url: URL, {signal}: RequestInit) => {
+  const since = url.searchParams.get('since')
+  const body = since === null ? undefined : timeline.get(since)
+  if (body !== undefined) return Response.json(body)
+  // An idle long poll hangs until the caller aborts.
+  return new Promise<Response>((_resolve, reject) => {
+    signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true})
+  })
+}
 
 import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {createElement, type ComponentType} from 'react'
@@ -197,10 +174,14 @@ const resetReplica = async (): Promise<void> => {
   await resetTestDb(sharedDb.db)
   await seedFlippedWorkspace()
 }
-beforeEach(resetReplica)
+beforeEach(async () => {
+  vi.stubGlobal('fetch', mockFetch)
+  await resetReplica()
+})
 afterEach(() => {
   stopIngest?.()
   stopIngest = undefined
+  vi.unstubAllGlobals()
 })
 
 describe('Matrix setup in a child-backed workspace', () => {
@@ -264,7 +245,7 @@ describe('matrix ingest into a child-backed workspace', () => {
       })
       try {
         await pollLoop(repo, {...destination, accessToken: 'fixture', autoStart: true}, controller.signal, {
-          http: {authedRequest: async (_method: string, _path: string, query: {since?: string}) => {
+          get: async (_path, query) => {
             since.push(query.since)
             if (!delivered && query.since === 'cursor-0') {
               delivered = true
@@ -272,7 +253,7 @@ describe('matrix ingest into a child-backed workspace', () => {
             }
             controller.abort()
             return {}
-          }},
+          },
         })
       } finally {
         unsubscribe()
