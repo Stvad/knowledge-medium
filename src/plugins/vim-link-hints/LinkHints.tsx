@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { matchKeybindingPress } from 'tinykeys'
 import { BLOCK_SHELL_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import { computeInstallableContexts } from '@/shortcuts/resolve.js'
@@ -29,6 +29,9 @@ function isAvailableLink(link: HTMLAnchorElement, shell: HTMLElement): boolean {
 }
 
 export function LinkHints() {
+  const touchCapable = navigator.maxTouchPoints > 0
+  const [usingKeyboard, setUsingKeyboard] = useState(false)
+  const hintsAvailable = !touchCapable || usingKeyboard
   const {runtime, active, contextConfigsByType, actions} = useActionDiscovery()
   const installable = useMemo(
     () => computeInstallableContexts(active, contextConfigsByType),
@@ -47,7 +50,30 @@ export function LinkHints() {
   useLayoutEffect(() => () => linkHintsToggle.close(), [])
 
   useLayoutEffect(() => {
-    if (!blockId || !letters) {
+    if (!touchCapable) return
+    // On touchscreens, use keyboard input outside editors as evidence
+    // that hint keys are usable. A subsequent touch or pen press hides them.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (usingKeyboard || !event.isTrusted || isImeKeyEvent(event) || !acceptsHintKeys(event.target)) return
+      // Discard any toggle requested while hints were unavailable.
+      linkHintsToggle.close()
+      setUsingKeyboard(true)
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch' || event.pointerType === 'pen') setUsingKeyboard(false)
+    }
+    // Share the hint handler's phase so this key cannot reach a newly installed handler.
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('pointerdown', onPointerDown, true)
+    }
+  }, [touchCapable, usingKeyboard])
+
+  useLayoutEffect(() => {
+    if (!hintsAvailable || !blockId || !letters) {
+      toggleOwner.current = null
       linkHintsToggle.close()
       return
     }
@@ -208,7 +234,7 @@ export function LinkHints() {
       unsubscribe()
       clear()
     }
-  }, [always, blockId, letters, presses, renderScopeId])
+  }, [always, blockId, hintsAvailable, letters, presses, renderScopeId])
 
   return null
 }
