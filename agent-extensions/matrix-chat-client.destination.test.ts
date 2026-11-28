@@ -38,7 +38,7 @@ vi.mock('@/data/stateBlocks.js', () => ({
 
 import contributions, {
   autoStartProp, checkpointId, homeserverProp, matrixIngestEffect,
-  createMatrixClient, nextBatchKey, pollLoop, roomIdProp, stoppedKey, tokenKey,
+  nextBatchKey, pollLoop, roomIdProp, stoppedKey, tokenKey,
 } from './matrix-chat-client.tsx'
 
 const a = {workspaceId: 'first', baseUrl: 'https://matrix.test', roomId: '!local:matrix.test'}
@@ -619,7 +619,7 @@ describe('Matrix device authorization', () => {
       let deliver!: (body: unknown) => void
       fetchReply.mockImplementationOnce(() => new Promise(resolve => { deliver = resolve }))
       const config = {...a, accessToken: 'fixture-token', autoStart: true}
-      const run = pollLoop(repo, config, controller.signal, createMatrixClient(config))
+      const run = pollLoop(repo, config, controller.signal)
       await vi.waitFor(() => expect(fetchReply).toHaveBeenCalledOnce())
       expect(cursorAt(0)).toBe('original')
       repo.activeWorkspaceId = otherWorkspace.workspaceId

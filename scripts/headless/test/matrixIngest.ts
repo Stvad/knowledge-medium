@@ -7,18 +7,18 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {promisify} from 'node:util'
 import {createBridgeClient} from '@knowledge-medium/agent-cli/client'
-import {expect, it, vi} from 'vitest'
+import {expect, vi} from 'vitest'
 import {BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams} from '@/data/blockSchema'
 import {typesProp, userIdProp} from '@/data/properties'
 import {pluginPrefsBlockId, stateChildBlockId, userPageBlockId} from '@/data/stateBlocks'
 import {makeBlockData} from '@/data/test/factories'
 import {USER_PREFS_PATH_PART} from '@/data/userPrefs'
-import {checkpointId, tokenKey} from '../../agent-extensions/matrix-chat-client'
-import {startBridge} from '../agent-eval/hosting'
-import {PID_FILENAME} from './config'
+import {checkpointId, tokenKey} from '../../../agent-extensions/matrix-chat-client'
+import {startBridge} from '../../agent-eval/hosting'
+import {PID_FILENAME} from '../config'
 
 const run = promisify(execFile)
-const launch = join(import.meta.dirname, 'launch.ts')
+const launch = join(import.meta.dirname, '../launch.ts')
 const workspaceId = 'fixture'
 const owner = 'owner'
 const member = 'member'
@@ -51,8 +51,7 @@ interface Poll {
   socket: Socket
 }
 
-// Starting the production launcher twice against one device took about 8 s locally.
-it('ingests Matrix from the owner’s preferences and resumes the device cursor after stopping a long poll', async () => {
+export async function verifyMatrixIngest() {
   const dir = await mkdtemp(join(tmpdir(), 'headless-matrix-launcher-'))
   const polls: Poll[] = []
   const sockets = new Set<Socket>()
@@ -94,7 +93,7 @@ it('ingests Matrix from the owner’s preferences and resumes the device cursor 
     const config = join(dir, 'config.json')
     const stateDir = join(dir, 'device')
     const sourcePath = join(dir, 'matrix.tsx')
-    const source = await readFile(new URL('../../agent-extensions/matrix-chat-client.tsx', import.meta.url), 'utf8')
+    const source = await readFile(new URL('../../../agent-extensions/matrix-chat-client.tsx', import.meta.url), 'utf8')
     const token = 'fixture-bridge-token'
     const tokenFile = join(dir, 'token.json')
     const initial = join(dir, 'initial.json')
@@ -133,9 +132,13 @@ it('ingests Matrix from the owner’s preferences and resumes the device cursor 
 
     bridge = await startBridge(dir)
     const client = createBridgeClient({bridgeUrl: bridge.url, token, workspaceId, timeoutMs: 5_000})
+    const runningHealth = {host: {
+      closedReason: null, readOnly: false,
+      extensions: [{block: grant, state: 'running', effectIds: ['matrix-chat-client.ingest']}],
+    }}
     const env = {
       PATH: process.env.PATH,
-      NODE_OPTIONS: `--import=${new URL('./test/hostPreload.ts', import.meta.url).href}`,
+      NODE_OPTIONS: `--import=${new URL('./hostPreload.ts', import.meta.url).href}`,
       HEADLESS_TEST_OWNER: owner,
       HEADLESS_TEST_ROLE: 'editor',
       HEADLESS_TEST_MATRIX: matrixOrigin,
@@ -172,9 +175,7 @@ it('ingests Matrix from the owner’s preferences and resumes the device cursor 
       try {
         await Promise.race([
           vi.waitFor(async () => {
-            expect(await client.runCommand({type: 'health'})).toMatchObject({
-              host: {closedReason: null, extensions: [{block: grant, state: 'running', effectIds: ['matrix-chat-client.ingest']}]},
-            })
+            expect(await client.runCommand({type: 'health'})).toMatchObject(runningHealth)
             expect(polls.length).toBeGreaterThanOrEqual(offset + 2)
             await checkIngest()
           }, {timeout: 32_000}),
@@ -211,7 +212,7 @@ it('ingests Matrix from the owner’s preferences and resumes the device cursor 
     await writeFile(changes, JSON.stringify([stageOwnerPrefs(false, 2)]))
     second.running.child.kill('SIGUSR2')
     await vi.waitFor(() => expect(sockets.has(second.pollSocket)).toBe(false), {timeout: 5_000})
-    expect(await client.runCommand({type: 'health'})).toMatchObject({host: {closedReason: null}})
+    expect(await client.runCommand({type: 'health'})).toMatchObject(runningHealth)
     await checkIngest()
     expect(polls).toHaveLength(4)
     await second.stop()
@@ -223,4 +224,4 @@ it('ingests Matrix from the owner’s preferences and resumes the device cursor 
     await new Promise<void>(resolve => server.close(() => resolve()))
     await rm(dir, {recursive: true, force: true})
   }
-}, 105_000)
+}

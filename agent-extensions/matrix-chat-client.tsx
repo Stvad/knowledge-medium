@@ -19,6 +19,7 @@ import { getPluginPrefsBlock, preferencesRootId, readPluginPref } from '@/data/s
 import { pluginBlockId } from '@/extensions/pluginIds.js'
 import { propertyEditorOverridesFacet, definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { DeletedConflictError } from '@/data/api/errors.js'
+import { createToggleStore } from '@/utils/toggleStore.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
 import { abortableSleep } from '@/utils/abortableSleep.js'
 import { showError, showInfo, showSuccess } from '@/utils/toast.js'
@@ -73,19 +74,7 @@ const legacyNextBatchKey = ({baseUrl, roomId}: Pick<MatrixDestination, 'baseUrl'
 const LEGACY_CONFIG_KEY = 'knowledge-medium:matrix-messages:config:v1'
 const LEGACY_CONFIG_FLAG = 'knowledge-medium:matrix:legacy-config-migrated:v1'
 
-// Setup-dialog visibility — a typed module store, NOT a window CustomEvent.
-// The connect action / header button flip it; the mounted dialog reads it
-// with useSyncExternalStore (the mechanism the app's own DialogHost uses).
-let setupOpen = false
-const setupListeners = new Set<() => void>()
-const setSetupOpen = (next: boolean) => {
-  setupOpen = next
-  setupListeners.forEach((notify) => notify())
-}
-const subscribeSetupOpen = (notify: () => void) => {
-  setupListeners.add(notify)
-  return () => setupListeners.delete(notify)
-}
+const setupDialog = createToggleStore('matrix-setup')
 
 // An explicit restart also wakes a poll waiting for a recovered cursor.
 const restartRequests = new CallbackSet('matrix-restart')
@@ -309,7 +298,7 @@ const forgetDeviceTokens = () => {
   for (const key of storageKeys(TOKEN_PREFIX)) localStorage.removeItem(key)
   clearLegacyTokens()
   requestRestart()
-  setSetupOpen(false)
+  setupDialog.close()
   showInfo('Removed Matrix tokens from this device.')
 }
 
@@ -473,7 +462,7 @@ const advanceCheckpoint = (repo: Repo, config: MatrixConfig, position: string, v
     return null
   }, {scope: ChangeScope.BlockDefault, skipUndo: true, description: 'Advance Matrix room checkpoint'})
 
-export const startFresh = async (repo: Repo, config: MatrixConfig, signal: AbortSignal, client: MatrixClient) => {
+export const startFresh = async (repo: Repo, config: MatrixConfig, signal: AbortSignal, client = createMatrixClient(config)) => {
   const requireNewRoom = async (tx?: Tx) => {
     const gap = await syncGapReason(repo, config.workspaceId, tx)
     if (gap) throw new Error(`Waiting for sync before starting fresh. ${gap}`)
@@ -531,7 +520,7 @@ interface MatrixClient {
   get: (path: string, query: Record<string, string>, signal: AbortSignal) => Promise<any>
 }
 
-export const createMatrixClient = (config: MatrixConfig): MatrixClient => ({
+const createMatrixClient = (config: MatrixConfig): MatrixClient => ({
   async get(path, query, signal) {
     const url = new URL(`/_matrix/client/v3${path}`, config.baseUrl)
     url.search = new URLSearchParams(query).toString()
@@ -1059,7 +1048,7 @@ const isRetryableError = (error: unknown): boolean => {
   return RETRYABLE_MESSAGE_RE.test(message)
 }
 
-export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: MatrixClient): Promise<void> => {
+export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient = createMatrixClient(config)): Promise<void> => {
   let nextBatch: string | null = null
   let needsCheckpoint = false
   let heldPolls = 0
@@ -1202,7 +1191,7 @@ export const matrixIngestEffect = {
         const activeConfig = {...config, accessToken: config.accessToken}
         const abort = new AbortController()
         currentAbort = abort
-        void pollLoop(repo, activeConfig, abort.signal, createMatrixClient(activeConfig)).catch(error => {
+        void pollLoop(repo, activeConfig, abort.signal).catch(error => {
           if (!abort.signal.aborted) console.error('[matrix-messages]', error)
         })
       }
@@ -1237,7 +1226,7 @@ export const matrixIngestEffect = {
 
 const MatrixSetupDialog = () => {
   const repo = useRepo()
-  const open = useSyncExternalStore(subscribeSetupOpen, () => setupOpen)
+  const open = useSyncExternalStore(setupDialog.subscribe, setupDialog.isOpen)
   const [homeserver, setHomeserver] = useState('https://matrix.org')
   const [roomId, setRoomId] = useState('')
   const [token, setToken] = useState('')
@@ -1310,7 +1299,7 @@ const MatrixSetupDialog = () => {
       if (selectedToken) bindToken(destination, selectedToken, bindPending)
       resumeDevice(destination)
       showSuccess('Matrix connected.')
-      setSetupOpen(false)
+      setupDialog.close()
     } catch (error) {
       showError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1319,7 +1308,7 @@ const MatrixSetupDialog = () => {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setSetupOpen}>
+    <Dialog open={open} onOpenChange={setupDialog.set}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Connect Matrix</DialogTitle>
@@ -1367,7 +1356,7 @@ const MatrixSetupDialog = () => {
         {pendingToken() && <p>On the original workspace, bind the saved device token to keep its room position. Saving a pasted token uses this workspace’s position. Both clear the old unscoped credentials.</p>}
         <Button variant='ghost' disabled={saving} onClick={forgetDeviceTokens}>Forget all Matrix tokens on this device</Button>
         <DialogFooter>
-          <Button variant='ghost' onClick={() => setSetupOpen(false)} disabled={saving}>Cancel</Button>
+          <Button variant='ghost' onClick={setupDialog.close} disabled={saving}>Cancel</Button>
           {open && destination && !token && eligibleLegacyToken(destination) && (
             <Button variant='outline' disabled={saving} onClick={() => void save(true)}>
               Bind saved device token
@@ -1423,7 +1412,7 @@ const ConnectedEditor = ({value, onChange, block}: PropertyEditorProps<boolean>)
         : (
           <Button
             size='sm'
-            onClick={() => setSetupOpen(true)}
+            onClick={setupDialog.open}
           >Connect…</Button>
           )}
       <Button
@@ -1471,7 +1460,7 @@ const connectAction = {
   id: 'matrix.connect',
   description: 'Matrix: connect / change token',
   context: ActionContextTypes.GLOBAL,
-  handler: () => { setSetupOpen(true) },
+  handler: setupDialog.open,
 }
 
 const startAction = {
@@ -1515,7 +1504,7 @@ const startFreshAction = {
     const config = {...candidate, accessToken: candidate.accessToken}
     try {
       if (!window.confirm('Start Matrix ingest from now? Earlier messages will be skipped.')) return
-      await startFresh(repo, config, new AbortController().signal, createMatrixClient(config))
+      await startFresh(repo, config, new AbortController().signal)
       requestRestart()
       showSuccess('Matrix ingest started from now.')
     } catch (error) {

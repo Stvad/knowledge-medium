@@ -4,7 +4,7 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb.j
 import {createTestRepo} from '@/data/test/createTestRepo.js'
 import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension.js'
 import {diagnosticsFacet, type DiagnosticSourceContribution} from '@/plugins/diagnostics/facet.js'
-import matrixContributions, {createMatrixClient, nextBatchKey, pollLoop} from './matrix-chat-client.tsx'
+import matrixContributions, {nextBatchKey, pollLoop} from './matrix-chat-client.tsx'
 
 const config = {
   workspaceId: 'workspace', baseUrl: 'https://matrix.test', roomId: '!room:matrix.test',
@@ -66,7 +66,7 @@ const run = async (...replies: unknown[]) => {
     return Response.json(reply)
   })
   try {
-    await pollLoop(repo, config, controller.signal, createMatrixClient(config))
+    await pollLoop(repo, config, controller.signal)
     expect(replies).toHaveLength(0)
     return requests
   } finally {

@@ -14,6 +14,7 @@ import {createBridgeClient} from '@knowledge-medium/agent-cli/client'
 import {expect, it, vi} from 'vitest'
 import {startBridge} from '../agent-eval/hosting'
 import {PID_FILENAME} from './config'
+import {verifyMatrixIngest} from './test/matrixIngest'
 
 const run = promisify(execFile)
 
@@ -201,6 +202,9 @@ it('runs only reviewed bytes, reports normalized synced drift and refuses invali
     await rm(dir, {recursive: true, force: true})
   }
 }, 70_000)
+
+// Run daemon boots in this file sequentially. Two boots and storage provisioning took 9 s locally.
+it('ingests Matrix from the owner’s preferences and resumes the device cursor after stopping a long poll', verifyMatrixIngest, 105_000)
 
 function stageExtension(id: string, content: string, stamp: number) {
   return [BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(makeBlockData({
