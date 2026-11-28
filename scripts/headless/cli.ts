@@ -4,6 +4,22 @@ import {acquirePidfile, releasePidfile} from '../../packages/agent-dispatch/src/
 import {setAuthStorage} from '@/services/authStorage'
 import {DEVICE_STORAGE_FILENAME, PID_FILENAME, readConfig} from './config'
 
+async function readStorageValue(): Promise<string> {
+  const input = process.stdin
+  const interactive = input.isTTY === true
+  // Terminal mode disables kernel echo and keeps line editing. With no
+  // output stream, readline has nowhere to display the typed characters.
+  const prompt = createInterface({input, terminal: interactive, crlfDelay: Infinity})
+  try {
+    if (interactive) process.stderr.write('Storage value: ')
+    for await (const line of prompt) return line
+    throw new Error('No storage value received on stdin')
+  } finally {
+    prompt.close()
+    if (interactive) process.stderr.write('\n')
+  }
+}
+
 async function main() {
   const [action, file, option] = process.argv.slice(2)
   const config = await readConfig(file)
@@ -12,6 +28,11 @@ async function main() {
   try {
     if (!process.execArgv.includes(`--localstorage-file=${join(config.stateDir, DEVICE_STORAGE_FILENAME)}`)) {
       throw new Error('Start this host with pnpm headless to select its persistent device storage')
+    }
+    if (action === 'storage') {
+      const value = await readStorageValue()
+      localStorage.setItem(option, value)
+      return
     }
     setAuthStorage(globalThis.localStorage)
     const {supabase, sessionUserToAppUser} = await import('@/services/supabase')

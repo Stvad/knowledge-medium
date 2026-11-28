@@ -61,7 +61,7 @@ export const createGraph = (bridgeClient: BridgeClient) => {
    *  user's undo stack — a cmd-Z in the app must undo the person's own edit,
    *  not flip a task back to `running`. */
   const writeTaskProps = (id: string, properties: Record<string, unknown>) =>
-    bridgeGraph.updateBlock(id, {properties, undoable: false})
+    bridgeGraph.updateBlock(id, {properties, undoable: false, exactIds: true})
 
   // KNOWN LIMITATION: this write goes through the bridge `update-block`
   // command, which stamps user_updated_at/updatedBy like a user edit —
@@ -211,9 +211,9 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     memoryEntries,
     resolvePageId: bridgeGraph.resolvePageId,
     backlinkSources: bridgeGraph.backlinkSources,
-    getBlock: bridgeGraph.getBlock,
+    getBlock: (id: string) => bridgeGraph.getBlock(id, {exactIds: true}),
     ancestors: bridgeGraph.ancestors,
-    getSubtree: bridgeGraph.getSubtree,
+    getSubtree: (id: string) => bridgeGraph.getSubtree(id, {exactIds: true}),
     sqlAll: bridgeGraph.sqlAll,
     blockViews: bridgeGraph.blockViews,
     beingEditedBlocks: bridgeGraph.beingEditedBlocks,

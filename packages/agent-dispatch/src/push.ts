@@ -78,7 +78,7 @@ export const buildRegistrationWatchers = async (
           sql: watcher.sql,
           params: watcher.params,
           tables: watcher.tables,
-          settleMs: QUERY_SETTLE_MS,
+          settleMs: watcher.rowTasks ? watcher.settleMs : QUERY_SETTLE_MS,
       },
   ))
 

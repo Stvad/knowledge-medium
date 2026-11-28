@@ -21,10 +21,8 @@ let bridge: http.Server
 let bridgeUrl: string
 const requests: string[] = []
 const commands: Array<Record<string, unknown>> = []
-/** Set, the stub serves `source-1` as a pending mention whose properties
- *  follow the daemon's writes, so a run gets claimed and replied to; unset, it
- *  serves a running block with a cancel no run owns. */
-let pendingMention: Record<string, unknown> | null = null
+/** Both the backlink scan and the fresh block read see the daemon's writes. */
+let mentionProps: Record<string, unknown>
 
 beforeEach(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-dispatch-selection-'))
@@ -33,7 +31,7 @@ beforeEach(async () => {
   selectionDir = path.join(tempDir, 'contributors')
   requests.length = 0
   commands.length = 0
-  pendingMention = null
+  mentionProps = {'agent:status': 'running', 'agent:cancel': true}
   await fs.writeFile(tokenFile, JSON.stringify({profiles: {'dispatch-test': {token: 'STUB-TOKEN'}}}))
   await fs.writeFile(configPath, JSON.stringify({
     profile: 'dispatch-test',
@@ -63,28 +61,23 @@ beforeEach(async () => {
       if (req.method === 'POST' && req.url === '/runtime/commands') {
         const command = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
         commands.push(command)
-        if (pendingMention && command.type === 'update-block') {
-          Object.assign(pendingMention, command.properties as Record<string, unknown>)
+        if (command.type === 'update-block' && command.id === 'source-1') {
+          Object.assign(mentionProps, command.properties as Record<string, unknown>)
         }
         return send(202, {id: `command-${commands.length}`})
       }
       const commandMatch = req.method === 'GET' && new URL(req.url!, 'http://localhost').pathname.match(/^\/runtime\/commands\/([^/]+)$/)
       if (commandMatch) {
         const command = commands[Number(commandMatch[1]!.slice('command-'.length)) - 1]
-        const mention = pendingMention && command?.type === 'get-block'
-          ? {id: 'source-1', content: '[[claude]] x', properties: pendingMention, userUpdatedAt: 1}
-          : pendingMention && command?.type === 'sql' && String(command.sql).includes('edited_at')
-            ? [{id: 'source-1', properties_json: JSON.stringify(pendingMention), edited_at: 1}]
-            : pendingMention && command?.type === 'sql'
-              ? []
-              : undefined
-        const value = mention !== undefined ? mention : command?.type === 'page'
-          ? {match: {id: 'page-1'}}
-          : command?.type === 'backlinks'
-            ? {backlinks: [{id: 'source-1', deepLink: 'link:source-1', content: '[[claude]]'}]}
-            : command?.type === 'sql' && String(command.sql).includes('properties_json')
-              ? [{id: 'source-1', properties_json: '{"agent:cancel":true,"agent:status":"running"}', edited_at: 1}]
-              : []
+        const value = command?.type === 'get-block' && command.id === 'source-1'
+          ? {id: 'source-1', content: '[[claude]] x', properties: mentionProps, userUpdatedAt: 1}
+          : command?.type === 'sql' && String(command.sql).includes('edited_at')
+            ? [{id: 'source-1', properties_json: JSON.stringify(mentionProps), edited_at: 1}]
+            : command?.type === 'page'
+              ? {match: {id: 'page-1'}}
+              : command?.type === 'backlinks'
+                ? {backlinks: [{id: 'source-1', deepLink: 'link:source-1', content: '[[claude]]'}]}
+                : []
         return send(200, {
           id: commandMatch[1],
           status: 'completed',
@@ -205,7 +198,7 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
     const ownDir = path.join(tempDir, 'agent-dispatch-host')
     await fs.mkdir(ownDir)
     await fs.writeFile(path.join(ownDir, 'state.json'), JSON.stringify({backlinkBaselines: {mentions: 0}}))
-    pendingMention = {}
+    mentionProps = {}
 
     const result = await runDaemon()
 
@@ -238,7 +231,7 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
       watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude'}],
     }))
     await fs.writeFile(statePath, JSON.stringify({backlinkBaselines: {mentions: 0}}))
-    pendingMention = {}
+    mentionProps = {}
 
     await runDaemon()
 
@@ -285,7 +278,7 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
     expect(update).toMatchObject({
       type: 'update-block',
       id: 'source-1',
-      properties: {'agent:cancel': ''},
+      properties: {'agent:status': 'error', 'agent:error': 'cancelled', 'agent:cancel': ''},
       contributorId: null,
     })
     expect(commands.map(command => command.type)).not.toContain('create-block')

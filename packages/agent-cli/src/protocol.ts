@@ -194,6 +194,7 @@ export const getBlockCommandSchema = z.looseObject({
   // discriminatedUnion, so we leave the constraint to runtime.
   id: z.string().optional(),
   blockId: z.string().optional(),
+  ...exactIdsField,
   ...contributorField,
   ...commandIdField,
 })
@@ -201,6 +202,7 @@ export const getBlockCommandSchema = z.looseObject({
 export const getSubtreeCommandSchema = z.looseObject({
   type: z.literal('get-subtree'),
   rootId: z.string(),
+  ...exactIdsField,
   ...contributorField,
   ...commandIdField,
 })

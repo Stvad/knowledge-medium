@@ -2086,8 +2086,8 @@ const resolveRawBlockRef = async (repo: Repo, ref: string, override: unknown): P
 
 /** A raw read's target, from a ref; a named workspace must be readable and
  *  hold the block, as for the raw backlink reads. */
-const resolveRawReadTarget = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
-  const id = await resolveRawBlockRef(repo, ref, override)
+const resolveRawReadTarget = async (repo: Repo, ref: string, override: unknown, exactIds?: boolean): Promise<string> => {
+  const id = exactIds === true ? ref : await resolveRawBlockRef(repo, ref, override)
   if (override !== undefined) await resolveBlockWorkspaceId(repo, id, override)
   return id
 }
@@ -2307,7 +2307,7 @@ export const createAgentRuntimeContext = ({
     ReactDOM,
     // Read on access, so building a context needs no DOM until a command uses one.
     get window() { return window },
-    get document() { return document },
+    get document() { return globalThis.document },
   }
 
   return context
@@ -2394,6 +2394,7 @@ const executeAttributedCommand = async (
         context.repo,
         requireString(command.blockId ?? command.id, 'blockId'),
         command.workspaceId,
+        command.exactIds,
       ))
 
     case 'get-subtree':
@@ -2401,6 +2402,7 @@ const executeAttributedCommand = async (
         context.repo,
         requireString(command.rootId, 'rootId'),
         command.workspaceId,
+        command.exactIds,
       ))
 
     case 'view-block':

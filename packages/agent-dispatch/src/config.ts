@@ -175,6 +175,20 @@ export type CodexSandbox = z.infer<typeof codexSandboxSchema>
 export type CodexApprovalPolicy = z.infer<typeof codexApprovalPolicySchema>
 export type CodexApprovalsReviewer = z.infer<typeof codexApprovalsReviewerSchema>
 
+const defaultSettleMs = 250
+const defaultEditHoldMs = 120_000
+
+const blockTiming = {
+  /** Wait this long after a block's last change, so the final debounced
+   *  write of an edit lands before the daemon snapshots the block. */
+  settleMs: z.number().int().nonnegative()
+    .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`),
+  /** A block still open in an editor is not claimed until it has gone
+   *  unedited this long: the user may just be thinking, but a device that
+   *  vanished mid-edit leaves its editing flag set forever. */
+  editHoldMs: z.number().int().nonnegative(),
+}
+
 const watcherBase = {
   name: z.string().min(1),
   /** Keep a watcher parked in the config without registering it,
@@ -197,6 +211,8 @@ const watcherBase = {
 
 const backlinksWatcherSchema = z.strictObject({
   ...watcherBase,
+  settleMs: blockTiming.settleMs.default(defaultSettleMs),
+  editHoldMs: blockTiming.editHoldMs.default(defaultEditHoldMs),
   kind: z.literal('backlinks'),
   /** Page alias whose NEW backlinks become tasks (e.g. "claude"). */
   target: z.string().min(1),
@@ -205,15 +221,6 @@ const backlinksWatcherSchema = z.strictObject({
   /** Removed in 0.8.0: refused with a pointer to its replacements, since
    *  keeping the name would turn an old quiet period into the edit-hold cap. */
   quietMs: z.never({error: 'quietMs was removed in 0.8.0: use settleMs and editHoldMs (README "Upgrade to 0.8.0")'}).optional(),
-  /** Wait this long after a mention's last change, so the final debounced
-   *  write of an edit lands before the daemon snapshots the block. */
-  settleMs: z.number().int().nonnegative()
-    .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
-    .default(250),
-  /** A mention still open in an editor is not claimed until it has gone
-   *  unedited this long: the user may just be thinking, but a device that
-   *  vanished mid-edit leaves its editing flag set forever. */
-  editHoldMs: z.number().int().nonnegative().default(120_000),
   /** Show the reply being BUILT LIVE as the run streams, instead of posting
    *  it only once at the end. Orthogonal to `splitReply`: streaming just
    *  reconciles the reply subtree with the growing text on each tick (a
@@ -240,6 +247,8 @@ const backlinksWatcherSchema = z.strictObject({
 
 const queryWatcherSchema = z.strictObject({
   ...watcherBase,
+  settleMs: blockTiming.settleMs.optional(),
+  editHoldMs: blockTiming.editHoldMs.optional(),
   kind: z.literal('query'),
   /** Read-only SQL run through the bridge; rows must expose an `id`
    *  column — new ids (vs the state file) trigger a run. Enforced at
@@ -255,7 +264,26 @@ const queryWatcherSchema = z.strictObject({
    *  in-tab watch-events registration; default: blocks). The polling
    *  sweep ignores this. */
   tables: z.array(z.string().min(1)).max(WATCH_EVENTS_MAX_TABLES).optional(),
-})
+  /** Run once per new row with retryable block lifecycle state. */
+  rowTasks: z.boolean().default(false),
+  /** Post each row task result as a reply block. */
+  reply: z.boolean().default(true),
+}).superRefine((watcher, ctx) => {
+  if (!watcher.rowTasks) {
+    for (const setting of ['settleMs', 'editHoldMs'] as const) {
+      if (Object.hasOwn(watcher, setting)) {
+        ctx.addIssue({code: 'custom', path: [setting], message: `${setting} requires rowTasks=true`})
+      }
+    }
+  }
+  if (watcher.rowTasks && watcher.delivery === 'channel') {
+    ctx.addIssue({code: 'custom', path: ['delivery'], message: 'rowTasks requires delivery="spawn"; channel delivery cannot guarantee cancellation or retries'})
+  }
+}).transform(watcher => ({
+  ...watcher,
+  settleMs: watcher.settleMs ?? defaultSettleMs,
+  editHoldMs: watcher.editHoldMs ?? defaultEditHoldMs,
+}))
 
 const rawWatcherSchema = z.discriminatedUnion('kind', [
   backlinksWatcherSchema,

@@ -78,6 +78,17 @@ describe('buildRegistrationWatchers', () => {
     ])
   })
 
+  it('uses query settleMs for row tasks while plain queries keep burst coalescing', async () => {
+    const watchers = await buildRegistrationWatchers(parseConfig({
+      workspaceId: 'ws-test',
+      watchers: [
+        {kind: 'query', name: 'plain', sql: 'SELECT id FROM blocks'},
+        {kind: 'query', name: 'rows', sql: 'SELECT id FROM blocks', rowTasks: true, settleMs: 7_000},
+      ],
+    }).watchers, graph)
+    expect(watchers.map(watcher => watcher.settleMs)).toEqual([1_000, 7_000])
+  })
+
   it('clears the daemon consumer with an empty registration', async () => {
     const client = {runCommand: vi.fn(async () => ({}))}
 

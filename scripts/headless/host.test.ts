@@ -42,7 +42,6 @@ beforeEach(async () => {
   await clearSyncState(fixture.db)
   await resetTestDb(fixture.db)
   stubLocalStorage()
-  vi.stubGlobal('document', {querySelectorAll: () => [], baseURI: 'node:headless'})
   // The core supplies the checkpoint, timestamps and all raw rows. Its test
   // transport has no socket, so only the connection bit is supplied here.
   vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'connected', 'get').mockReturnValue(true)
@@ -93,6 +92,7 @@ it('stops an encrypted boot aborted while its key command runs, before connectin
 
 // This database boot took 0.36–1.45 s in the focused run.
 it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download without queuing writes, returning device secrets or re-materializing it', async mode => {
+  expect(typeof document).toBe('undefined')
   const repos = vi.spyOn(Repo.prototype, 'setActiveWorkspaceId')
   // Whether the cold note had landed when the observer started draining.
   const notedAtObserverStart: Promise<boolean>[] = []
