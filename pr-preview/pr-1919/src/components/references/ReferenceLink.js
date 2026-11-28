@@ -1,1 +1,1 @@
-export{YN as ReferenceLink}from"../../../chunks/app-DdaBqYYK.js";
+export{YN as ReferenceLink}from"../../../chunks/app-BuyVLDrZ.js";

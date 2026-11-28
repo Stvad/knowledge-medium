@@ -1,1 +1,1 @@
-export{Ftt as kernelDataExtension}from"../../chunks/app-DdaBqYYK.js";
+export{Ftt as kernelDataExtension}from"../../chunks/app-BuyVLDrZ.js";
