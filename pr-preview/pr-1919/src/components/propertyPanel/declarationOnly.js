@@ -1,0 +1,1 @@
+export{xG as declarationOnlyDefinitionForName,SG as declarationOnlyStatusText}from"../../../chunks/app-CIp246Ux.js";

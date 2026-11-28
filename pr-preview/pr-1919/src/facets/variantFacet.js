@@ -1,0 +1,1 @@
+export{jW as defineVariant,MW as defineVariantFacet}from"../../chunks/app-CIp246Ux.js";

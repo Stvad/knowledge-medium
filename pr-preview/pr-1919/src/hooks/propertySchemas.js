@@ -1,0 +1,1 @@
+export{LY as usePropertySchemas}from"../../chunks/app-CIp246Ux.js";

@@ -1,0 +1,1 @@
+export{G1 as dailyNotesDataExtension}from"../../../chunks/app-CIp246Ux.js";

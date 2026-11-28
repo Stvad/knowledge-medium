@@ -1,0 +1,1 @@
+export{d_ as contributorsPlugin}from"../../../chunks/app-CIp246Ux.js";

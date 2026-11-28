@@ -1,0 +1,1 @@
+export{kft as aliasSeatNamespacesInTx,Aft as resolveAliasSeatNamespaces}from"../../chunks/app-CIp246Ux.js";

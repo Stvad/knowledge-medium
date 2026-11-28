@@ -1,0 +1,1 @@
+export{EU as ExtensionRenderBoundary}from"../../chunks/app-CIp246Ux.js";

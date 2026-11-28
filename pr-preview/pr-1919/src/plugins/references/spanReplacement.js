@@ -1,0 +1,1 @@
+export{qQ as preferredSpanReplacement}from"../../../chunks/app-CIp246Ux.js";

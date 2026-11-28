@@ -1,0 +1,1 @@
+export{Nz as BlockLoadingPlaceholder}from"../../chunks/app-CIp246Ux.js";

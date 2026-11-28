@@ -1,0 +1,1 @@
+export{iT as useAssetObjectUrl}from"../../../chunks/app-CIp246Ux.js";

@@ -1,0 +1,1 @@
+export{pC as blockDragPlugin}from"../../../chunks/app-CIp246Ux.js";

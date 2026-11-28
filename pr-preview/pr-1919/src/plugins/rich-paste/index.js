@@ -1,0 +1,1 @@
+export{QC as richPastePlugin}from"../../../chunks/app-CIp246Ux.js";

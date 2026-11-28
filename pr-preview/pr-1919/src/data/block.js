@@ -1,0 +1,1 @@
+export{dtt as Block,ftt as requireLoadedBlock}from"../../chunks/app-CIp246Ux.js";

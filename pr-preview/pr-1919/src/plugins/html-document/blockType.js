@@ -1,0 +1,1 @@
+export{c$ as htmlDocumentTypeSeed}from"../../../chunks/app-CIp246Ux.js";

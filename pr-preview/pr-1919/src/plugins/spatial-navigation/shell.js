@@ -1,0 +1,1 @@
+export{wD as spatialNavigationShellDecorator}from"../../../chunks/app-CIp246Ux.js";

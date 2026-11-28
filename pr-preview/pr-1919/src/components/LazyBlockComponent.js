@@ -1,0 +1,1 @@
+export{Tz as LazyBlockComponent}from"../../chunks/app-CIp246Ux.js";

@@ -1,0 +1,1 @@
+export{Fr as KeyCaptureInput}from"../../../chunks/app-CIp246Ux.js";

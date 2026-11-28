@@ -1,0 +1,1 @@
+export{eB as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,tB as openExtensionsSettings}from"../../chunks/app-CIp246Ux.js";

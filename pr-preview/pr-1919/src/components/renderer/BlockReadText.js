@@ -1,0 +1,1 @@
+export{_U as BlockReadText}from"../../../chunks/app-CIp246Ux.js";

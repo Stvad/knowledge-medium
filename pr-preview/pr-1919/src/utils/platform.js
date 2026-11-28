@@ -1,0 +1,1 @@
+export{bJ as isIOS,xJ as isMacPlatform}from"../../chunks/app-CIp246Ux.js";

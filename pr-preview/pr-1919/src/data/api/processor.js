@@ -1,0 +1,1 @@
+export{x_t as definePostCommitProcessor}from"../../../chunks/app-CIp246Ux.js";

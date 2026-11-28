@@ -1,0 +1,1 @@
+export{CX as BootFallback}from"../../../chunks/app-CIp246Ux.js";

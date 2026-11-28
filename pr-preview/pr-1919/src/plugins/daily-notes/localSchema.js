@@ -1,0 +1,1 @@
+export{K1 as dailyNotesLocalSchema}from"../../../chunks/app-CIp246Ux.js";

@@ -1,0 +1,1 @@
+export{lF as useCommandPaletteActions}from"../../../chunks/app-CIp246Ux.js";

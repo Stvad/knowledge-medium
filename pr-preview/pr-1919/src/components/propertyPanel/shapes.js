@@ -1,0 +1,1 @@
+export{VY as propertyShapeLabel}from"../../../chunks/app-CIp246Ux.js";

@@ -1,0 +1,1 @@
+export{YO as BreadcrumbRenderer}from"../../../chunks/app-CIp246Ux.js";

@@ -1,0 +1,1 @@
+export{VR as EffectReconciler,HR as LiveRuntimeHandle}from"../../chunks/app-CIp246Ux.js";

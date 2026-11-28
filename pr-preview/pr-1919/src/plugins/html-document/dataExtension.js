@@ -1,0 +1,1 @@
+export{s$ as htmlDocumentDataExtension}from"../../../chunks/app-CIp246Ux.js";

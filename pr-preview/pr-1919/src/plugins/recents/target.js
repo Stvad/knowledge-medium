@@ -1,0 +1,1 @@
+export{Aj as openRecentsPage}from"../../../chunks/app-CIp246Ux.js";

@@ -1,0 +1,1 @@
+export{Kg as SOURCE_SPANS_ATTRIBUTE,qg as THREAD_HIGHLIGHTS_INPUT,Jg as remarkAnnotationMarks,Yg as renderedSourceKey,Xg as threadMarksMarkdownExtension}from"../../../chunks/app-CIp246Ux.js";

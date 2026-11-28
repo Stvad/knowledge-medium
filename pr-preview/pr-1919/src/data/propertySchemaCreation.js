@@ -1,0 +1,1 @@
+export{HY as adoptOrCreatePropertySchema}from"../../chunks/app-CIp246Ux.js";

@@ -1,0 +1,1 @@
+export{LZ as tablesDataExtension}from"../../../chunks/app-CIp246Ux.js";

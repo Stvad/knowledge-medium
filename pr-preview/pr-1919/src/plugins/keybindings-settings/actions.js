@@ -1,0 +1,1 @@
+export{JP as openKeybindingsSettingsAction}from"../../../chunks/app-CIp246Ux.js";
