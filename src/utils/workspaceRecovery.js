@@ -1,1 +1,1 @@
-export{qu as describeWorkspaceRematerialization,Ju as rematerializeWorkspaceWithFeedback}from"../../chunks/app-CzzPTp_C.js";
+export{qu as describeWorkspaceRematerialization,Ju as rematerializeWorkspaceWithFeedback}from"../../chunks/app-C1hHvaPz.js";

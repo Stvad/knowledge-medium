@@ -1,1 +1,1 @@
-export{_1 as PLACES_UNDER_BLOCK_QUERY,v1 as placesUnderBlockQuery}from"../../../chunks/app-CzzPTp_C.js";
+export{_1 as PLACES_UNDER_BLOCK_QUERY,v1 as placesUnderBlockQuery}from"../../../chunks/app-C1hHvaPz.js";

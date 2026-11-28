@@ -1,1 +1,1 @@
-export{HP as EXTENSIONS_PAGE_TITLE,UP as TUTORIAL_DEFAULT_TITLE,WP as TUTORIAL_VIM_TITLE,GP as extensionsPageOutline,KP as tutorialOutline}from"../../../chunks/app-CzzPTp_C.js";
+export{HP as EXTENSIONS_PAGE_TITLE,UP as TUTORIAL_DEFAULT_TITLE,WP as TUTORIAL_VIM_TITLE,GP as extensionsPageOutline,KP as tutorialOutline}from"../../../chunks/app-C1hHvaPz.js";

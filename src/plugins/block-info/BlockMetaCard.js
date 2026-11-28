@@ -1,1 +1,1 @@
-export{vx as BlockMetaCard}from"../../../chunks/app-CzzPTp_C.js";
+export{vx as BlockMetaCard}from"../../../chunks/app-C1hHvaPz.js";

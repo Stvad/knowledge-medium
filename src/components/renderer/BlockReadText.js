@@ -1,1 +1,1 @@
-export{ZU as BlockReadText}from"../../../chunks/app-CzzPTp_C.js";
+export{ZU as BlockReadText}from"../../../chunks/app-C1hHvaPz.js";
