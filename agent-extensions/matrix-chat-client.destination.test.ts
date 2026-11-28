@@ -59,17 +59,17 @@ function makePrefs(workspaceId: string) {
   }
 }
 
-function makeRepo() {
+function makeRepo(destination = a) {
   const prefs = new Map([a, otherWorkspace].map(d => [d.workspaceId, makePrefs(d.workspaceId)]))
   const listeners = new Set<() => void>()
   return {
-    activeWorkspaceId: a.workspaceId, user: {id: 'fixture-user'}, prefs,
+    activeWorkspaceId: destination.workspaceId, user: {id: 'fixture-user'}, prefs,
     block: (id: string) => prefs.get(id),
     db: {
       getAll: async () => [],
       getOptional: async (_sql: string, [id]: string[]) => {
-        if (id === checkpointId(a)) return {deleted: 0, position: 'shared-position'}
-        return id === a.workspaceId ? {name: workspaceName} : null
+        if (id === checkpointId(destination)) return {deleted: 0, position: 'shared-position'}
+        return id === destination.workspaceId ? {name: workspaceName} : null
       },
     },
     tx: vi.fn(async (run: (tx: {setProperty: (id: string, prop: {name: string}, value: unknown) => void}) => Promise<void>) => {
@@ -197,25 +197,45 @@ describe('Matrix device authorization', () => {
     },
   )
 
-  it('shows the authorized destination and resumes only that room when binding a new token', async () => {
-    const repo = makeRepo()
-    const prefs = repo.prefs.get(a.workspaceId)!
+  it('uses the receiving workspace checkpoint when saving a new token beside a later unscoped cursor', async () => {
+    const repo = makeRepo(otherWorkspace)
+    const prefs = repo.prefs.get(otherWorkspace.workspaceId)!
     prefs.set(homeserverProp, legacyBaseUrl)
-    localStorage.setItem(legacyCursorKey, cursorState('previous'))
+    localStorage.setItem(legacyCursorKey, cursorState('later-unscoped'))
     localStorage.setItem(legacyTokenKey, 'unselected-token')
     localStorage.setItem(stoppedKey(a), '1')
     localStorage.setItem(stoppedKey(otherWorkspace), '1')
+    stop = matrixIngestEffect.start({repo})
     openSetup(repo)
     await correctLegacyOrigin()
     fireEvent.change(screen.getByLabelText('Access token'), {target: {value: 'new-token'}})
     expectDestination()
     fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-    await vi.waitFor(() => expect(localStorage.getItem(tokenKey(a))).toBe('new-token'))
-    expect(localStorage.getItem(stoppedKey(a))).toBeNull()
-    expect(localStorage.getItem(stoppedKey(otherWorkspace))).toBe('1')
-    expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('previous'))
-    expect(localStorage.getItem(legacyCursorKey)).toBe(cursorState('previous'))
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
+    expect(authedRequest.mock.calls[0].slice(1, 3)).toEqual(['/sync', expect.objectContaining({since: 'shared-position'})])
+    expect(localStorage.getItem(tokenKey(otherWorkspace))).toBe('new-token')
+    expect(localStorage.getItem(stoppedKey(otherWorkspace))).toBeNull()
+    expect(localStorage.getItem(stoppedKey(a))).toBe('1')
+    expect(localStorage.getItem(nextBatchKey(otherWorkspace))).toBeNull()
+    expect(localStorage.getItem(legacyCursorKey)).toBe(cursorState('later-unscoped'))
     expect(localStorage.getItem(legacyTokenKey)).toBeNull()
+  })
+
+  it('resumes the saved device cursor when Connect keeps the existing token', async () => {
+    const repo = makeRepo()
+    localStorage.setItem(tokenKey(a), 'bound-token')
+    localStorage.setItem(nextBatchKey(a), cursorState('local'))
+    localStorage.setItem(stoppedKey(a), '1')
+    stop = matrixIngestEffect.start({repo})
+    openSetup(repo)
+    await screen.findByDisplayValue(a.roomId)
+    expect((screen.getByLabelText('Access token') as HTMLInputElement).value).toBe('')
+    fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
+    expect(authedRequest.mock.calls[0][2].since).toBe('local')
+    expect(localStorage.getItem(stoppedKey(a))).toBeNull()
+    expect(localStorage.getItem(nextBatchKey(a))).toBe(cursorState('local'))
+    expect(localStorage.getItem(tokenKey(a))).toBe('bound-token')
   })
 
   it('stops and restarts this device without losing its credential or changing the synced auto-start preference', async () => {

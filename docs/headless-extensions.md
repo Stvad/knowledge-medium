@@ -179,7 +179,7 @@ To allowlist an extension or take a new version, the operator:
 
 ### Moving an existing Matrix room from a tab to the host
 
-1. Reinstall and approve the updated Matrix extension on the original tab. Reload or close older copies. Keep the tab’s credential and saved position. Drain pending uploads and resolve rejections. The next completed poll publishes the **Matrix room checkpoint** automatically. A persistent hold appears in Matrix diagnostics with both queue counts.
+1. Reinstall and approve the updated Matrix extension on the original tab. Reload or close older copies. If the original tab still offers **Bind saved device token**, use it there to retain its legacy room position. Drain pending uploads and resolve rejections. The next completed poll publishes the **Matrix room checkpoint** automatically. A persistent hold appears in Matrix diagnostics with both queue counts.
 2. On a write-enabled host with extension loading available, select the owner’s preferences page and allowlist the reviewed extension. With the daemon stopped, run `pnpm headless storage set <config.json> '<key>'` and enter the same Matrix access token. The key is `knowledge-medium:matrix:token:v2:` followed by the compact JSON array `["<workspace-id>","https://<homeserver-origin>","<room-id>"]`.
 3. Start the host and let it sync. It uses its own valid cursor if present, otherwise the downloaded checkpoint. Check the Matrix diagnostic, then run **Matrix: stop message ingest on this device** in the old browser. This stops its other tabs and preserves the synced auto-start preference. Send a distinctive room message and verify it appears once. To switch back, run **Matrix: start message ingest** on the original tab.
 

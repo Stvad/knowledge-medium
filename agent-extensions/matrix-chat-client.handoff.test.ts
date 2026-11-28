@@ -193,8 +193,15 @@ const historicalMessage = async (deleted: boolean) => {
   await appendMatrixMessage(receiver.repo, config, prior, {}, () => {})
   if (deleted) await receiver.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [messageNodeId(config.workspaceId, prior.event_id, [0])])
 }
-it.each(['live', 'deleted'])('refuses Start fresh before the request for a room with a %s message', async state => {
-  await historicalMessage(state === 'deleted')
+const rawRoomRow = (workspace: string, properties: Record<string, unknown>, deleted: boolean) =>
+  receiver.db.execute(`INSERT INTO blocks (id, workspace_id, order_key, content, properties_json,
+    created_by, updated_by, created_at, updated_at, deleted) VALUES (?, ?, 'a0', '', ?, 'user', 'user', 1, 1, ?)`,
+    [crypto.randomUUID(), workspace, JSON.stringify(properties), Number(deleted)])
+
+it.each(['live', 'deleted', 'legacy tombstone'])('refuses Start fresh before the request for a room with a %s message', async state => {
+  if (state === 'legacy tombstone') {
+    await rawRoomRow(config.workspaceId, {'matrix:eventId': '$old', 'matrix:roomId': config.roomId}, true)
+  } else await historicalMessage(state === 'deleted')
   const initialSync = vi.fn(() => ({next_batch: 'S9'}))
   await expect(fresh(receiver, initialSync)).rejects.toThrow(/message|ingest/i)
   expect(initialSync).not.toHaveBeenCalled()
@@ -324,11 +331,16 @@ it('reports held advancement after three polls, keeps ingesting, and clears the 
       expect(held()).toBe(false)
       expect(await checkpoint(sender)).toBe('S3')
       await upload(sender)
-      return {next_batch: 'S4'}
+      return {next_batch: 'S4', rooms: {join: {[config.roomId]: {timeline: {events: [event('new hold')]}}}}}
+    },
+    () => {
+      expect(held()).toBe(false)
+      expect(deviceCursor()).toBe('S4')
+      return {next_batch: 'S5'}
     },
   ], false)
   expect(await checkpoint(sender)).toBe('S3')
-  expect(deviceCursor()).toBe('S4')
+  expect(deviceCursor()).toBe('S5')
   await download(receiver)
   expect(await messages(receiver)).toEqual(stream)
 })
@@ -376,17 +388,14 @@ it('refuses an empty sync position instead of polling from the beginning', async
 
 it('allows a genuinely new room with unrelated live and deleted rows in the graph', async () => {
   for (const deleted of [false, true]) {
-    for (const [workspace, room, type] of [
-      ['elsewhere', config.roomId, 'matrix-message'], [config.workspaceId, '!elsewhere', 'matrix-message'],
-      [config.workspaceId, config.roomId, 'page'],
-    ]) {
-      receiver.repo.setActiveWorkspaceId(workspace)
-      const id = await receiver.repo.tx(tx => tx.create({
-        workspaceId: workspace, parentId: null, orderKey: 'a0', content: 'unrelated',
-        properties: {types: [type], 'matrix-event:room': room},
-      }), {scope: ChangeScope.BlockDefault})
-      if (deleted) await receiver.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [id])
-    }
+    for (const [workspace, properties] of [
+      ['elsewhere', {types: ['matrix-message'], 'matrix-event:room': config.roomId}],
+      [config.workspaceId, {types: ['matrix-message'], 'matrix-event:room': '!elsewhere'}],
+      [config.workspaceId, {types: ['page'], 'matrix-event:room': config.roomId}],
+      [config.workspaceId, {'matrix:roomId': config.roomId}],
+      [config.workspaceId, {'matrix:eventId': '$old', 'matrix:roomId': '!elsewhere'}],
+      ['elsewhere', {'matrix:eventId': '$old', 'matrix:roomId': config.roomId}],
+    ] as const) await rawRoomRow(workspace, properties, deleted)
   }
   await fresh(receiver, () => ({next_batch: 'S9'}))
   expect(deviceCursor()).toBe('S9')

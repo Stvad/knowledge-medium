@@ -303,14 +303,13 @@ const clearLegacyTokens = () => {
   window.localStorage.removeItem(LEGACY_TOKEN_KEY)
 }
 
-const bindToken = (destination: MatrixDestination, token: string) => {
+const bindToken = (destination: MatrixDestination, token: string, bindLegacy: boolean) => {
   const storage = window.localStorage
   const checkpointKey = nextBatchKey(destination)
-  if (storage.getItem(checkpointKey) === null) {
+  if (bindLegacy && storage.getItem(checkpointKey) === null) {
     const cursor = legacyCheckpoint(destination)
     if (cursor !== null) storage.setItem(checkpointKey, cursor)
   }
-  storage.removeItem(stoppedKey(destination))
   storage.setItem(tokenKey(destination), token)
   clearLegacyTokens()
 }
@@ -443,13 +442,6 @@ const saveNextBatch = (config: MatrixConfig, nextBatch: string) =>
 export const checkpointId = (config: MatrixDestination) =>
   pluginBlockId(config.workspaceId, MATRIX_NS, 'checkpoint:' + destinationKey(config))
 
-// The type index covers live messages; tombstones retain their type in the property bag.
-const matrixMessageBags = `SELECT b.properties_json FROM block_types t JOIN blocks b ON b.id = t.block_id
-     WHERE t.workspace_id = ? AND t.type = 'matrix-message'
-     UNION ALL
-     SELECT properties_json FROM blocks WHERE workspace_id = ? AND deleted = 1
-       AND EXISTS (SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'matrix-message')`
-
 const readCheckpoint = (db: Pick<Tx['readDb'], 'getOptional'>, config: MatrixDestination) =>
   db.getOptional<{deleted: number, position: unknown}>(
     `SELECT deleted, json_extract(properties_json, '$."${checkpointProp.name}"') AS position FROM blocks WHERE id = ?`,
@@ -500,8 +492,13 @@ export const startFresh = async (repo: Repo, config: MatrixConfig, signal: Abort
     if (checkpoint?.deleted) throw new Error(undeleteCheckpoint)
     if (checkpoint || loadNextBatch(config)) throw new Error('This room already has a Matrix position. Resume ingest.')
     if (await db.getOptional(
-      `SELECT 1 FROM (${matrixMessageBags}) WHERE json_extract(properties_json, '$."matrix-event:room"') = ? LIMIT 1`,
-      [config.workspaceId, config.workspaceId, config.roomId],
+      `SELECT 1 FROM blocks WHERE workspace_id = ? AND (
+         (json_extract(properties_json, '$."matrix-event:room"') = ? AND EXISTS (
+           SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'matrix-message'))
+         OR (json_extract(properties_json, '$."matrix:roomId"') = ?
+           AND json_extract(properties_json, '$."matrix:eventId"') IS NOT NULL)
+       ) LIMIT 1`,
+      [config.workspaceId, config.roomId, config.roomId],
     )) throw new Error('This room already has ingested Matrix messages. Recover its saved position to resume.')
     signal.throwIfAborted()
     if (repo.activeWorkspaceId !== config.workspaceId || loadToken(config) !== config.accessToken) {
@@ -938,13 +935,20 @@ const ensureMatrixTagBlock = async (
   return id
 }
 
+// The type index covers live rows. A deleted message keeps its stored type and
+// metadata in its bag even though the index entry disappears.
+// Keep property matches type-scoped because only a cursor predating the key rename can replay an untyped legacy tombstone.
 const handledEvent = (
   db: Pick<Tx['readDb'], 'getOptional'>, workspaceId: string, eventId: string,
 ) => db.getOptional(
   `SELECT 1 FROM blocks WHERE id = ? AND workspace_id = ?
    UNION ALL
    SELECT 1 FROM (
-     ${matrixMessageBags}
+     SELECT b.properties_json FROM block_types t JOIN blocks b ON b.id = t.block_id
+     WHERE t.workspace_id = ? AND t.type = 'matrix-message'
+     UNION ALL
+     SELECT properties_json FROM blocks WHERE workspace_id = ? AND deleted = 1
+       AND EXISTS (SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'matrix-message')
    ) WHERE ? IN (json_extract(properties_json, '$."matrix-event:id"'), json_extract(properties_json, '$."matrix:eventId"'))
    LIMIT 1`,
   [messageNodeId(workspaceId, eventId, [0]), workspaceId, workspaceId, workspaceId, eventId],
@@ -1133,6 +1137,7 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
       if (!nextBatch) {
         const shared = checkpointPosition(await readCheckpoint(repo.db, config))
         nextBatch = loadNextBatch(config) ?? shared
+        // An existing baseline can replay the tail after a restart. Idle restarts need no graph write.
         needsCheckpoint = !shared
         if (!nextBatch) {
           const gap = await syncGapReason(repo, config.workspaceId)
@@ -1371,8 +1376,8 @@ const MatrixSetupDialog = () => {
       await prefs.set(connectedHintProp, true)
       if (repo.activeWorkspaceId !== destination.workspaceId) throw new Error('The active workspace changed. Reopen Matrix settings.')
       if (bindPending && eligibleLegacyToken(destination) !== selectedToken) throw new Error('The saved device token changed. Reopen Matrix settings.')
-      if (selectedToken) bindToken(destination, selectedToken)
-      requestRestart()
+      if (selectedToken) bindToken(destination, selectedToken, bindPending)
+      resumeDevice(destination)
       showSuccess('Matrix connected.')
       setSetupOpen(false)
     } catch (error) {
@@ -1428,7 +1433,7 @@ const MatrixSetupDialog = () => {
           </div>
           {destination && workspace && <p className="break-all">Destination: {destination.baseUrl} · {destination.roomId} · workspace {workspace.name}</p>}
         </div>
-        {pendingToken() && <p>Binding or saving a token clears the old unscoped credentials on this device.</p>}
+        {pendingToken() && <p>On the original workspace, bind the saved device token to keep its room position. Saving a pasted token uses this workspace’s position. Both clear the old unscoped credentials.</p>}
         <Button variant='ghost' disabled={saving} onClick={forgetDeviceTokens}>Forget all Matrix tokens on this device</Button>
         <DialogFooter>
           <Button variant='ghost' onClick={() => setSetupOpen(false)} disabled={saving}>Cancel</Button>
