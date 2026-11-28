@@ -1,1 +1,0 @@
-export{BS as remarkWikilinks}from"../../../../../chunks/app-CjT-1RjE.js";

@@ -1,1 +1,0 @@
-export{BR as ClientLocalSettings,VR as clientLocalSettings}from"../../chunks/app-CjT-1RjE.js";

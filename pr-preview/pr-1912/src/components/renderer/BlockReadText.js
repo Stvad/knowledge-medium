@@ -1,1 +1,0 @@
-export{RU as BlockReadText}from"../../../chunks/app-CjT-1RjE.js";

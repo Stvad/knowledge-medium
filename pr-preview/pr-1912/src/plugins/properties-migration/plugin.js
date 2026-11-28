@@ -1,1 +1,0 @@
-export{Bc as propertiesMigrationPlugin}from"../../../chunks/app-CjT-1RjE.js";

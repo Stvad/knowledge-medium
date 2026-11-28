@@ -1,1 +1,0 @@
-export{WI as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,GI as OPEN_PREFERENCES_ACTION_ID,KI as RELOAD_IN_SAFE_MODE_ACTION_ID,qI as defaultActionContextsExtension,JI as defaultActionsExtension,YI as getDefaultActionGroups,XI as getDefaultActions}from"../../chunks/app-CjT-1RjE.js";

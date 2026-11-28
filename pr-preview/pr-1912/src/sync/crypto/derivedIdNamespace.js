@@ -1,1 +1,0 @@
-export{jpt as deriveWorkspaceIdNamespace}from"../../../chunks/app-CjT-1RjE.js";

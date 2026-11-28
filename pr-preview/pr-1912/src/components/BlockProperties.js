@@ -1,1 +1,0 @@
-export{pG as BlockProperties}from"../../chunks/app-CjT-1RjE.js";

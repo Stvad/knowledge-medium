@@ -1,1 +1,0 @@
-export{TC as useIsReadOnly}from"../../chunks/app-CjT-1RjE.js";

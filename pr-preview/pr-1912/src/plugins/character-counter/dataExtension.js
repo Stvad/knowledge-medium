@@ -1,1 +1,0 @@
-export{p3 as characterCounterDataExtension}from"../../../chunks/app-CjT-1RjE.js";

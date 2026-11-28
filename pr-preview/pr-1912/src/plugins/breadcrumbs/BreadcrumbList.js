@@ -1,1 +1,0 @@
-export{ek as BreadcrumbList}from"../../../chunks/app-CjT-1RjE.js";

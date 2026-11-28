@@ -1,1 +1,0 @@
-export{RS as wikilinkMarkdownExtension}from"../../../../../chunks/app-CjT-1RjE.js";

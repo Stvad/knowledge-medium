@@ -1,1 +1,0 @@
-export{IF as CommandPaletteHeaderItem}from"../../../chunks/app-CjT-1RjE.js";

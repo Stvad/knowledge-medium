@@ -1,1 +1,0 @@
-export{Sot as open,Cot as seal}from"../../../chunks/app-CjT-1RjE.js";

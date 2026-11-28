@@ -1,1 +1,0 @@
-export{Qr as openExtensionsSettingsAction}from"../../../chunks/app-CjT-1RjE.js";

@@ -1,1 +1,0 @@
-export{rB as defaultRegistry,iB as defaultRendererContributions,aB as defaultRenderersExtension}from"../../chunks/app-CjT-1RjE.js";
