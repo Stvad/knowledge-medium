@@ -1,0 +1,1 @@
+export{MB as formatActionKeyHint,NB as keyHintsByActionId,PB as shortcutTitle,FB as useActionKeyHints}from"../../chunks/app-Cl4eX0-E.js";

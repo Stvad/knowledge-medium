@@ -1,0 +1,1 @@
+export{QC as richPastePlugin}from"../../../chunks/app-Cl4eX0-E.js";

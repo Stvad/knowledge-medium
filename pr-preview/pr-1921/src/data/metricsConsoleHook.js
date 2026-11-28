@@ -1,0 +1,1 @@
+export{uB as ensureMetricsConsoleHook}from"../../chunks/app-Cl4eX0-E.js";

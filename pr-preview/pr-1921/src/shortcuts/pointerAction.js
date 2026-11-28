@@ -1,0 +1,1 @@
+export{qL as dispatchPointerAction,JL as setPointerActionDispatcher}from"../../chunks/app-Cl4eX0-E.js";

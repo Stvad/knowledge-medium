@@ -1,0 +1,1 @@
+export{rp as blockTaggingDataExtension}from"../../../chunks/app-Cl4eX0-E.js";

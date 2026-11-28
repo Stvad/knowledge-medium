@@ -1,0 +1,1 @@
+export{m$ as RENAME_BACKLINKS_PRECEDENCE,h$ as RENAME_BACKLINKS_PROCESSOR,g$ as applyRefRewrites,_$ as renameBacklinksProcessor,v$ as renameSameTxProcessors,y$ as replacementFor,b$ as splitBySurvivingSpan}from"../../../chunks/app-Cl4eX0-E.js";

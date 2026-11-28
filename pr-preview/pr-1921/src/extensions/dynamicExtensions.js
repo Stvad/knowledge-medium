@@ -1,0 +1,1 @@
+export{lR as dynamicExtensionsExtension,uR as isExtensionContribution}from"../../chunks/app-Cl4eX0-E.js";

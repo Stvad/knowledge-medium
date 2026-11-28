@@ -1,0 +1,1 @@
+export{WO as mobileBottomNavItemsFacet}from"../../../chunks/app-Cl4eX0-E.js";

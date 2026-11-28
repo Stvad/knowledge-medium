@@ -1,0 +1,1 @@
+export{dQ as tablesDataExtension}from"../../../chunks/app-Cl4eX0-E.js";

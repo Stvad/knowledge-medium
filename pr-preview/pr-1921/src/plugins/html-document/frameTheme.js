@@ -1,0 +1,1 @@
+export{Cn as useFrameThemeCss}from"../../../chunks/app-Cl4eX0-E.js";

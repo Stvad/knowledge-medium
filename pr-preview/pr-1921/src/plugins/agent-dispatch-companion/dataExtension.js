@@ -1,0 +1,1 @@
+export{U8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-Cl4eX0-E.js";

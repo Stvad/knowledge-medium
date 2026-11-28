@@ -1,0 +1,1 @@
+export{gX as adoptOrCreatePropertySchema}from"../../chunks/app-Cl4eX0-E.js";

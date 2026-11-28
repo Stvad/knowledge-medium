@@ -1,0 +1,1 @@
+export{o8 as aliasDataExtension}from"../../../chunks/app-Cl4eX0-E.js";

@@ -1,0 +1,1 @@
+export{QG as METADATA_ROW_GRID_STYLE,$G as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-Cl4eX0-E.js";

@@ -1,0 +1,1 @@
+export{CC as useIsReadOnly}from"../../chunks/app-Cl4eX0-E.js";

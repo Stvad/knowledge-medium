@@ -1,0 +1,1 @@
+export{gz as BlockLoadingPlaceholder}from"../../chunks/app-Cl4eX0-E.js";

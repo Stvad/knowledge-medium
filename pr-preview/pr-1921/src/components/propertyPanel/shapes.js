@@ -1,0 +1,1 @@
+export{hX as propertyShapeLabel}from"../../../chunks/app-Cl4eX0-E.js";

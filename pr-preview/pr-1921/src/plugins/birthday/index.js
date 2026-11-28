@@ -1,0 +1,1 @@
+export{ar as birthdayPlugin}from"../../../chunks/app-Cl4eX0-E.js";

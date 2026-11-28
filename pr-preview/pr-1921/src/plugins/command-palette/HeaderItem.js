@@ -1,0 +1,1 @@
+export{kF as CommandPaletteHeaderItem}from"../../../chunks/app-Cl4eX0-E.js";

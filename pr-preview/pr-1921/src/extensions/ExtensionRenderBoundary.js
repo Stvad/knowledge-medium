@@ -1,0 +1,1 @@
+export{eW as ExtensionRenderBoundary}from"../../chunks/app-Cl4eX0-E.js";

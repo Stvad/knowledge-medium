@@ -1,0 +1,1 @@
+export{pv as extensionsOverridesPresetCore,mv as extensionsOverridesProp,hv as extensionsPrefsType,gv as overridesCodec}from"../../../chunks/app-Cl4eX0-E.js";

@@ -1,0 +1,1 @@
+export{yB as exampleExtensions,bB as insertExampleExtensionsUnder}from"../../chunks/app-Cl4eX0-E.js";

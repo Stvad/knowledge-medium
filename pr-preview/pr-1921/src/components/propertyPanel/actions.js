@@ -1,0 +1,1 @@
+export{KG as addProperty,qG as deleteProperty,JG as writeProperty}from"../../../chunks/app-Cl4eX0-E.js";
