@@ -1,0 +1,1 @@
+export{_Q as tablesDataExtension}from"../../../chunks/app-C8XOxj7D.js";

@@ -1,0 +1,1 @@
+export{WF as SwipeActionMenu}from"../../../chunks/app-C8XOxj7D.js";

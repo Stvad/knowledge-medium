@@ -1,0 +1,1 @@
+export{EG as BlockProperties}from"../../chunks/app-C8XOxj7D.js";

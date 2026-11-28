@@ -1,0 +1,1 @@
+export{K8 as defineVerbFacet}from"../../chunks/app-C8XOxj7D.js";

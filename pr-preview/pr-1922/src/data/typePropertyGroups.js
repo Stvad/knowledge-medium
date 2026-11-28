@@ -1,0 +1,1 @@
+export{ZG as typePropertyGroups}from"../../chunks/app-C8XOxj7D.js";

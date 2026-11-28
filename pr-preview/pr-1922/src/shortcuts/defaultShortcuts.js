@@ -1,0 +1,1 @@
+export{Xz as CLOSE_CURRENT_PANEL_ACTION_ID,Zz as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,Qz as EDIT_MODE_CM_ACTION_PREFIX,$z as OPEN_PREFERENCES_ACTION_ID,eB as RELOAD_IN_SAFE_MODE_ACTION_ID,tB as TOGGLE_MAXIMIZE_PANEL_ACTION_ID,nB as defaultActionContextsExtension,rB as defaultActionsExtension,iB as getDefaultActionGroups,aB as getDefaultActions}from"../../chunks/app-C8XOxj7D.js";

@@ -1,0 +1,1 @@
+export{xmt as isChildBackedPropertiesWorkspace}from"../chunks/app-C8XOxj7D.js";
