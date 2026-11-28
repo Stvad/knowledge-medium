@@ -18,6 +18,7 @@
  *     ambient dot) while at least one is non-dismissed — so a dismissed prompt
  *     stays discoverable without nagging.
  */
+import {isEqual} from 'lodash-es'
 import {CallbackSet} from '@/utils/callbackSet.js'
 import type {ExtensionApprovalStatus, ExtensionApprovalStatusMap} from '@/extensions/extensionApprovalStatus.js'
 import type {DismissalMap} from './dismissals.js'
@@ -50,27 +51,6 @@ export const pendingExtensionPrompts = (
   return out
 }
 
-const samePrompts = (
-  a: readonly PendingExtensionPrompt[],
-  b: readonly PendingExtensionPrompt[],
-): boolean => {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i]
-    const y = b[i]
-    if (
-      x.blockId !== y.blockId ||
-      x.kind !== y.kind ||
-      x.liveHash !== y.liveHash ||
-      x.name !== y.name ||
-      x.dismissed !== y.dismissed
-    ) {
-      return false
-    }
-  }
-  return true
-}
-
 class ExtensionPromptStore {
   private prompts: readonly PendingExtensionPrompt[] = []
   private readonly listeners = new CallbackSet('ExtensionPromptStore')
@@ -84,7 +64,7 @@ class ExtensionPromptStore {
    *  `useSyncExternalStore` requirement) whenever the driver re-publishes an
    *  unchanged set — while still updating when a dismissal flips the dot. */
   set = (next: readonly PendingExtensionPrompt[]): void => {
-    if (samePrompts(this.prompts, next)) return
+    if (isEqual(this.prompts, next)) return
     this.prompts = next
     this.listeners.notify()
   }

@@ -176,6 +176,20 @@ describe('pinning extension source', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
+  it('suggests ?bundle for an esm.sh entry with a preload import', async () => {
+    stubFetch(() => new Response(`import '/react@19/es2024/react.mjs'; export * from '${canonicalPath}';`))
+    await expect(freezeExtensionImport('https://esm.sh/react-dom/client')).rejects.toThrow('with ?bundle')
+  })
+
+  it.each([
+    ['an already bundled esm.sh entry', packageUrl],
+    ['a direct esm.sh module', canonical],
+    ['an entry on another CDN', 'https://cdn.example/entry'],
+  ])('does not suggest ?bundle for %s', async (_label, entry) => {
+    stubFetch(() => new Response(`import '/peer.mjs'; export * from '${canonicalPath}';`))
+    await expect(freezeExtensionImport(entry)).rejects.toThrow(/^.* is not self-contained\.$/)
+  })
+
   it('follows a canonical esm.sh stub that also forwards the default export', async () => {
     const fetch = stubFetch(requestUrl => new Response(requestUrl.href === canonical ? 'export default 42;' :
       `export * from '${canonicalPath}'; export {default} from '${canonicalPath}';`))
@@ -271,6 +285,25 @@ describe('pinning extension source', () => {
     await expect(pinExtensionImports(`export const load = () => import('${url}');`))
       .rejects.toThrow('Use a static import')
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('ignores dynamic imports already resolved through the app import map', async () => {
+    const fetch = stubFetch(() => new Response(code))
+    const source = `export const load = () => import('react');`
+    await expect(pinExtensionImports(source)).resolves.toMatchObject({source, rewrittenImports: []})
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('rewrites static imports and preserves dynamic HTTPS imports in mixed source', async () => {
+    const fetch = stubFetch(() => new Response(code))
+    const staticImport = `import '${url}';`
+    const dynamicImport = `export const load = () => import('https://cdn.example/lazy.mjs');`
+    const rewritten = `import '${url}' with {integrity: '${integrity}'};`
+    await expect(pinExtensionImports(`${staticImport}\n${dynamicImport}`)).resolves.toMatchObject({
+      source: `${rewritten}\n${dynamicImport}`,
+      rewrittenImports: [rewritten],
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   it('fills an empty attribute list without rewriting adjacent comments', async () => {

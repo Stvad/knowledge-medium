@@ -30,7 +30,7 @@
  */
 
 import type {VendoredExtensionModules} from '@knowledge-medium/agent-cli/freezeExtensionImports'
-import {IdbKeyedStore} from '@/utils/idbKeyedStore.js'
+import {IdbKeyedStore, promisifyRequest} from '@/utils/idbKeyedStore.js'
 
 export interface CompiledRecord {
   /** Pure SHA-256 of `approvedSource`. NOT salted by compiler version
@@ -50,6 +50,7 @@ export interface CompiledRecord {
   compiled: string
   vendored?: VendoredExtensionModules
   importsUnpinned?: boolean
+  hasStaticUnpinnedImports?: boolean
   /** The `COMPILER_VERSION` the `compiled` string was produced under. A
    *  bump invalidates the cached output (forces a recompile from
    *  `approvedSource`) while leaving `sourceHash` — and therefore the
@@ -67,6 +68,7 @@ export interface CompiledRecord {
 export interface CompiledModuleCache {
   read(blockId: string): Promise<CompiledRecord | undefined>
   write(blockId: string, record: CompiledRecord): Promise<void>
+  updateCompilation(blockId: string, expected: CompiledRecord, compiled: CompiledRecord): Promise<boolean>
   delete(blockId: string): Promise<void>
   /** Empty the whole store. Currently exercised only by tests (the §6
    *  lock-&-wipe boot path that used it was removed); kept as a store
@@ -76,6 +78,14 @@ export interface CompiledModuleCache {
    *  Coarse (no per-user/workspace dimension), but over-clearing only costs a
    *  recompile, never a lockout. */
   clear(): Promise<void>
+}
+
+async function updateCurrentCompilation(
+  current: CompiledRecord | undefined, expected: CompiledRecord, save: () => Promise<unknown>,
+): Promise<boolean> {
+  if (current?.sourceHash !== expected.sourceHash || current.approvedAt !== expected.approvedAt) return false
+  if (current.compilerVersion === expected.compilerVersion) await save()
+  return true
 }
 
 /** In-memory store. Used in tests and as the fallback when IndexedDB is
@@ -91,6 +101,10 @@ export class InMemoryCompiledModuleCache implements CompiledModuleCache {
 
   async write(blockId: string, record: CompiledRecord): Promise<void> {
     this.rows.set(blockId, record)
+  }
+
+  async updateCompilation(blockId: string, expected: CompiledRecord, compiled: CompiledRecord): Promise<boolean> {
+    return updateCurrentCompilation(this.rows.get(blockId), expected, () => this.write(blockId, compiled))
   }
 
   async delete(blockId: string): Promise<void> {
@@ -120,6 +134,13 @@ export class IndexedDbCompiledModuleCache implements CompiledModuleCache {
 
   async write(blockId: string, record: CompiledRecord): Promise<void> {
     await this.idb.tx('readwrite', store => store.put(record, blockId))
+  }
+
+  async updateCompilation(blockId: string, expected: CompiledRecord, compiled: CompiledRecord): Promise<boolean> {
+    return this.idb.runTransaction('readwrite', async store => {
+      const current: CompiledRecord | undefined = await promisifyRequest(store.get(blockId))
+      return updateCurrentCompilation(current, expected, () => promisifyRequest(store.put(compiled, blockId)))
+    })
   }
 
   async delete(blockId: string): Promise<void> {

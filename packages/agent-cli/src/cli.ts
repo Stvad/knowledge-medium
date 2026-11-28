@@ -995,6 +995,7 @@ cli
     } finally {
       await fs.rm(temporary, {force: true})
     }
+    for (const statement of pinned.rewrittenImports) console.log(statement)
   })
 
 cli

@@ -52,8 +52,9 @@ export interface ExtensionLoadErrorReporter {
  *  toast) can name the extension without re-walking the toggle tree. */
 export type ExtensionApprovalStatus =
   {name: string; liveSource: string; liveHash: string} & (
-    | {kind: 'needs-approval' | 'imports-unpinned'}
-    | {kind: 'update-available'; approvedHash: string}
+    | {kind: 'needs-approval'}
+    | {kind: 'imports-unpinned'; hasStaticUnpinnedImports: boolean}
+    | {kind: 'update-available'; approvedHash: string; importsUnpinned?: boolean}
   )
 
 export interface ExtensionApprovalStatusReporter {
@@ -176,28 +177,23 @@ export const dynamicExtensionsExtension = (
       return null
     }
     const liveHash = await hashExtensionSource(block.content)
-    if (liveHash !== approval.sourceHash) {
-      approvalStatusReporter?.(block.id, {
-        kind: 'update-available',
-        name: extensionDisplayName(block),
-        liveSource: block.content,
-        liveHash,
-        approvedHash: approval.sourceHash,
+    let hasStaticUnpinnedImports: boolean | undefined
+    try {
+      const loaded = await loadApprovedExtension(block.id, approval, cache, persistent, record => {
+        hasStaticUnpinnedImports = record.hasStaticUnpinnedImports ?? false
       })
+      return loaded.module
+    } finally {
+      const revision = {name: extensionDisplayName(block), liveSource: block.content, liveHash}
+      if (liveHash !== approval.sourceHash) {
+        approvalStatusReporter?.(block.id, {
+          ...revision, kind: 'update-available', approvedHash: approval.sourceHash,
+          importsUnpinned: hasStaticUnpinnedImports !== undefined,
+        })
+      } else if (hasStaticUnpinnedImports !== undefined) {
+        approvalStatusReporter?.(block.id, {...revision, kind: 'imports-unpinned', hasStaticUnpinnedImports})
+      }
     }
-    // Run the PINNED approved output — never the (possibly drifted) live
-    // content. This is the #67 guarantee: a synced source change can't
-    // execute here until it's explicitly re-approved on this device.
-    const loaded = await loadApprovedExtension(block.id, approval, cache, persistent, () => {
-      if (liveHash !== approval.sourceHash) return
-      approvalStatusReporter?.(block.id, {
-        kind: 'imports-unpinned',
-        name: extensionDisplayName(block),
-        liveSource: block.content,
-        liveHash,
-      })
-    })
-    return loaded.module
   }
 
   let extensionBlocks: BlockData[]

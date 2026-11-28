@@ -8,18 +8,12 @@ import {
 import {transpileExtension} from './transpileExtension.js'
 export {EXTENSION_BABEL_PRESETS} from './transpileExtension.js'
 
-// Bump when the Babel major, preset list or transform options change so older
-// cache entries (in-memory OR persisted) don't deliver wrong-shaped
-// output. This is checked against the persisted record's
-// `compilerVersion`, NOT folded into the source hash — a compiler bump
-// must invalidate cached *output* without looking like a *source*
-// change (which Phase 2 / #67 would treat as needing re-approval).
-// '2': transpile now emits an inline source map + a stable `//# sourceURL`
-// (debuggable extensions). Bumping regenerates older map-less cached output.
-// '3': JSX uses the automatic runtime (`react/jsx-runtime` via the page import
-// map) instead of the `React` global.
-// '4': Babel 8. Uninitialized class fields are kept, not deleted.
-// '5': validate compiled imports and link pinned modules from approved bytes.
+// Bump when a compiler change invalidates cached output.
+// The cache version is separate from the source hash that grants approval.
+// v2: Emit inline source maps and a per-block sourceURL.
+// v3: Compile JSX against the automatic React runtime.
+// v4: Preserve uninitialized class fields under Babel 8.
+// v5: Validate compiled module imports and link dependencies by integrity.
 export const COMPILER_VERSION = '5'
 
 export type ExtensionModule = Record<string, unknown>
@@ -47,11 +41,13 @@ export interface CompileCache {
   // A live module belongs to one extension block: its declaration handles may
   // be bound to that block's durable seed identities. This still dedupes
   // concurrent compiles of the same block content.
+  unpersistedUpgrades: Map<string, CompiledRecord>
   byBlockAndHash: Map<string, Map<string, Promise<CompileResult>>>
 }
 
 export const createCompileCache = (): CompileCache => ({
   byBlockAndHash: new Map(),
+  unpersistedUpgrades: new Map(),
 })
 
 // Process-wide singleton used by the loader in production. Content versions
@@ -83,6 +79,7 @@ export function __setCompileImplForTest(impl: CompileImpl): () => void {
 
 export function __resetCompileCacheForTest(): void {
   defaultCache.byBlockAndHash.clear()
+  defaultCache.unpersistedUpgrades.clear()
 }
 
 /** Pure SHA-256 of the source. The compiler version is intentionally NOT
@@ -239,19 +236,26 @@ export async function readApproval(
   return lookup.status === 'approved' ? lookup.record : undefined
 }
 
-/** Best-effort write — a flaky persist must never reject the operation
- *  that triggered it (the in-memory module is still returned/usable this
- *  session; the next boot just re-prompts for approval). */
-async function persistApproval(
-  persistent: CompiledModuleCache,
-  blockId: string,
-  record: CompiledRecord,
-): Promise<void> {
+async function upgradeApproval(
+  blockId: string, approval: CompiledRecord, cache: CompileCache, persistent: CompiledModuleCache,
+): Promise<CompiledRecord> {
+  const cached = cache.unpersistedUpgrades.get(blockId)
+  if (cached?.sourceHash === approval.sourceHash) return cached
+
+  const compiled = await prepareRecord(blockId, approval.approvedSource, approval.sourceHash, approval.vendored)
+  compiled.approvedAt = approval.approvedAt
+  let stillApproved: boolean
   try {
-    await persistent.write(blockId, record)
+    stillApproved = await persistent.updateCompilation(blockId, approval, compiled)
   } catch (error) {
-    console.warn(`Extension approval write failed for ${blockId}`, error)
+    // The loader checks the persisted grant again on every refresh.
+    console.warn(`Extension compilation cache write failed for ${blockId}`, error)
+    cache.unpersistedUpgrades.set(blockId, compiled)
+    return compiled
   }
+  if (!stillApproved) throw new Error('Extension approval changed during recompilation')
+  cache.unpersistedUpgrades.delete(blockId)
+  return compiled
 }
 
 /**
@@ -346,16 +350,14 @@ export async function loadApprovedExtension(
   approval: CompiledRecord,
   cache: CompileCache = defaultCache,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
-  reportUnpinned?: () => void,
+  reportUnpinned?: (record: CompiledRecord) => void,
 ): Promise<CompileResult> {
   let record = approval
   if (approval.compilerVersion !== COMPILER_VERSION && !compileImplOverride) {
-    record = await prepareRecord(blockId, approval.approvedSource, approval.sourceHash, approval.vendored)
-    record.approvedAt = approval.approvedAt
-    await persistApproval(persistent, blockId, record)
+    record = await upgradeApproval(blockId, approval, cache, persistent)
   }
   // Keep the pin action available even if the live CDN fails during module linking.
-  if (record.importsUnpinned) reportUnpinned?.()
+  if (record.importsUnpinned) reportUnpinned?.(record)
   return resolveCachedModule(cache, record.sourceHash, blockId, () => instantiateRecord(blockId, record))
 }
 
@@ -432,4 +434,5 @@ export function evictBlockFromCache(
   cache: CompileCache = defaultCache,
 ): void {
   cache.byBlockAndHash.delete(blockId)
+  cache.unpersistedUpgrades.delete(blockId)
 }

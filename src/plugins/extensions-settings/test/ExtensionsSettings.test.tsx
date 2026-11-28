@@ -328,6 +328,7 @@ describe('ExtensionsSettings', () => {
       name: 'Custom Editor',
       liveSource: 'SRC', liveHash: 'h2',
       approvedHash: 'h1',
+      importsUnpinned: true,
     })
 
     render(
@@ -343,6 +344,32 @@ describe('ExtensionsSettings', () => {
     )
 
     expect(screen.getByRole('button', {name: /update/i})).toBeInTheDocument()
+    expect(screen.getByText(/older approved version that loads imports from a live URL/i)).toBeInTheDocument()
+  })
+
+  it.each([false, true])('renders the unpinned status and offers Pin imports only for static imports (%s)', (hasStaticUnpinnedImports) => {
+    const store = new ExtensionApprovalStatusStore()
+    store.report('block-uuid-1', {
+      kind: 'imports-unpinned', name: 'Custom Editor', liveSource: 'SRC', liveHash: 'h', hasStaticUnpinnedImports,
+    })
+    render(
+      <ExtensionApprovalStatusProvider store={store}>
+        <ExtensionsSettings
+          tree={[userNode('block-uuid-1', 'Custom Editor')]}
+          overrides={new Map([['block-uuid-1', true]])}
+          onToggle={vi.fn()}
+          onApprove={vi.fn()}
+        />
+      </ExtensionApprovalStatusProvider>,
+    )
+
+    expect(screen.getByText(/loads imports from a live URL/i)).toBeInTheDocument()
+    if (hasStaticUnpinnedImports) {
+      expect(screen.getByRole('button', {name: 'Pin imports'})).toBeInTheDocument()
+    } else {
+      expect(screen.queryByRole('button', {name: 'Pin imports'})).not.toBeInTheDocument()
+      expect(screen.getByText(/use a static import/i)).toBeInTheDocument()
+    }
   })
 
   it('groups essentials first within nested children too', () => {

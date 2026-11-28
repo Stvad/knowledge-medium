@@ -904,11 +904,16 @@ describe('dynamicExtensionsExtension — gate 2 (device-local trust / #67)', () 
   })
 
   it.each([
-    {remote: true, drift: false, expected: ['imports-unpinned']},
-    {remote: true, drift: true, expected: ['update-available']},
-    {remote: false, drift: false, expected: []},
-  ])('keeps the approved code running and reports the action for the shown revision ($remote, $drift)', async ({remote, drift, expected}) => {
-    const source = (remote ? "import 'https://cdn.example/module.mjs'; " : '') + 'export default []'
+    {imports: 'static', drift: false, expected: [{kind: 'imports-unpinned', hasStaticUnpinnedImports: true}]},
+    {imports: 'dynamic', drift: false, expected: [{kind: 'imports-unpinned', hasStaticUnpinnedImports: false}]},
+    {imports: 'mixed', drift: false, expected: [{kind: 'imports-unpinned', hasStaticUnpinnedImports: true}]},
+    {imports: 'static', drift: true, expected: [{kind: 'update-available', importsUnpinned: true}]},
+    {imports: 'none', drift: true, expected: [{kind: 'update-available', importsUnpinned: false}]},
+    {imports: 'none', drift: false, expected: []},
+  ])('keeps the approved code running and reports the status for the shown revision ($imports, $drift)', async ({imports, drift, expected}) => {
+    const staticImport = imports === 'static' || imports === 'mixed' ? "import 'https://cdn.example/module.mjs'; " : ''
+    const dynamicImport = imports === 'dynamic' || imports === 'mixed' ? "void import('https://cdn.example/lazy.mjs'); " : ''
+    const source = staticImport + dynamicImport + 'export default []'
     const block = blockData({id: 'live-import', content: drift ? source + '\n' : source})
     const approvalStatusReporter = vi.fn()
     const instantiate = vi.fn(async () => ({default: labelsFacet.of('running')}))
@@ -919,8 +924,8 @@ describe('dynamicExtensionsExtension — gate 2 (device-local trust / #67)', () 
         overrides: enableBlocks([block]), approvalStatusReporter,
       }))
       expect(runtime.read(labelsFacet)).toEqual(['running'])
-      expect(approvalStatusReporter.mock.calls.map(([, status]) => status.kind))
-        .toEqual(expected)
+      expect(approvalStatusReporter.mock.calls.map(([, status]) => status))
+        .toEqual(expected.map(status => expect.objectContaining(status)))
     } finally {
       restore()
     }

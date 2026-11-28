@@ -2,8 +2,8 @@ import {base64} from '@scure/base'
 import {
   extensionImportIntegrity,
   isHttpsModuleSpecifier,
+  isRuntimeHttpsModuleReference,
   isStaticModuleReference,
-  isTypeOnlyModuleReference,
   isUnsupportedImportMeta,
   literalModuleSpecifier,
   parseExtensionSource,
@@ -103,7 +103,9 @@ function assertSelfContained(ast: ModuleAst, url: URL): void {
   visitModuleSyntax(ast, (node, parent) => {
     if (node.type === 'ImportExpression' || isStaticModuleReference(node)) {
       const canonical = forwardingTarget(ast, url)
-      const suggestion = canonical ? ` Pin the canonical module URL (${canonical.url.href}).` : ''
+      const suggestion = canonical ? ` Pin the canonical module URL (${canonical.url.href}).`
+        : url.origin === 'https://esm.sh' && !url.pathname.endsWith('.mjs') && !url.searchParams.has('bundle')
+          ? ' Request a self-contained esm.sh build with ?bundle.' : ''
       throw new Error(`${url.href} is not self-contained.${suggestion}`)
     }
     if (isUnsupportedImportMeta(node, parent)) {
@@ -169,25 +171,32 @@ async function pinModule(specifier: string) {
   return {url: url.href, integrity: await moduleIntegrity(bytes), bytes}
 }
 
-export async function pinExtensionImports(source: string): Promise<{source: string, vendored: VendoredExtensionModules}> {
+export async function pinExtensionImports(source: string): Promise<{
+  source: string
+  vendored: VendoredExtensionModules
+  rewrittenImports: string[]
+}> {
   const ast = await parseExtensionSource(source, true)
-  visitModuleSyntax(ast, node => {
-    if (node.type !== 'ImportExpression') return
-    const specifier = literalModuleSpecifier(node.source)
-    if (specifier && isHttpsModuleSpecifier(specifier)) {
-      throw new Error(`Use a static import to pin ${specifier}`)
-    }
-  })
+  const references = staticModuleReferences(ast)
+    .filter(isRuntimeHttpsModuleReference)
+    .map(node => ({node, existingIntegrity: readModuleIntegrity(node)}))
+  if (!references.some(({existingIntegrity}) => existingIntegrity === undefined)) {
+    visitModuleSyntax(ast, node => {
+      if (node.type !== 'ImportExpression') return
+      const specifier = literalModuleSpecifier(node.source)
+      if (specifier && isHttpsModuleSpecifier(specifier)) {
+        throw new Error(`Use a static import to pin ${specifier}`)
+      }
+    })
+  }
   const modules = new Map<string, Awaited<ReturnType<typeof freezeExtensionImport>>>()
   const pins = new Map<string, string>()
   const vendored: VendoredExtensionModules = {}
   const edits: {start: number, end: number, replacement: string}[] = []
   const tokens = ast.tokens?.filter(token => typeof token.type !== 'string') ?? []
   const tokenIndexByEnd = new Map(tokens.map((token, index) => [token.end, index]))
-  for (const node of staticModuleReferences(ast)) {
-    if (isTypeOnlyModuleReference(node) || !isHttpsModuleSpecifier(node.source.value)) continue
+  for (const {node, existingIntegrity} of references) {
     const specifier = node.source.value
-    const existingIntegrity = readModuleIntegrity(node)
     const key = JSON.stringify([specifier, existingIntegrity])
     let module = modules.get(key)
     if (!module) {
@@ -198,7 +207,9 @@ export async function pinExtensionImports(source: string): Promise<{source: stri
     vendored[module.integrity] = module.bytes
     if (existingIntegrity) continue
     const {start, end} = node.source
-    if (start == null || end == null) throw new Error('Missing import source offsets')
+    if (start == null || end == null || node.start == null || node.end == null) {
+      throw new Error('Missing import source offsets')
+    }
     const quote = source[start] === "'" ? "'" : '"'
     const escapedUrl = module.url.replaceAll('\\', '\\\\').replaceAll(quote, `\\${quote}`)
     const literal = module.url === specifier ? source.slice(start, end) : `${quote}${escapedUrl}${quote}`
@@ -206,15 +217,14 @@ export async function pinExtensionImports(source: string): Promise<{source: stri
     // Babel represents both absent attributes and `with {}` as an empty array.
     const literalIndex = tokenIndexByEnd.get(end)
     const [withToken, openingBrace] = literalIndex === undefined ? [] : tokens.slice(literalIndex + 1, literalIndex + 3)
-    if (typeof withToken?.start === 'number' && withToken.type.label === 'with' &&
-      node.end != null && withToken.start < node.end) {
-      edits.push({start, end, replacement: literal}, {start: openingBrace.end, end: openingBrace.end, replacement: pin})
-    } else {
-      edits.push({start, end, replacement: `${literal} with {${pin}}`})
-    }
+    const suffix = typeof withToken?.start === 'number' && withToken.type.label === 'with' && withToken.start < node.end
+      ? source.slice(end, openingBrace.end) + pin + source.slice(openingBrace.end, node.end)
+      : ` with {${pin}}${source.slice(end, node.end)}`
+    edits.push({start: node.start, end: node.end, replacement: source.slice(node.start, start) + literal + suffix})
   }
+  const rewrittenImports = edits.map(edit => edit.replacement)
   for (const {start, end, replacement} of edits.reverse()) {
     source = source.slice(0, start) + replacement + source.slice(end)
   }
-  return {source, vendored}
+  return {source, vendored, rewrittenImports}
 }

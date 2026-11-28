@@ -1,6 +1,7 @@
 import {
-  isHttpsModuleSpecifier, isStaticModuleReference, isTypeOnlyModuleReference, isUnsupportedImportMeta, readModuleIntegrity, recordImportPin,
-  literalModuleSpecifier, moduleReference, visitModuleSyntax, type Node,
+  collectModulePins, isHttpsModuleSpecifier, isRuntimeHttpsModuleReference, isStaticModuleReference,
+  isUnpinnedHttpsModuleReference, isUnsupportedImportMeta, literalModuleSpecifier, moduleReference,
+  staticModuleReferences, unpinnedHttpsDynamicImport, visitModuleSyntax, type Node,
 } from '@knowledge-medium/agent-cli/extensionImportSyntax'
 
 interface ExtensionImportManifest {
@@ -46,13 +47,20 @@ function findExtensionImport(
   }
 }
 
+function extensionImportHint(specifier: string): string {
+  if (specifier.startsWith('@/')) return 'Use the .js path of an existing application module included in the build.'
+  if (/^data:/i.test(specifier)) return 'Move the code into this extension or use a self-contained HTTPS module with an integrity pin.'
+  if (isHttpsModuleSpecifier(specifier)) return 'Check @jsxImportSource for an HTTPS origin. Use an approved JSX runtime importmap key.'
+  return 'Use an importmap key or the @/ path to a built application module.'
+}
+
 export function resolveExtensionImport(
   specifier: string,
   grants: ImportGrants = {},
   manifest: ExtensionImportManifest = buildManifest,
 ): ExtensionImport {
   const resolved = findExtensionImport(specifier, grants, manifest)
-  if (!resolved) throw new Error(`Extension import is not allowed: ${specifier}`)
+  if (!resolved) throw new Error(`Extension import is not allowed: ${specifier}. ${extensionImportHint(specifier)}`)
   return resolved
 }
 
@@ -67,46 +75,47 @@ function rejectAuthoredPlaceholder(specifier: string): void {
 }
 
 export function createExtensionImportTransform() {
-  const pinnedImports = new Map<string, string>()
-  const unpinnedImports = new Set<string>()
+  const transform = {
+    pinnedImports: new Map<string, string>(),
+    unpinnedImports: new Set<string>(),
+    plugin: () => ({visitor: {Program: rewriteProgram}}),
+  }
 
   function rewriteLive(url: string): string {
-    unpinnedImports.add(url)
+    transform.unpinnedImports.add(url)
     return liveImportSpecifier(url)
   }
 
-  const plugin = () => ({
-    visitor: {
-      // Read only the original program. A generated HTTPS import must never
-      // inherit the grant of an authored import with the same URL.
-      Program(path: {node: unknown}) {
-        visitModuleSyntax(path.node, node => {
-          if (isStaticModuleReference(node)) {
-            const url = node.source.value
-            rejectAuthoredPlaceholder(url)
-            if (!isHttpsModuleSpecifier(url) || isTypeOnlyModuleReference(node)) return
-            const integrity = readModuleIntegrity(node)
-            if (!integrity) {
-              node.source.value = rewriteLive(url)
-              return
-            }
-            recordImportPin(pinnedImports, url, integrity)
-            node.source.value = vendoredImportSpecifier(integrity)
-            node.attributes = []
-          }
-          if (node.type === 'ImportExpression') {
-            const url = literalModuleSpecifier(node.source)
-            if (url === undefined) return
-            rejectAuthoredPlaceholder(url)
-            if (!isHttpsModuleSpecifier(url)) return
-            if (node.options) throw new Error('Pin HTTPS dynamic imports by moving them to a static import')
-            node.source = {type: 'StringLiteral', value: rewriteLive(url)}
-          }
-        })
-      },
-    },
-  })
-  return {pinnedImports, unpinnedImports, plugin}
+  // Read only the original program. A generated HTTPS import must never
+  // inherit the grant of an authored import with the same URL.
+  function rewriteProgram({node: ast}: {node: unknown}) {
+    const references = staticModuleReferences(ast)
+    transform.pinnedImports = collectModulePins(references)
+    for (const reference of references) {
+      const url = reference.source.value
+      rejectAuthoredPlaceholder(url)
+      if (isUnpinnedHttpsModuleReference(reference)) {
+        reference.source.value = rewriteLive(url)
+        continue
+      }
+      const integrity = transform.pinnedImports.get(url)
+      if (integrity && isRuntimeHttpsModuleReference(reference)) {
+        reference.source.value = vendoredImportSpecifier(integrity)
+        reference.attributes = []
+      }
+    }
+    visitModuleSyntax(ast, node => {
+      if (node.type !== 'ImportExpression') return
+      const specifier = literalModuleSpecifier(node.source)
+      if (specifier === undefined) return
+      rejectAuthoredPlaceholder(specifier)
+      const liveUrl = unpinnedHttpsDynamicImport(node)
+      if (!liveUrl) return
+      if (node.options) throw new Error('Pin HTTPS dynamic imports by moving them to a static import')
+      node.source = {type: 'StringLiteral', value: rewriteLive(liveUrl)}
+    })
+  }
+  return transform
 }
 
 interface ImportReference {
@@ -151,30 +160,35 @@ export function assertCompiledExtensionImports(
   grants: CompiledImportGrants,
 ) {
   const liveReplacements: ExtensionImportReplacement[] = []
+  let hasStaticUnpinnedImports = false
   const importGrants = {
     vendoredSpecifiers: new Set([...grants.pinnedImports.values()].map(vendoredImportSpecifier)),
     liveSpecifiers: new Set([...grants.unpinnedImports].map(liveImportSpecifier)),
   }
 
-  function check(source: Node) {
+  function check(source: Node, isStatic: boolean) {
     const specifier = literalModuleSpecifier(source)
-    if (specifier === undefined) throw new Error('Extension import() requires a literal module specifier')
+    if (specifier === undefined) {
+      throw new Error('Extension import() requires a literal module specifier. Replace the computed argument with a quoted path or a template literal without interpolations.')
+    }
     const resolved = resolveExtensionImport(specifier, importGrants, grants.manifest)
     if (resolved.kind === 'live') {
       if (!grants.allowUnpinnedLive) throw new Error(`Extension import requires an integrity pin: ${resolved.url}`)
       liveReplacements.push({...referenceRange(source), value: resolved.url})
+      hasStaticUnpinnedImports ||= isStatic
     }
   }
 
   visitModuleSyntax(parse(compiled, {sourceType: 'module'}), (node, parent) => {
     const reference = moduleReference(node)
-    if (reference?.source) check(reference.source)
-    if (isUnsupportedImportMeta(node, parent)) throw new Error('Extensions can only access import.meta.url')
+    if (reference?.source) check(reference.source, reference.kind === 'static')
+    if (isUnsupportedImportMeta(node, parent)) throw new Error('Extensions can only access import.meta.url. Replace other import.meta properties with explicit constants or literal import paths.')
   })
 
   return {
     compiled: replaceExtensionImportReferences(compiled, liveReplacements),
     importsUnpinned: liveReplacements.length > 0,
+    hasStaticUnpinnedImports,
   }
 }
 

@@ -38,13 +38,20 @@ const moduleResponse = (source: string): string =>
 
 describe('kmagent pin-imports', () => {
   // Starting a fresh CLI process and its parser took about 900 ms on its own.
-  it('writes the verified integrity pin to the input file', {timeout: 20_000}, async () => {
-    await runWithFetch(moduleResponse(moduleSource), 'pin-imports', sourceFile)
+  it('writes the verified pin and prints only the rewritten import with its canonical URL and hash', {timeout: 20_000}, async () => {
+    const entry = 'https://cdn.example.test/entry'
+    const canonical = 'https://cdn.example.test/implementation.js'
+    const unchanged = `import '${url}' with {integrity: 'sha256-${digest}'};`
+    const expectedRewrite = `import value from '${canonical}' with {integrity: 'sha256-${digest}'};`
+    await fs.writeFile(sourceFile, `${unchanged} import value from '${entry}';\nexport default value\n`)
+    const fetch = `async url => new Response(url.href === ${JSON.stringify(entry)}
+      ? "export * from './implementation.js'; export {default} from './implementation.js';"
+      : ${JSON.stringify(moduleSource)})`
+    const {stdout} = await runWithFetch(fetch, 'pin-imports', sourceFile)
 
     const pinned = await fs.readFile(sourceFile, 'utf8')
-    expect(pinned).toContain(url)
-    expect(pinned).toMatch(new RegExp(`with\\s*\\{\\s*integrity\\s*:\\s*['"]sha256-${RegExp.escape(digest)}['"]\\s*\\}`))
-    expect(pinned).toContain('export default value\n')
+    expect(pinned).toBe(`${unchanged} ${expectedRewrite}\nexport default value\n`)
+    expect(stdout).toBe(`${expectedRewrite}\n`)
   })
 
   it('preserves the input file when a remote module is refused', async () => {
@@ -62,7 +69,10 @@ describe('kmagent pin-imports', () => {
       return new Response(${JSON.stringify(moduleSource)})
     }`
 
-    await expect(runWithFetch(fetchWhileEditing, 'pin-imports', sourceFile)).rejects.toThrow('source changed while pinning')
+    await expect(runWithFetch(fetchWhileEditing, 'pin-imports', sourceFile)).rejects.toMatchObject({
+      message: expect.stringContaining('source changed while pinning'),
+      stdout: '',
+    })
     expect(await fs.readFile(sourceFile, 'utf8')).toBe(edited)
   })
 })

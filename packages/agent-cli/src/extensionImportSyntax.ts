@@ -99,29 +99,40 @@ export function isHttpsModuleSpecifier(specifier: string): boolean {
   return /^https:/i.test(specifier)
 }
 
+function integrityAttribute(node: StaticModuleReference) {
+  return node.attributes?.find(({key}) => (key.type === 'Identifier' ? key.name : key.value) === 'integrity')
+}
+
+export function isRuntimeHttpsModuleReference(node: StaticModuleReference): boolean {
+  return isHttpsModuleSpecifier(node.source.value) && !isTypeOnlyModuleReference(node)
+}
+
+export function isUnpinnedHttpsModuleReference(node: StaticModuleReference): boolean {
+  return isRuntimeHttpsModuleReference(node) && !integrityAttribute(node)
+}
+
+export function unpinnedHttpsDynamicImport(node: Node): string | undefined {
+  if (node.type !== 'ImportExpression') return
+  const specifier = literalModuleSpecifier(node.source)
+  return specifier && isHttpsModuleSpecifier(specifier) ? specifier : undefined
+}
+
 export function unpinnedExtensionImportUrls(ast: unknown): string[] {
   const urls = new Set<string>()
   visitModuleSyntax(ast, node => {
-    if (isStaticModuleReference(node) && !isTypeOnlyModuleReference(node)
-      && isHttpsModuleSpecifier(node.source.value)
-      && !node.attributes?.some(({key}) => (key.type === 'Identifier' ? key.name : key.value) === 'integrity')) {
+    if (isStaticModuleReference(node) && isUnpinnedHttpsModuleReference(node)) {
       urls.add(node.source.value)
     }
-    if (node.type === 'ImportExpression') {
-      const specifier = literalModuleSpecifier(node.source)
-      if (specifier && isHttpsModuleSpecifier(specifier)) urls.add(specifier)
-    }
+    const dynamicUrl = unpinnedHttpsDynamicImport(node)
+    if (dynamicUrl) urls.add(dynamicUrl)
   })
   return [...urls]
 }
 
 export function readModuleIntegrity(node: StaticModuleReference): string | undefined {
-  const attributes = node.attributes ?? []
-  if (attributes.length === 0) return
-  const [attribute] = attributes
-  const name = attribute.key.type === 'Identifier' ? attribute.key.name : attribute.key.value
-  const integrity = attribute.value.value
-  if (attributes.length !== 1 || name !== 'integrity' || !extensionImportIntegrity.test(integrity)) {
+  if (!node.attributes?.length) return
+  const integrity = integrityAttribute(node)?.value.value ?? ''
+  if (node.attributes.length !== 1 || !extensionImportIntegrity.test(integrity)) {
     throw new Error('An HTTPS extension import requires a SHA-256 integrity attribute')
   }
   return integrity
@@ -133,16 +144,19 @@ export function recordImportPin(pins: Map<string, string>, url: string, integrit
   pins.set(url, integrity)
 }
 
-export function sourcePinnedImports(ast: unknown): Map<string, string> {
+export function collectModulePins(references: Iterable<StaticModuleReference>): Map<string, string> {
   const pins = new Map<string, string>()
-  for (const reference of staticModuleReferences(ast)) {
-    const url = reference.source.value
-    if (!isHttpsModuleSpecifier(url) || isTypeOnlyModuleReference(reference)) continue
+  for (const reference of references) {
+    if (!isRuntimeHttpsModuleReference(reference)) continue
     const integrity = readModuleIntegrity(reference)
     if (!integrity) continue
-    recordImportPin(pins, url, integrity)
+    recordImportPin(pins, reference.source.value, integrity)
   }
   return pins
+}
+
+export function sourcePinnedImports(ast: unknown): Map<string, string> {
+  return collectModulePins(staticModuleReferences(ast))
 }
 
 /** Load the parser on demand so warm approvals without pins need no compiler. */

@@ -10,6 +10,14 @@ import type { ExtensionApprovalStatus } from '@/extensions/dynamicExtensions.js'
 
 export type { ExtensionApprovalStatus }
 
+export const extensionApprovalAction = (status: ExtensionApprovalStatus): string | undefined => {
+  if (status.kind === 'needs-approval') return 'Enable here'
+  if (status.kind === 'update-available') return 'Update'
+  if (status.hasStaticUnpinnedImports) return 'Pin imports'
+}
+
+export const dynamicImportPinInstruction = 'Use a static import to pin it.'
+
 export type ExtensionApprovalStatusMap = ReadonlyMap<string, ExtensionApprovalStatus>
 
 /**

@@ -3,7 +3,7 @@ import path from 'node:path'
 
 /** Every internal module as a Rollup input, so an extension can import ANY of
  *  them at its stable `@/` path and get its full export surface. The boot
- *  graph itself is bundled into one chunk (`codeSplitting` below); each of
+ *  graph itself is bundled into one chunk by the Vite build; each of
  *  these entries then emits as a thin facade re-exporting from it, so the
  *  importmap contract holds while the browser loads ~3 files at boot instead
  *  of ~1,500 (the per-file loader cost, not JS linking, was ~0.5 s of an

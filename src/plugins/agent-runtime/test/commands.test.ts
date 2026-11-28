@@ -729,7 +729,7 @@ describe('agent runtime commands', () => {
         attempts += 1
         // Transient: the scan's attempt fails, a retry would succeed.
         if (attempts === 1) throw new SyntaxError('transient')
-        return {compiled: 'export default []', importsUnpinned: false, pinnedImports: new Map()}
+        return {compiled: 'export default []', importsUnpinned: false, hasStaticUnpinnedImports: false, pinnedImports: new Map()}
       })
       try {
         await install('install-nopin')
