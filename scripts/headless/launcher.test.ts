@@ -132,6 +132,8 @@ it('runs only reviewed bytes, reports normalized synced drift and refuses invali
       killSignal: 'SIGKILL',
     })
     const client = createBridgeClient({bridgeUrl: bridge.url, token, workspaceId: 'fixture', timeoutMs: 5_000})
+    let hostOutput = ''
+    host.child.stdout!.setEncoding('utf8').on('data', (chunk: string) => { hostOutput += chunk })
     const health = () => client.runCommand({type: 'health'})
     const effectWrites = () => client.runCommand({type: 'sql',
       sql: `SELECT content, created_by, updated_by,
@@ -141,16 +143,17 @@ it('runs only reviewed bytes, reports normalized synced drift and refuses invali
     const running = {block: 'fixture-reviewed', state: 'running', effectIds: ['reviewed-effect']}
     await Promise.race([
       vi.waitFor(async () => {
+        expect(hostOutput).toContain('fixture reviewed effect committed')
         expect(await health()).toMatchObject({host: {closedReason: null, extensions: [
           refused('fixture-non-error', 'load-error'), {...running, state: 'update-available'}, refused('fixture-unpinned', 'unpinned-import'), refused('fixture-forbidden', 'forbidden-import'),
           refused('fixture-host-forbidden', 'forbidden-import'), refused('fixture-missing-export', 'load-error'),
           refused('fixture-throws', 'load-error'), refused('fixture-absent', 'missing-block'),
           refused('fixture-permissions', 'reviewed-file-permissions'), refused('fixture-unreadable', 'reviewed-file-unreadable'),
         ]}})
-        expect(await effectWrites()).toEqual([{content: 'reviewed-effect', created_by: 'member', updated_by: 'member', creators: null}])
       }, {timeout: 32_000}),
       host.then(() => { throw new Error('Host exited before running the fixture') }),
     ])
+    expect(await effectWrites()).toEqual([{content: 'reviewed-effect', created_by: 'member', updated_by: 'member', creators: null}])
     expect(cdnRequests).toEqual(['/fixture.mjs'])
     const {stdout: rss} = await run('ps', ['-o', 'rss=', '-p', String(host.child.pid)])
     console.info(`Headless host RSS with fixture: ${Number(rss.trim())} KiB`)

@@ -88,7 +88,7 @@ it('passes only allowlisted contribution provenance and refreshes admission befo
   host.setWritableAdmission(true, refreshAdmission)
   expect(host.health()).toEqual([{block, state: 'refused', reason: 'starting', effectIds: []}])
   await vi.waitFor(() => expect(refreshAdmission).toHaveBeenCalledOnce())
-  expect(exportFunction).not.toHaveBeenCalled()
+  expect(exportFunction.mock.calls).toHaveLength(0)
 })
 
 it('refuses records from another approval store, even with an active admission callback', async () => {
@@ -96,11 +96,12 @@ it('refuses records from another approval store, even with an active admission c
   host.setWritableAdmission(true, async () => {})
   await vi.waitFor(() => expect(startGranted).toHaveBeenCalledOnce())
   const other = new InMemoryCompiledModuleCache()
+  const activeAdmission = instantiate.mock.lastCall![4]
   await approveExtension(block, 'export default 99', other)
   await approveExtension('unlisted', source, other)
-  await expect(loadApprovedExtension(block, (await other.read(block))!, createCompileCache(), other, undefined, async () => {}))
+  await expect(loadApprovedExtension(block, (await other.read(block))!, createCompileCache(), other, undefined, activeAdmission))
     .rejects.toThrow('Extension record does not match the host grant')
-  await expect(loadApprovedExtension('unlisted', (await other.read('unlisted'))!, createCompileCache(), other, undefined, async () => {}))
+  await expect(loadApprovedExtension('unlisted', (await other.read('unlisted'))!, createCompileCache(), other, undefined, activeAdmission))
     .rejects.toThrow('Extension record does not match the host grant')
   expect(instantiate).toHaveBeenCalledTimes(1)
   await approveExtension(block, source, other)
@@ -117,17 +118,23 @@ it('refuses a matching record outside its writable admission', async () => {
     await check()
     return {default: appEffectsFacet.of({id: 'granted', start: startGranted})}
   })
-  host.setWritableAdmission(true, async () => {})
+  const refresh = vi.fn(async () => {})
+  host.setWritableAdmission(true, refresh)
   await vi.waitFor(() => expect(startGranted).toHaveBeenCalledOnce())
   const formerAdmission = instantiate.mock.lastCall![4]
   host.setWritableAdmission(false, async () => {})
+  refresh.mockClear()
+  await expect(formerAdmission()).rejects.toMatchObject({name: 'AbortError'})
+  expect(refresh).not.toHaveBeenCalled()
   const openedAgain = vi.fn()
   instantiate.mockImplementation(async (_block, _record, _manifest, _import, check) => {
     await check()
     return {default: appEffectsFacet.of({id: 'granted', start: openedAgain})}
   })
-  await expect(loadApprovedExtension(block, (await other.read(block))!, createCompileCache(), other))
-    .rejects.toThrow('Extension evaluation requires writable admission')
+  const closed = await loadApprovedExtension(block, (await other.read(block))!, createCompileCache(), other)
+    .catch((error: unknown) => error)
+  expect(instantiate).toHaveBeenCalledTimes(1)
+  expect(closed).toMatchObject({message: 'Extension evaluation requires writable admission'})
   host.setWritableAdmission(true, async () => {})
   await vi.waitFor(() => expect(openedAgain).toHaveBeenCalledOnce())
   await expect(loadApprovedExtension(block, (await other.read(block))!, createCompileCache(), other, undefined, formerAdmission))

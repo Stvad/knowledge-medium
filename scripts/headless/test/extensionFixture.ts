@@ -27,7 +27,7 @@ export default appEffectsFacet.of({
   start({repo, workspaceId}) {
     setInterval(() => {}, 60_000)
     void repo.tx(tx => tx.create({workspaceId, parentId: null, orderKey: 'a0', content: jsx.props.children + '-' + suffix}),
-      {scope: ChangeScope.BlockDefault})
+      {scope: ChangeScope.BlockDefault}).then(() => console.info('fixture reviewed effect committed'))
     return () => console.info('fixture reviewed effect stopped')
   },
 })
