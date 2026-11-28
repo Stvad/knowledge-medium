@@ -48,6 +48,10 @@ vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({
   }),
 }))
 
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {createElement, type ComponentType} from 'react'
+import {RepoContext} from '@/context/repo.js'
+import * as toast from '@/utils/toast.js'
 import type { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo.js'
@@ -66,14 +70,15 @@ import matrixContributions, {
   matrixChatPrefsType,
   matrixIngestEffect,
   messageNodeId,
+  nextBatchKey,
+  tokenKey,
   roomIdProp,
 } from './matrix-chat-client.tsx'
 
 const WS = 'ws-matrix'
 const HOMESERVER = 'https://matrix.test'
 const ROOM = '!room:matrix.test'
-const TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
-const NEXT_BATCH_KEY = `knowledge-medium:matrix-messages:state:v1:${HOMESERVER}:${ROOM}`
+const destination = {workspaceId: WS, baseUrl: HOMESERVER, roomId: ROOM}
 const SHARED_EVENT_ID = '$evt-shared'
 
 /** The app shell owns mounts and effects; a repo-level runtime takes neither.
@@ -118,9 +123,9 @@ const setup = async (): Promise<Repo> => {
  *  (that call only establishes a position), so without one no message is ever
  *  read. */
 const configureIngest = async (repo: Repo): Promise<void> => {
-  window.localStorage.setItem(TOKEN_KEY, 'secret-token')
+  window.localStorage.setItem(tokenKey(destination), 'secret-token')
   window.localStorage.setItem(
-    NEXT_BATCH_KEY,
+    nextBatchKey(destination),
     JSON.stringify({nextBatch: 'cursor-0', savedAt: 1}),
   )
   const block = await getPluginPrefsBlock(repo, WS, repo.user, matrixChatPrefsType)
@@ -182,7 +187,7 @@ const messageRows = (rootId: string): Promise<MessageRow[]> => sharedDb.db.getAl
 )
 
 const savedCursor = (): string | null => {
-  const raw = window.localStorage.getItem(NEXT_BATCH_KEY)
+  const raw = window.localStorage.getItem(nextBatchKey(destination))
   return raw ? (JSON.parse(raw) as {nextBatch: string}).nextBatch : null
 }
 
@@ -198,6 +203,50 @@ beforeEach(resetReplica)
 afterEach(() => {
   stopIngest?.()
   stopIngest = undefined
+})
+
+describe('Matrix setup in a child-backed workspace', () => {
+  it.each(['Save', 'Bind saved device token'] as const)('%s persists the settings and device credential', async button => {
+    const repo = await setup()
+    const prefs = await getPluginPrefsBlock(repo, WS, repo.user, matrixChatPrefsType)
+    const initialRoom = '!previous:matrix.test'
+    await prefs.set(roomIdProp, initialRoom)
+    await prefs.set(autoStartProp, false)
+    const legacyTokenKey = 'knowledge-medium:matrix:token:v1'
+    const legacyCursorKey = `knowledge-medium:matrix-messages:state:v1:${HOMESERVER}:${ROOM}`
+    const bind = button === 'Bind saved device token'
+    if (bind) {
+      localStorage.setItem(legacyTokenKey, 'setup-token')
+      localStorage.setItem(legacyCursorKey, JSON.stringify({nextBatch: 'old-cursor', savedAt: 1}))
+    }
+    const errors = vi.spyOn(toast, 'showError')
+    const successes = vi.spyOn(toast, 'showSuccess')
+    try {
+      const mount = matrixContributions.find(c => (c.value as {id?: string}).id === 'matrix.setup-dialog')!.value as {component: ComponentType}
+      const connect = matrixContributions.find(c => (c.value as {id?: string}).id === 'matrix.connect')!.value as unknown as {handler: () => void}
+      render(createElement(RepoContext.Provider, {value: repo}, createElement(mount.component)))
+      act(() => connect.handler())
+      await screen.findByDisplayValue(initialRoom)
+      fireEvent.change(screen.getByLabelText('Homeserver URL'), {target: {value: HOMESERVER}})
+      fireEvent.change(screen.getByLabelText('Room ID'), {target: {value: ROOM}})
+      if (!bind) fireEvent.change(screen.getByLabelText('Access token'), {target: {value: 'setup-token'}})
+      fireEvent.click(await screen.findByRole('button', {name: button}))
+      await waitFor(() => expect(errors.mock.calls.length + successes.mock.calls.length).toBeGreaterThan(0))
+      expect(errors.mock.calls).toEqual([])
+      expect(successes).toHaveBeenCalledWith('Matrix connected.')
+      expect(await cellBag(prefs.id)).toMatchObject({
+        [homeserverProp.name]: HOMESERVER, [roomIdProp.name]: ROOM, [autoStartProp.name]: true,
+        'matrix:connected': true,
+      })
+      expect(localStorage.getItem(tokenKey(destination))).toBe('setup-token')
+      expect(savedCursor()).toBe(bind ? 'old-cursor' : null)
+      expect(localStorage.getItem(legacyTokenKey)).toBeNull()
+    } finally {
+      cleanup()
+      errors.mockRestore()
+      successes.mockRestore()
+    }
+  })
 })
 
 describe('matrix ingest into a child-backed workspace', () => {
@@ -337,10 +386,7 @@ describe('matrix ingest into a child-backed workspace', () => {
       const random = vi.spyOn(Math, 'random').mockReturnValue(presetId === 'string' ? 0.1 : 0.9)
       try {
         stopIngest = matrixIngestEffect.start({repo})
-        await vi.waitFor(async () => {
-          expect(await sharedDb.db.get('SELECT id FROM blocks WHERE id = ?', [rootId])).toBeDefined()
-          expect(savedCursor()).toBe('cursor-1')
-        }, {timeout: 10_000, interval: 50})
+        await vi.waitFor(() => expect(savedCursor()).toBe('cursor-1'), {timeout: 10_000, interval: 50})
         const rows = await messageRows(rootId)
         return {
           rows: new Map(rows.map(row => [row.id, row])),
@@ -361,12 +407,22 @@ describe('matrix ingest into a child-backed workspace', () => {
     const ordinaryId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1])
     const nestedCountId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1, 0])
     const nestedOrdinaryId = messageNodeId(WS, SHARED_EVENT_ID, [0, 1, 1])
-    const promotedCounts = [[rootId, 'many'], [ordinaryId, 'nested many']] as const
-    for (const [parentId, value] of promotedCounts) {
-      expect(JSON.parse(promotingRows.get(parentId)!.properties_json)['matrix:count']).toBe(value)
-      expect(JSON.parse(decliningRows.get(parentId)!.properties_json)['matrix:count']).toBeUndefined()
+    const promotedCounts = [[rootId, 'many', countId], [ordinaryId, 'nested many', nestedCountId]] as const
+    for (const [parentId, value, bulletId] of promotedCounts) {
+      const promoting = promotingRows.get(parentId)
+      const declining = decliningRows.get(parentId)
+      expect.soft(promoting && JSON.parse(promoting.properties_json)['matrix:count']).toBe(value)
+      expect.soft(declining && Object.hasOwn(JSON.parse(declining.properties_json), 'matrix:count'),
+        `declining parent omits property: ${value}`).toBe(false)
+      expect.soft(promoting && promotingRows.has(bulletId), `promoting parent omits bullet: ${value}`).toBe(false)
     }
-    for (const id of [countId, nestedCountId]) expect(promotingRows.has(id)).toBe(false)
+
+    for (const [id, label] of [[ordinaryId, 'ordinary'], [nestedOrdinaryId, 'nested ordinary']]) {
+      const promoting = promotingRows.get(id)
+      const declining = decliningRows.get(id)
+      expect.soft(promoting && declining && promoting.orderKey === declining.orderKey,
+        `both replicas keep sibling order: ${label}`).toBe(true)
+    }
 
     const eventMetadata = (row: MessageRow) =>
       Object.fromEntries(Object.entries(JSON.parse(row.properties_json) as Record<string, unknown>)
@@ -389,11 +445,11 @@ describe('matrix ingest into a child-backed workspace', () => {
       for (const row of [...firstRows.values(), ...secondRows.values()]) {
         if (!merged.has(row.id)) merged.set(row.id, row)
       }
-      const root = merged.get(rootId)!
-      const countBullet = merged.get(countId)!
-      const ordinary = merged.get(ordinaryId)!
-      const nestedCount = merged.get(nestedCountId)!
-      const nestedOrdinary = merged.get(nestedOrdinaryId)!
+      const root = merged.get(rootId)
+      const countBullet = merged.get(countId)
+      const ordinary = merged.get(ordinaryId)
+      const nestedCount = merged.get(nestedCountId)
+      const nestedOrdinary = merged.get(nestedOrdinaryId)
 
       const children = (parentId: string): MessageRow[] =>
         [...merged.values()].filter(row => row.parent_id === parentId).sort((a, b) =>
@@ -402,37 +458,40 @@ describe('matrix ingest into a child-backed workspace', () => {
       const contents = (parentId: string): string[] => children(parentId)
         .map(row => row.is_field_form === 1 ? 'property field' : row.content)
 
-      expect(root.content).toBe('hello')
-      expect(root.parent_id).toBe(promotingRows.get(rootId)!.parent_id)
-      expect(countBullet).toMatchObject({content: 'count:: many', parent_id: rootId})
-      expect(ordinary).toMatchObject({content: 'ordinary', parent_id: rootId})
-      expect(nestedCount).toMatchObject({content: 'count:: nested many', parent_id: ordinary.id})
-      expect(nestedOrdinary).toMatchObject({content: 'nested ordinary', parent_id: ordinary.id})
-      expect(JSON.parse(root.properties_json).types).toEqual(['matrix-message'])
-      expect(eventMetadata(root)).toEqual(rootMetadata)
-      for (const row of [countBullet, ordinary, nestedCount, nestedOrdinary]) {
-        expect(JSON.parse(row.properties_json).types ?? [], row.content).not.toContain('matrix-message')
-        expect(eventMetadata(row), row.content).toEqual({})
+      for (const [id, label] of [
+        [countId, 'count'], [ordinaryId, 'ordinary'], [nestedCountId, 'nested count'], [nestedOrdinaryId, 'nested ordinary'],
+      ]) {
+        const row = merged.get(id)
+        expect.soft(row && (JSON.parse(row.properties_json).types ?? []).includes('matrix-message'),
+          `${uploadOrder}: ${label} omits message type`).toBe(false)
+        expect.soft(row && eventMetadata(row), `${uploadOrder}: ${label} omits event metadata`).toEqual({})
       }
+      for (const [id, label] of [[countId, 'count'], [nestedCountId, 'nested count'], [nestedOrdinaryId, 'nested ordinary']]) {
+        expect.soft(merged.get(id) && children(id), `${uploadOrder}: ${label} is a leaf`).toEqual([])
+      }
+
+      expect.soft(root?.content).toBe('hello')
+      expect.soft(root && root.parent_id === promotingRows.get(rootId)?.parent_id).toBe(true)
+      expect.soft(countBullet).toMatchObject({content: 'count:: many', parent_id: rootId})
+      expect.soft(ordinary).toMatchObject({content: 'ordinary', parent_id: rootId})
+      expect.soft(nestedCount).toMatchObject({content: 'count:: nested many', parent_id: ordinaryId})
+      expect.soft(nestedOrdinary).toMatchObject({content: 'nested ordinary', parent_id: ordinaryId})
+      expect.soft(root && JSON.parse(root.properties_json).types).toEqual(['matrix-message'])
+      expect.soft(root && eventMetadata(root)).toEqual(rootMetadata)
 
       // In this fixture the count field and the root's type and metadata
       // fields sort between the two authored siblings.
       const rootFields = Array<string>(Object.keys(rootMetadata).length + 2).fill('property field')
       expect.soft(contents(rootId), uploadOrder).toEqual(['count:: many', ...rootFields, 'ordinary'])
-      expect.soft(contents(ordinary.id), uploadOrder)
+      expect.soft(contents(ordinaryId), uploadOrder)
         .toEqual(['count:: nested many', 'property field', 'nested ordinary'])
-      for (const leaf of [countBullet, nestedCount, nestedOrdinary]) expect(children(leaf.id)).toEqual([])
 
       for (const [parentId, value] of promotedCounts) {
         const fields = children(parentId).filter(row =>
           row.is_field_form === 1 && row.content === countFieldContent)
-        expect(fields, uploadOrder).toHaveLength(1)
-        expect(children(fields[0]!.id).map(row => row.content)).toEqual([value])
+        expect.soft(fields, uploadOrder).toHaveLength(1)
+        expect.soft(fields.flatMap(field => children(field.id)).map(row => row.content)).toEqual([value])
       }
-    }
-
-    for (const id of [ordinaryId, nestedOrdinaryId]) {
-      expect(promotingRows.get(id)?.orderKey).toBe(decliningRows.get(id)?.orderKey)
     }
   }, 30_000)
 })

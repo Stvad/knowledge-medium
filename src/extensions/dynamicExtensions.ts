@@ -69,8 +69,9 @@ export interface DynamicExtensionsOptions {
    *  module code never runs) and to tag enabled extensions with the
    *  right togglable boundary so the resolver can flip them at runtime
    *  without rebuilding the dynamic subtree. Defaults to an empty
-   *  map — every block resolves to "enabled" (since
-   *  `userExtensionToggle` forces `defaultEnabled: true`). */
+   *  map — every block resolves to disabled (`userExtensionToggle`
+   *  forces `defaultEnabled: false`), so nothing compiles without an
+   *  explicit `true`. */
   overrides?: Overrides
   errorReporter?: ExtensionLoadErrorReporter
   /** Reports the device-local trust status of enabled blocks that aren't

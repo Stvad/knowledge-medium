@@ -9,17 +9,41 @@ import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import { PROPS } from './config.js'
-import type { Graph, MemoryScope, ReplyWriter } from './graph.js'
+import type { BlockData, BlockView, Graph, MemoryScope, ReplyWriter } from './graph.js'
 import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
+import type { QueryRow } from './queryDiff.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
-import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
+import { decidePending, diffQueryRows, findThreadSession, hasFreshRunningClaim, isMention, isTerminalTask, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
+import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt, renderRowTaskPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
 import { MEMORY_DIFF_LIMIT } from './graph.js'
 // Dispatch's km server (`./mcp.ts`) must never set `localMediaFiles`: this list pre-approves its add_media.
 import { KM_MCP_ALLOWED_TOOLS_WITHOUT_LOCAL_FILES as DISPATCH_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
+
+type BlockTask =
+  | {kind: 'mention', id: string, watcher: BacklinksWatcher, deepLink: string, baselineMs: number}
+  | {kind: 'row', id: string, watcher: QueryWatcher, row: QueryRow, baselineMs: number}
+
+// A renamed watcher leaves claims under its former name for explicit recovery.
+const belongsToWatcher = (block: BlockView, watcher: Watcher) => {
+  const props = block.properties
+  return !props?.[PROPS.status] || !props[PROPS.watcher] || props[PROPS.watcher] === watcher.name
+}
+
+const rowTaskAction = (block: BlockView, watcher: QueryWatcher, createdSinceMs: number): 'run' | 'release' | 'skip' => {
+  const props = block.properties ?? {}
+  const status = props[PROPS.status]
+  if (Object.hasOwn(props, PROPS.askedAt)) {
+    return status && props[PROPS.watcher] === watcher.name ? 'release' : 'skip'
+  }
+  if (!belongsToWatcher(block, watcher) || isTerminalTask(block)) return 'skip'
+  const claimed = status === 'running' || (status === 'queued' && taskAttempts(block) > 0)
+  return claimed || (block.createdAt ?? -Infinity) >= createdSinceMs ? 'run' : 'skip'
+}
+
+const postsReply = (task: BlockTask) => task.kind === 'mention' || task.watcher.reply
 
 export interface ChannelEvent {
   content: string
@@ -244,19 +268,44 @@ export const createEngine = (deps: EngineDeps) => {
     }
   }
 
-  /** Park a task that exhausted its retries. Re-read + re-decide first
-   *  (the pre-filter used a tick-start snapshot; the ambient session may
-   *  have closed it since), then write the terminal `error` props BEFORE
-   *  the reply, so the state sticks even if the reply write fails: a
-   *  reply-succeeds / setTaskProps-fails split would re-enter every
-   *  tick and spam ⚠️ blocks into the user's notes (the one write path with
-   *  no billed-run circuit breaker). */
-  const parkExhausted = async (watcher: BacklinksWatcher, sourceId: string) => {
-    const fresh = await graph.getBlock(sourceId)
-    if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
-    const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
-    await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
-    await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`, {
+  const currentTaskBlock = async (task: BlockTask) => {
+    const {watcher, id} = task
+    const block = await graph.getBlock(id)
+    if (!block || !belongsToWatcher(block, watcher)) return null
+    // Defence in depth: an older app can resolve a literal row id as a reference despite exactIds.
+    if (task.kind === 'row' && (block.id !== id || block.workspaceId !== config.workspaceId)) {
+      log(`[${watcher.name}] skipped ${id}: block no longer matches the row in the configured workspace`)
+      return null
+    }
+    return block
+  }
+
+  const pendingDecision = (task: BlockTask, source: BlockView, editingActiveAtMs?: number) => {
+    const status = source.properties?.[PROPS.status]
+    if (task.kind === 'row' && rowTaskAction(source, task.watcher, task.baselineMs) !== 'run') {
+      return {pending: false, reason: 'ineligible-row'} as const
+    }
+    if (source.properties?.[PROPS.cancel] && (status === 'running' || status === 'queued')) {
+      if (task.watcher.delivery === 'spawn') return {pending: false, reason: 'cancelled'} as const
+      if (status === 'running') return {pending: false, reason: 'clear-cancel'} as const
+    }
+    return decidePending({
+      source, nowMs: now(), editingActiveAtMs,
+      settleMs: task.watcher.settleMs, editHoldMs: task.watcher.editHoldMs,
+      baselineMs: task.kind === 'mention' ? task.baselineMs : undefined,
+    })
+  }
+
+  /** Recheck the reason before parking. Write terminal props before a reply
+   *  so a failed reply cannot retrigger this unbilled write every tick. */
+  const parkTask = async (task: BlockTask, expected: 'attempts-exhausted' | 'cancelled') => {
+    const {watcher, id: sourceId} = task
+    const fresh = await currentTaskBlock(task)
+    if (!fresh || pendingDecision(task, fresh).reason !== expected) return
+    const reason = expected === 'cancelled' ? 'cancelled'
+      : `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
+    await graph.setTaskProps(sourceId, {status: 'error', error: reason, cancel: null, activity: null, nowMs: now()})
+    if (postsReply(task)) await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`, {
       replyKey: `park:${sourceId}`, shape: 'block', final: true,
     }).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
@@ -276,7 +325,7 @@ export const createEngine = (deps: EngineDeps) => {
 
   /** What the run changed in its memory, for the reply; null when nothing. */
   const memoryChanges = async (
-    watcher: BacklinksWatcher, memory: {blockId: string, scope: MemoryScope, entries: MemoryEntry[] | null},
+    watcher: Watcher, memory: {blockId: string, scope: MemoryScope, entries: MemoryEntry[] | null},
   ): Promise<string | null> => {
     try {
       const after = await graph.memoryEntries(memory.scope)
@@ -290,27 +339,68 @@ export const createEngine = (deps: EngineDeps) => {
     }
   }
 
+  const preparePrompt = async (task: BlockTask, block: BlockData, ancestorBlocks: BlockData[]) => {
+    const sourceId = task.id
+    const subtreeRows = await graph.getSubtree(sourceId)
+    const subtree = renderSubtreeOutline(subtreeRows as SubtreeOutlineRow[], {includeProperties: true})
+    if (task.kind === 'row') {
+      const prompt = renderRowTaskPrompt(task.watcher.prompt, {
+        row: task.row, subtree, blockId: sourceId, watcherName: task.watcher.name,
+      })
+      return {prompt, memory: null}
+    }
+    const {watcher} = task
+    // Context only: a thread that can't be read (an app without the
+    // comments verb, the plugin off) leaves the mention answered without it.
+    const thread = await loadThreadContext(graph, block, ancestorBlocks).catch(error => {
+      log(`[${watcher.name}] no thread context for ${sourceId}: ${errorMessage(error)}`)
+      return null
+    })
+    const memory = watcher.memory
+      ? await loadMemory(watcher, sourceId).catch(error => {
+        log(`[${watcher.name}] no memory for ${sourceId}: ${errorMessage(error)}`)
+        return null
+      })
+      : null
+    const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
+    const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
+      content: block.content ?? '',
+      subtree,
+      // graph.ancestors is nearest-first; the prompt reads root→leaf.
+      ancestors: ancestorBlocks.map(ancestor => ({id: ancestor.id, content: ancestor.content ?? ''})).reverse(),
+      blockId: sourceId,
+      deepLink: task.deepLink,
+      watcherName: watcher.name,
+      target: watcher.target,
+      thread: thread ?? undefined,
+      memory: memory ? {blockId: memory.blockId, outline: memory.outline, shared: memory.scope.sharedRoots.length > 0} : undefined,
+      // Only spawn delivery posts (and thus splits) the reply — the
+      // channel session writes its own, so don't nudge it.
+      splitReply: watcher.delivery !== 'channel' && watcher.splitReply,
+    })
+    return {prompt, memory}
+  }
+
   /** The pre-claim re-check; null when the mention is no longer pending. */
-  const readPendingMention = async (watcher: BacklinksWatcher, sourceId: string, baselineMs: number) => {
+  const readPendingTask = async (task: BlockTask) => {
+    const sourceId = task.id
     // Edit state first: a block read after "not being edited" can't be older
     // than the edit that ended, and the prompt is built from this read.
     const editingActiveAtMs = (await graph.beingEditedBlocks()).get(sourceId)
-    const block = await graph.getBlock(sourceId)
+    const block = await currentTaskBlock(task)
     if (!block) return null
-    const decision = decidePending({
-      source: block, nowMs: now(), settleMs: watcher.settleMs, editingActiveAtMs, editHoldMs: watcher.editHoldMs, baselineMs,
-    })
+    const decision = pendingDecision(task, block, editingActiveAtMs)
     if (!decision.pending) return null
-    return {block, decision, ancestorBlocks: await graph.ancestors(sourceId)}
+    return {block, decision, ancestorBlocks: task.kind === 'row' ? [] : await graph.ancestors(sourceId)}
   }
 
-  const processMention = async (
-    watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
-  ) => {
+  const processBlockTask = async (task: BlockTask, launchStamp: number) => {
+    const {watcher, id: sourceId} = task
+    const streamReply = task.kind === 'mention' && task.watcher.streamReply
     const {runner} = watcher
     // Pre-claim exits spawned nothing, so each one, a failed read included,
     // gives the launch slot back.
-    const pending = await readPendingMention(watcher, sourceId, baselineMs)
+    const pending = await readPendingTask(task)
       .catch(error => {
         refundLaunch(launchStamp)
         throw error
@@ -320,7 +410,7 @@ export const createEngine = (deps: EngineDeps) => {
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
-    const session = watcher.resume
+    const session = task.kind === 'mention' && task.watcher.resume
       ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
       : null
     const sessionKey = session ? `session:${session}` : null
@@ -355,9 +445,9 @@ export const createEngine = (deps: EngineDeps) => {
     // *terminal props write* — which lands AFTER a good reply — can't
     // re-enter the reply write and clobber the answer.
     let terminalReplyDelivered = false
-    // Per-run reply identity + shape, set once `attempt` is known (below).
-    let replyKey = ''
-    let replyShape: 'outline' | 'block' = 'block'
+    const attempt = taskAttempts(block) + 1
+    const replyKey = task.kind === 'row' ? `row-reply:${sourceId}:${attempt}` : `reply:${sourceId}:${attempt}`
+    const replyShape = task.kind === 'row' || task.watcher.splitReply ? 'outline' : 'block'
     // Abort handle for THIS run — a cancel request (agent:cancel, detected
     // in the tick) aborts it, killing the child. `signal.aborted` after the
     // run tells a user cancel apart from a timeout/crash.
@@ -375,34 +465,33 @@ export const createEngine = (deps: EngineDeps) => {
       markdown: string,
       {final = false, shape = replyShape}: {final?: boolean, shape?: 'outline' | 'block'} = {},
     ): Promise<void> => {
-      await replies.reconcileReplyTree(sourceId, markdown, {replyKey, shape, final})
+      if (postsReply(task)) await replies.reconcileReplyTree(sourceId, markdown, {replyKey, shape, final})
     }
-    const reconcileReplyWithRetry = async (
-      markdown: string,
-      opts: {final?: boolean, shape?: 'outline' | 'block'} = {},
-    ): Promise<void> => {
+    const writeWithRetry = async (label: string, write: () => Promise<void>): Promise<void> => {
       for (let attempt = 0; ; attempt += 1) {
         try {
-          await reconcileReply(markdown, opts)
+          await write()
           return
         } catch (error) {
           if (attempt >= DELIVER_RETRY_DELAYS_MS.length) throw error
-          log(`[${watcher.name}] retrying reply write for ${sourceId} after a transient error: ${errorMessage(error)}`)
+          log(`[${watcher.name}] retrying ${label} write for ${sourceId} after a transient error: ${errorMessage(error)}`)
           await delay(DELIVER_RETRY_DELAYS_MS[attempt])
         }
       }
     }
 
+    let claimed = false
+    let runSucceeded = false
+    const failureProps = () => !runSucceeded && task.kind === 'row' && attempt < MAX_ATTEMPTS && !abortController.signal.aborted
+      ? {status: 'queued' as const, attempts: attempt} : {status: 'error' as const, attempts: attempt, cancel: null}
     try {
-      const attempt = taskAttempts(block) + 1
-      // Fresh reply subtree per attempt; split unless the watcher opted out.
-      replyKey = `reply:${sourceId}:${attempt}`
-      replyShape = watcher.splitReply ? 'outline' : 'block'
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, nowMs: claimStamp,
+        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, error: null, nowMs: claimStamp,
       })
+
+      claimed = true
 
       // Claim-verify: re-read and confirm OUR claim stuck. Defends only
       // against a faster LOCAL overwrite (two daemons on one client); it
@@ -426,38 +515,7 @@ export const createEngine = (deps: EngineDeps) => {
       // the try so the finally always clears it.
       abortControllers.set(sourceId, abortController)
 
-      const subtreeRows = await graph.getSubtree(sourceId)
-      // Context only: a thread that can't be read (an app without the
-      // comments verb, the plugin off) leaves the mention answered without it.
-      const thread = await loadThreadContext(graph, block, ancestorBlocks).catch(error => {
-        log(`[${watcher.name}] no thread context for ${sourceId}: ${errorMessage(error)}`)
-        return null
-      })
-      const memory = watcher.memory
-        ? await loadMemory(watcher, sourceId).catch(error => {
-          log(`[${watcher.name}] no memory for ${sourceId}: ${errorMessage(error)}`)
-          return null
-        })
-        : null
-      const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
-      const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
-        content: block.content ?? '',
-        // includeProperties: the prompt needs block properties (e.g.
-        // status='done') to reason about the subtree — a done sub-item
-        // should be skipped, which the lean id+content outline can't convey.
-        subtree: renderSubtreeOutline(subtreeRows as SubtreeOutlineRow[], {includeProperties: true}),
-        // graph.ancestors is nearest-first; the prompt reads root→leaf.
-        ancestors: ancestorBlocks.map(ancestor => ({id: ancestor.id, content: ancestor.content ?? ''})).reverse(),
-        blockId: sourceId,
-        deepLink,
-        watcherName: watcher.name,
-        target: watcher.target,
-        thread: thread ?? undefined,
-        memory: memory ? {blockId: memory.blockId, outline: memory.outline, shared: memory.scope.sharedRoots.length > 0} : undefined,
-        // Only spawn delivery posts (and thus splits) the reply — the
-        // channel session writes its own, so don't nudge it.
-        splitReply: watcher.delivery !== 'channel' && watcher.splitReply,
-      })
+      const {prompt, memory} = await preparePrompt(task, block, ancestorBlocks)
 
       if (watcher.delivery === 'channel') {
         // A Stop during the reads above: once delivered, the channel session
@@ -484,7 +542,7 @@ export const createEngine = (deps: EngineDeps) => {
       // streamReply: post an immediate placeholder so the reply appears at
       // once; the first streamed tick reconciles it into real content.
       // Best-effort — a cosmetic spinner must not fail the run.
-      if (watcher.streamReply) {
+      if (streamReply) {
         await reconcileReply(`💭 ${executorLabel(runner.executor)} is working…`).catch(() => {})
       }
 
@@ -534,7 +592,7 @@ export const createEngine = (deps: EngineDeps) => {
             thinkingTimer = setTimeout(() => writeActivity({label: THINKING_ACTIVITY, startedAt: endedAt}), THINKING_DEBOUNCE_MS)
           }
         } else if (event.kind === 'text') {
-          if (!watcher.streamReply) return
+          if (!streamReply) return
           lastStreamedText = event.text
           if (streamReplyTimer !== undefined) return
           // Flush even if the runner goes quiet while a tool is running.
@@ -574,6 +632,7 @@ export const createEngine = (deps: EngineDeps) => {
       let result: AgentRunResult
       try {
         result = await runTask(runOptions)
+        runSucceeded = result.ok
       } finally {
         cancelThinking()
         clearTimeout(streamReplyTimer)
@@ -594,16 +653,16 @@ export const createEngine = (deps: EngineDeps) => {
         // Terminal write: converges a streamed tree onto the final text, or
         // creates it fresh. Retried so a transient bridge blip recovers
         // rather than losing the billed answer.
-        await reconcileReplyWithRetry(withMemoryNote(finalText), {final: true})
+        await writeWithRetry('reply', () => reconcileReply(withMemoryNote(finalText), {final: true}))
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {
+        await writeWithRetry('status', () => graph.setTaskProps(sourceId, {
           status: 'done',
           session: storedSessionFor(runner.executor, result.sessionId),
           resumeOptions: resumeOptionsForSession(result.sessionId),
           activity: null,
           cancel: null,
           nowMs: now(),
-        })
+        }))
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}${usageNote(result)}`)
       } else {
         // A user Stop aborts the run — signal.aborted distinguishes it from
@@ -623,26 +682,27 @@ export const createEngine = (deps: EngineDeps) => {
         // after streaming most of its billed answer keeps that text with the
         // note appended, rather than losing it.
         const partial = lastStreamedText.trim()
-        await reconcileReplyWithRetry(
+        await writeWithRetry('reply', () => reconcileReply(
           withMemoryNote(partial ? `${partial}\n\n${failureNote}` : failureNote),
           {final: true, shape: 'block'},
-        )
+        ))
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {
-          status: 'error',
+        await writeWithRetry('status', () => graph.setTaskProps(sourceId, {
+          ...failureProps(),
           error: reason,
           session: storedSessionFor(runner.executor, result.sessionId),
           resumeOptions: resumeOptionsForSession(result.sessionId),
           activity: null,
-          cancel: null,
           nowMs: now(),
-        })
+        }))
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}${usageNote(result)}`)
       }
     } catch (error) {
-      // Infra failure between claim and reply (bridge blip, spawn error,
-      // channel down): leave a visible trace AND status=error props.
-      const reason = truncate(errorMessage(error))
+      if (!claimed) {
+        refundLaunch(launchStamp)
+        throw error
+      }
+      const reason = abortController.signal.aborted ? 'cancelled' : truncate(errorMessage(error))
       const infraNote = `⚠️ agent-dispatch infrastructure error — ${reason}`
       // Drain any queued progress writes first — a streamed-text write
       // landing after the note would silently replace it.
@@ -654,17 +714,50 @@ export const createEngine = (deps: EngineDeps) => {
       if (!terminalReplyDelivered) {
         await reconcileReply(infraNote, {final: true, shape: 'block'}).catch(() => {})
       }
-      // Clear agent:cancel like the done/error terminal writes: a Stop
-      // may have set it (this catch can run right after the child was
-      // aborted, e.g. the reply write then failed). Left behind, the flag
-      // survives askAgent's retry-reset and would abort the fresh run on
-      // its very next tick.
-      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, cancel: null, nowMs: now()}).catch(() => {})
+      // A queued retry preserves any Stop written before the next sweep.
+      await graph.setTaskProps(sourceId, {
+        ...failureProps(), error: reason, activity: null, nowMs: now(),
+      }).catch(() => {})
       throw error
     } finally {
       if (sessionKey) running.delete(sessionKey)
       if (liveSessionKey) running.delete(liveSessionKey)
       abortControllers.delete(sourceId)
+    }
+  }
+
+  const scheduleBlockTasks = async (tasks: BlockTask[], views: Map<string, BlockView>) => {
+    if (tasks.length === 0) return
+    const editing = await graph.beingEditedBlocks()
+    for (const task of tasks) {
+      const {watcher} = task
+      const view = views.get(task.id) ?? {id: task.id, properties: {}}
+      if (!belongsToWatcher(view, watcher)) continue
+      const key = `block:${task.id}`
+      if (running.has(key)) continue
+      const preview = pendingDecision(task, view, editing.get(task.id))
+      if (preview.reason === 'attempts-exhausted' || preview.reason === 'cancelled') {
+        const reason = preview.reason
+        launch(key, () => parkTask(task, reason))
+        continue
+      }
+      // A channel session can finish independently. Clear only its Stop,
+      // so a stale snapshot cannot overwrite its terminal status.
+      if (preview.reason === 'clear-cancel') {
+        await graph.clearCancel(task.id)
+        log(`[${watcher.name}] cleared an un-actionable agent:cancel on ${task.id}`)
+        continue
+      }
+      if (!preview.pending) continue
+      if (capacityLeft() <= 0) return
+      if (!spendBudgetLeft()) {
+        log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${task.id}`)
+        return
+      }
+      // Budget is consumed at the launch DECISION (synchronously) — the
+      // async task body would record too late to gate this same loop.
+      const launchStamp = recordLaunch()
+      launch(key, () => processBlockTask(task, launchStamp))
     }
   }
 
@@ -698,82 +791,93 @@ export const createEngine = (deps: EngineDeps) => {
       return
     }
 
-    if (sources.length === 0) return
-
-    // Cheap pre-filter (one batched query): already-processed mentions
-    // must not consume launch slots or per-block round-trips. The same
-    // decision re-runs with a fresh read inside processMention before
-    // any claim is written.
     const views = await graph.blockViews(sources.map(source => source.id))
-    const editing = await graph.beingEditedBlocks()
-    for (const source of sources) {
-      const view = views.get(source.id) ?? {id: source.id, properties: {}}
-      // Clear a agent:cancel the daemon can't act on. sweepCancellations
-      // aborts only runs we OWN (a live abortController); a Stop on a
-      // channel-delivered task, or on a run stranded by a hard daemon kill,
-      // leaves status:running with no controller here, so nothing ever
-      // clears the flag and the chip reads "cancelling…" forever. A spawn
-      // run mid-claim IS in `running`, so its genuinely-pending Stop is
-      // never dropped here.
-      if (
-        view.properties?.[PROPS.cancel]
-        && view.properties?.[PROPS.status] === 'running'
-        && !running.has(source.id)
-        && !abortControllers.has(source.id)
-      ) {
-        // Clear ONLY the cancel property, in a merged single-key write. The
-        // batched `views` snapshot is stale by now and a channel task's
-        // ambient session may write status:done concurrently; re-affirming
-        // status:running would revert that, and the stale agent:updated-at
-        // would make the stale-running sweep REDELIVER the task. A
-        // cancel-only write can't clobber a terminal status, and clearing an
-        // already-satisfied flag is idempotent — so no re-read is needed.
-        await graph.clearCancel(source.id)
-        log(`[${watcher.name}] cleared an un-actionable agent:cancel on ${source.id}`)
-        continue
-      }
-      if (running.has(source.id)) continue
-      const preview = decidePending({
-        source: view,
-        nowMs: now(),
-        settleMs: watcher.settleMs,
-        editingActiveAtMs: editing.get(source.id),
-        editHoldMs: watcher.editHoldMs,
-        baselineMs,
-      })
-
-      if (preview.reason === 'attempts-exhausted') {
-        // Terminal write (once) so the pre-filter skips it forever.
-        launch(source.id, () => parkExhausted(watcher, source.id))
-        continue
-      }
-      if (!preview.pending) continue
-      if (capacityLeft() <= 0) return
-      if (!spendBudgetLeft()) {
-        log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${source.id}`)
-        return
-      }
-      // Budget is consumed at the launch DECISION (synchronously) — the
-      // async task body would record too late to gate this same loop.
-      const launchStamp = recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp))
-    }
+    await scheduleBlockTasks(sources.map(({id, deepLink}) => ({kind: 'mention', id, deepLink, baselineMs, watcher})), views)
   }
 
-  const tickQueryWatcher = async (watcher: QueryWatcher) => {
-    const key = `query:${watcher.name}`
-    if (running.has(key)) return
-
-    const rows = await graph.sqlAll(watcher.sql, watcher.params)
-    const prev = await state.getCursor(watcher.name)
+  const queryDiff = (watcher: QueryWatcher, rows: unknown[], prev: string[] | null) => {
     const diff = diffQueryRows(rows, prev)
     if (diff.invalidRows > 0) {
       log(`[${watcher.name}] skipped ${diff.invalidRows} row(s) without a string id — the watcher SQL must select an id column`)
     }
     if (diff.oversized) {
       log(`[${watcher.name}] query returned ${rows.length} rows (cursor bound ${MAX_CURSOR_IDS}) — refusing to diff; narrow the watcher SQL`)
+    }
+    return diff
+  }
+
+  /** Ask Agent keeps an active claim. Release it to a mention only after the
+   *  local run settles or a restarted daemon verifies that its claim is stale. */
+  const releaseAskedRow = async (task: Extract<BlockTask, {kind: 'row'}>): Promise<boolean> => {
+    if (running.has(`block:${task.id}`)) return false
+    const fresh = await currentTaskBlock(task)
+    if (!fresh || rowTaskAction(fresh, task.watcher, task.baselineMs) !== 'release' || hasFreshRunningClaim(fresh, now())) return false
+    await graph.setTaskProps(task.id, {
+      status: 'queued', watcher: '', attempts: 0, activity: null, error: null, cancel: null, nowMs: now(),
+    })
+    log(`[${task.watcher.name}] released ${task.id} for its requested mention`)
+    return true
+  }
+
+  const tickRowTasks = async (watcher: QueryWatcher) => {
+    const key = JSON.stringify([config.workspaceId, watcher.name])
+    const tickStartMs = now()
+    const saved = await state.getRowTasks(key)
+    const rows = await graph.sqlAll(watcher.sql, watcher.params).catch(error => {
+      if (!saved) throw error
+      log(`[${watcher.name}] discovery SQL failed; checking saved rows: ${errorMessage(error)}`)
+      return []
+    })
+    const diff = queryDiff(watcher, rows, saved?.baselineIds ?? null)
+    if (!saved && diff.oversized) return
+    const candidates = new Map<string, {row: QueryRow, saved: boolean}>()
+    for (const row of saved?.pending ?? []) candidates.set(row.id, {row, saved: true})
+    for (const row of diff.newRows) {
+      if (!candidates.has(row.id)) candidates.set(row.id, {row, saved: false})
+    }
+    const ids = saved ? [...candidates.keys()] : diff.seenIds
+    const views = await graph.blockViews(ids, config.workspaceId)
+    for (const id of ids) {
+      if (!views.has(id)) log(`[${watcher.name}] skipped ${id}: no live block with this id in the configured workspace`)
+    }
+    if (!saved) {
+      await state.setRowTasks(key, {baselineMs: tickStartMs, baselineIds: [...views.keys()], pending: []})
+      log(`[${watcher.name}] row-task baseline established (${views.size} existing blocks)`)
       return
     }
+
+    const pending: QueryRow[] = []
+    const tasks: BlockTask[] = []
+    for (const candidate of candidates.values()) {
+      const {row} = candidate
+      const view = views.get(row.id)
+      if (!view) continue
+      const task = {kind: 'row' as const, id: row.id, watcher, row, baselineMs: saved.baselineMs}
+      const action = rowTaskAction(view, watcher, saved.baselineMs)
+      if (action === 'run') {
+        tasks.push(task)
+        pending.push(row)
+      } else if (action === 'release' && candidate.saved && !await releaseAskedRow(task)) {
+        pending.push(row)
+      }
+    }
+    // Keep the original columns until the graph reports a terminal state,
+    // including while the budget or an editor holds the task.
+    if (pending.length !== saved.pending.length || pending.some((row, i) => row !== saved.pending[i])) {
+      await state.setRowTasks(key, {...saved, pending})
+    }
+    await scheduleBlockTasks(tasks, views)
+  }
+
+  const tickQueryWatcher = async (watcher: QueryWatcher) => {
+    if (watcher.rowTasks) return tickRowTasks(watcher)
+    const key = `query:${watcher.name}`
+    if (running.has(key)) return
+
+    const rows = await graph.sqlAll(watcher.sql, watcher.params)
+    const prev = await state.getCursor(watcher.name)
+    const diff = queryDiff(watcher, rows, prev)
+    if (diff.oversized) return
 
     if (prev === null) {
       await state.setCursor(watcher.name, diff.seenIds)

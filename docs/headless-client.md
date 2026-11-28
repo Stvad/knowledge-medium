@@ -90,8 +90,8 @@ A tab is safe to write from because the app shell around the Repo does several t
 
 ## 7. Boot
 
-1. **Lock** the state directory with the pidfile helper `agent-dispatch` already has (stale-pid detection, so a SIGKILL does not block the restart). **[read]** `headless login` takes the same lock, so it never runs beside the daemon.
-2. **Device storage.** The process is started with `--localstorage-file` pointing into the state directory (mode 0700; the file is created 0644 **[measured]**). `window` is provided after the app's module graph loads, as the eval shim does, because the mode-pin module looks for `window.localStorage`. **[read]**
+1. **Lock** the state directory with the pidfile helper `agent-dispatch` already has (stale-pid detection, so a SIGKILL does not block the restart). **[read]** `headless login` and `headless storage set` take the same lock as the daemon.
+2. **Device storage.** The process is started with `--localstorage-file` pointing into the state directory (mode 0700; the file is created 0644 **[measured]**). After the app's module graph loads, the host provides `window.localStorage` for the mode-pin module. **[read]**
 3. **Sign in.** Restore and refresh the session. An absent session or permanent refusal exits non-zero naming the `login` subcommand. A retryable transport failure reuses a still-valid stored session, keeping warm-boot health available behind the checkpoint gate. With an expired token and no connection, restart once connectivity returns. A `SIGNED_OUT` event shuts down a running host. The installed auth-js preserves the session on a permanently refused proactive refresh while the access token is valid. After expiry the same refusal clears storage and emits `SIGNED_OUT`. **[measured]** against a fake transport, with the rotated session restored in a second Node process.
 4. **Read the workspace key** (encrypted only; [§8](#8-identity-secrets-invariants)). An unreadable key exits here, before anything connects.
 5. **Open the database**, await `waitForReady()`, sample the sync status's `lastSyncedAt`, then run client-schema initialisation. Sampling before ready would read `undefined` and take the persisted value's arrival for a server answer. **[read]**
@@ -197,11 +197,11 @@ The write-enabled profile serves the listed write verbs via the shared command l
 
 **`packages/agent-dispatch`:** the pidfile helper's "already running" message takes the daemon's name instead of hard-coding its own. **[read]** A README note on the headless profile. `packages/agent-cli` gains the `rejected-uploads` and `retry-rejected-upload` verbs; a tab serves them too, without the host's upload checks.
 
-**New, in `scripts/headless/`:** entry point, boot, the read gate, `login`, the verb table. It calls `startBridgeLoop` directly, as the eval host does, and reuses the eval host's `window`/`document` shim (which leaves an existing `localStorage` alone **[read]**). The host wires the watcher event transport on admission. Registering a watcher over the bridge requires a writable token. **[read]**
+**New, in `scripts/headless/`:** entry point, boot, the read gate, `login`, the verb table. It calls `startBridgeLoop` directly, as the eval host does. The headless process has `window.localStorage` and no global `document`. The host wires the watcher event transport on admission. Registering a watcher over the bridge requires a writable token. **[read]**
 
 **Device storage needs no code.** Node 26 persists `localStorage` across processes under `--localstorage-file`, with `window` and `document` still undefined. **[measured]** on this machine's Node; Node labels Web Storage experimental. If that proves fragile the fallback is a file-backed `Storage` of some forty lines with a write-temp-then-rename.
 
-**Config.** One file: state directory, workspace id, the workspace's mode (`e2ee` or `plaintext`), exactly one of `keyFile` or `keyCommand` when encrypted, bridge profile, optional boolean `writable` (default false), and optional `preferencesPage`, a user page's block id (#1809). Per-user preferences that read verbs consult, such as `grouped-backlinks`' grouping defaults and `backlinks`' daily-note filter, resolve from that page; unset, they resolve from the host account's own page, which has none. `preferencesRootId` in `src/data/stateBlocks.ts` decides this for every preference read a served verb makes; a tab's root is its own user page. Preference and UI-state writes still go to the host account's own page, and the host never writes the configured one. The extension enable-intent read stays on the host's own page, since the loader and the toggle verbs use it. Before opening workspace data the gate refuses a `preferencesPage` that is not a live user page of the configured workspace (its id must be the user page derived from the user it names), so the host serves nothing instead of quietly reading defaults. The refusal reaches callers as the gate's fixed `Could not open workspace data`, with the detail in the host's log, and is re-checked on each wake until the page qualifies. *Test:* `scripts/headless/preferencesPage.test.ts` runs the same `grouped-backlinks` and daily-note `backlinks --filter effective` calls through a tab and through a host pointed at that tab's user page, checks they agree where the defaults would not, and checks the configured page's rows and the upload queue after host-side preference and UI-state writes. **[measured]** The bridge URL and secret come from `agent-cli`'s `bridgeUrl()` / `bridgeSecret()`, and the host's token lives in `agent-cli`'s token store under its profile (`loadStoredToken` / `writeStoredToken`), where the CLIs already look. **[read]** The operator supervises both processes under one OS user. The owner procedure below uses systemd user units or temporary launchd jobs.
+**Config.** One file: state directory, workspace id, the workspace's mode (`e2ee` or `plaintext`), exactly one of `keyFile` or `keyCommand` when encrypted, bridge profile, optional boolean `writable` (default false), and optional `preferencesPage`, a user page's block id (#1809). Per-user preferences that read verbs consult, such as `grouped-backlinks`' grouping defaults and `backlinks`' daily-note filter, resolve from that page; unset, they resolve from the host account's own page, which has none. `preferencesRootId` in `src/data/stateBlocks.ts` decides this for every preference read a served verb makes; a tab's root is its own user page. Preference and UI-state writes still go to the host account's own page, and the host never writes the configured one. The host reads no extension enable intent, because it loads no installed extensions and refuses the toggle verbs **[read]**. [headless-extensions.md](headless-extensions.md) proposes a host-config allowlist instead. Before opening workspace data the gate refuses a `preferencesPage` that is not a live user page of the configured workspace (its id must be the user page derived from the user it names), so the host serves nothing instead of quietly reading defaults. The refusal reaches callers as the gate's fixed `Could not open workspace data`, with the detail in the host's log, and is re-checked on each wake until the page qualifies. *Test:* `scripts/headless/preferencesPage.test.ts` runs the same `grouped-backlinks` and daily-note `backlinks --filter effective` calls through a tab and through a host pointed at that tab's user page, checks they agree where the defaults would not, and checks the configured page's rows and the upload queue after host-side preference and UI-state writes. **[measured]** The bridge URL and secret come from `agent-cli`'s `bridgeUrl()` / `bridgeSecret()`, and the host's token lives in `agent-cli`'s token store under its profile (`loadStoredToken` / `writeStoredToken`), where the CLIs already look. **[read]** The operator supervises both processes under one OS user. The owner procedure below uses systemd user units or temporary launchd jobs.
 
 **Seeds.** Eleven static plugins register seeds only on the app side **[measured]**, and installed extensions cannot load in Node (Babel plus blob-URL imports **[read]**), so the host's seed set is narrower than a tab's. The host uses `staticDataExtensions` without the React `kernelValuePresetsExtension`. When a local seed is missing, the data layer uses the synced definition and a registered preset to reconstruct the property's codec. When that behavior is unavailable, creates and changes to the value are refused in both cell and child-backed storage. Content edits preserve the value and its references. The merged missing-seed tests exercise both paths in `src/plugins/agent-runtime/test/missingSeedWrites.test.ts`. No seed relocation is needed. **[measured]**
 
@@ -250,11 +250,16 @@ pnpm headless login "$config"
 
 Enter the dedicated member's email and emailed code at the prompts. The daemon and login take the same lock, so stop the daemon before repeating login. With the default loopback bridge configuration, the two foreground commands are `pnpm agent:server` and `pnpm headless run "$config"`. Run the following from the checkout to supervise them during a Linux scratch run. The two transient user units use the same OS user's agent-cli settings. Use an existing supervised bridge if it already owns the configured port.
 
+To set a device-local storage key while the daemon is stopped, run `pnpm headless storage set "$config" <key>`. Enter one line at the hidden prompt or supply it on stdin.
+
+Set `TZ` in the host service environment to the owner's IANA time zone. The host uses it to choose the local date for `daily-note today`. Replace the example below with the owner's zone, then check `host.timeZone` in `health` after startup. Health reports the effective zone or the current UTC offset if the process cannot resolve a zone name.
+
 ```sh
+export TZ=America/Los_Angeles
 systemd-run --user --unit=km-scratch-bridge --working-directory="$PWD" \
   --setenv=PATH --property=Restart=on-failure "$(command -v node)" packages/agent-cli/dist/server.js
 systemd-run --user --unit=km-scratch-host --working-directory="$PWD" \
-  --setenv=PATH --setenv=VITE_SUPABASE_URL --setenv=VITE_SUPABASE_ANON_KEY --setenv=VITE_POWERSYNC_URL \
+  --setenv=PATH --setenv=TZ --setenv=VITE_SUPABASE_URL --setenv=VITE_SUPABASE_ANON_KEY --setenv=VITE_POWERSYNC_URL \
   --property=Restart=on-abnormal "$(command -v node)" scripts/headless/launch.ts run "$config"
 systemctl --user status km-scratch-bridge km-scratch-host
 journalctl --user -u km-scratch-host -n 30
@@ -278,7 +283,7 @@ pnpm agent --profile headless-scratch health
 systemctl --user stop km-scratch-host km-scratch-bridge
 ```
 
-For a macOS scratch run, launch the same two foreground programs as temporary user jobs from the checkout. The job arguments below pass only the three public client settings. For a private scratch bridge, choose an unused loopback port and pass the same port to both jobs and the CLI.
+For a macOS scratch run, launch the same two foreground programs as temporary user jobs from the checkout. Export the owner's `TZ` as above. For a private scratch bridge, choose an unused loopback port and pass the same port to both jobs and the CLI.
 
 ```sh
 export AGENT_RUNTIME_PORT=18787
@@ -291,7 +296,7 @@ scratch_job() {
 }
 scratch_job org.knowledge-medium.scratch-bridge "$(command -v node)" packages/agent-cli/dist/server.js
 scratch_job org.knowledge-medium.scratch-host /usr/bin/env \
-  "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" "VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY" \
+  "TZ=$TZ" "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" "VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY" \
   "VITE_POWERSYNC_URL=$VITE_POWERSYNC_URL" "$(command -v node)" scripts/headless/launch.ts run "$config"
 pnpm agent --profile headless-scratch health
 launchctl kill SIGTERM "$domain/org.knowledge-medium.scratch-host"

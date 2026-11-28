@@ -1,6 +1,10 @@
 // @vitest-environment node
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createTestDb, type TestDb } from './createTestDb'
+import { createTestDb, type TestDb, tryTakeTemplateLock, waitForTemplateReadyOrLockRelease } from './createTestDb'
 import { BLOCKS_TABLE_COLUMN_NAMES } from '@/data/blockSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
@@ -137,5 +141,65 @@ describe('createTestDb harness', () => {
 
     expect(await h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', [id]))
       .toEqual({content: 'pending'})
+  })
+})
+
+describe('the template build lock', () => {
+  let dir: string
+  let templateDir: string
+  let lockDir: string
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'template-lock-'))
+  })
+  afterAll(() => rmSync(dir, {recursive: true, force: true}))
+
+  const lock = (owner?: string) => {
+    templateDir = mkdtempSync(join(dir, 'template-'))
+    rmSync(templateDir, {recursive: true})
+    lockDir = `${templateDir}.lock`
+    mkdirSync(lockDir)
+    if (owner !== undefined) writeFileSync(join(lockDir, 'pid'), owner)
+  }
+  const exitedPid = () => spawnSync(process.execPath, ['-e', '']).pid
+
+  it('steals a lock whose builder has exited, instead of waiting it out', async () => {
+    lock(String(exitedPid()))
+    await expect(waitForTemplateReadyOrLockRelease(templateDir, lockDir)).resolves.toBe(false)
+    expect(existsSync(lockDir)).toBe(false)
+  })
+
+  it('takes a free lock with its own pid inside, and refuses a held one', () => {
+    lock(String(process.pid))
+    rmSync(lockDir, {recursive: true})
+    expect(tryTakeTemplateLock(lockDir)).toBe(true)
+    expect(readFileSync(join(lockDir, 'pid'), 'utf8')).toBe(String(process.pid))
+    expect(tryTakeTemplateLock(lockDir)).toBe(false)
+  })
+
+  // A live pid on an old lock is a reused one: no build lasts that long.
+  it.each([
+    ['ownerless', () => undefined],
+    ['with a live pid', () => String(process.pid)],
+  ])('steals a lock older than any real build, %s', async (_case, owner) => {
+    lock(owner())
+    const longAgo = new Date(Date.now() - 10 * 60_000)
+    utimesSync(lockDir, longAgo, longAgo)
+    await expect(waitForTemplateReadyOrLockRelease(templateDir, lockDir)).resolves.toBe(false)
+    expect(existsSync(lockDir)).toBe(false)
+  })
+
+  it.each([
+    ['a live builder', () => String(process.pid)],
+    // pid 1 refuses a signal from a non-root user (EPERM), which is still alive.
+    ['a builder this process may not signal', () => '1'],
+    ['a lock whose pid cannot be read', () => undefined],
+  ])('waits on %s until its template is ready', async (_case, owner) => {
+    lock(owner())
+    const waiting = waitForTemplateReadyOrLockRelease(templateDir, lockDir)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(existsSync(lockDir)).toBe(true)
+    mkdirSync(templateDir)
+    writeFileSync(join(templateDir, '.ready'), '')
+    await expect(waiting).resolves.toBe(true)
   })
 })

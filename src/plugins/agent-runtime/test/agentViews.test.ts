@@ -1751,6 +1751,18 @@ describe('raw commands accept the same refs', () => {
     expect(await executeCommand({commandId: 'r3', type: 'get-block', id: 'e0e0e0e0'}, context)).toBeNull()
   })
 
+  it('only boolean true requests literal ids on raw block and subtree reads', async () => {
+    const id = uuid('e0e0e0e0', 2)
+    await create({id, content: 'Resolved'})
+    const ref = `^${id}`
+    await create({id: ref, content: 'Literal'})
+    // A direct runtime caller can bypass wire validation.
+    const exactIds = 'false' as unknown as boolean
+    const block = await executeCommand({commandId: 'r', type: 'get-block', id: ref, exactIds}, context) as {id: string}
+    const subtree = await executeCommand({commandId: 's', type: 'get-subtree', rootId: ref, exactIds}, context) as {id: string}[]
+    expect([block.id, subtree[0]?.id]).toEqual([id, id])
+  })
+
   it('refuses a raw read of a block outside the workspace the call names', async () => {
     await knownWorkspace(WS)
     await create({id: uuid('e3e3e3e3', 2), content: 'here'})

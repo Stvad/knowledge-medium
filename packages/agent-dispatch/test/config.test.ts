@@ -71,6 +71,8 @@ describe('parseConfig', () => {
       kind: 'backlinks',
       target: 'claude',
       resume: true,
+      settleMs: 250,
+      editHoldMs: 120_000,
       runner: {
         executor: 'claude',
         allowedTools: [],
@@ -90,6 +92,25 @@ describe('parseConfig', () => {
     expect(() => parseConfig(query('WITH c AS (SELECT 1) UPDATE blocks SET content = ? RETURNING id'))).toThrow(/read-only/)
     expect(() => parseConfig(query('SELECT powersync_clear(1)'))).toThrow(/read-only/)
     expect(parseConfig(query('SELECT id FROM blocks')).watchers).toHaveLength(1)
+  })
+
+  it.each([['settleMs', 250], ['editHoldMs', 120_000]])('refuses explicit %s on a plain query watcher', (setting, value) => {
+    const result = configSchema.safeParse({
+      workspaceId: 'ws-test',
+      watchers: [{kind: 'query', name: 'q', sql: 'SELECT id FROM blocks', [setting]: value}],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues).toEqual([
+      expect.objectContaining({path: ['watchers', 0, setting], message: expect.stringMatching(/requires rowTasks/)}),
+    ])
+  })
+
+  it('refuses row tasks with channel delivery', () => {
+    const result = configSchema.safeParse({workspaceId: 'ws-test', watchers: [{kind: 'query', name: 'q', sql: 'SELECT id FROM blocks', rowTasks: true, delivery: 'channel'}]})
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues).toEqual([
+      expect.objectContaining({path: ['watchers', 0, 'delivery'], message: expect.stringMatching(/rowTasks requires delivery="spawn"/)}),
+    ])
   })
 
   // Calls that name no workspace act on whichever one the user's focused app

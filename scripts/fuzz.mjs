@@ -36,12 +36,14 @@ import { existsSync, readFileSync } from 'node:fs'
 //  - the attribution line under an unhandled error, which fails the run
 //    while every file's tree row stays ✓, e.g.
 //      This error originated in "src/shortcuts/test/defaultActions.fuzz.test.ts" test file.
-// Pull the file path out of any of them. CI output isn't a TTY so vitest
-// disables color, but strip ANSI defensively in case that ever changes.
+// Pull the file path out of any of them. Vitest colours its CI output though
+// it is not a TTY, so strip ANSI first.
 // A test file as vitest.config.ts includes it: `*.test.*` and `*.spec.*`.
 const TEST_FILE = String.raw`\S+\.(?:test|spec)\.\w+`
-// A run of several vitest projects labels its rows: ` FAIL  |shared-node| src/a.test.ts > …`
-const PROJECT_LABEL = String.raw`(?:\|[^|]+\|\s+)?`
+// A run of several vitest projects labels its rows: ` FAIL  |shared| src/a.test.ts > …`
+// without colour, and with the label as a pipeless badge in colour (CI), which
+// reads ` FAIL   shared  src/a.test.ts > …` once stripped.
+const PROJECT_LABEL = String.raw`(?:(?:\|[^|]+\||[^\s/|]+)\s+)?`
 const TREE_ROW = new RegExp(String.raw`^\s*([✓✗×❯↓])\s+${PROJECT_LABEL}(${TEST_FILE})\s+\(\d+\s+tests?(?:\s*\|\s*(\d+)\s+failed)?\)`)
 const FAIL_ROW = new RegExp(String.raw`^\s*FAIL\s+${PROJECT_LABEL}(${TEST_FILE})`)
 const UNHANDLED_ORIGIN = new RegExp(String.raw`This error originated in "(${TEST_FILE})" test file`)

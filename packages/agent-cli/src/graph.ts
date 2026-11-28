@@ -30,6 +30,7 @@ interface PageResult {
 }
 
 export interface BlockView {
+  createdAt?: number | null
   id: string
   content?: string
   properties?: Record<string, unknown>
@@ -106,8 +107,8 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return result.backlinks ?? []
   }
 
-  const getBlock = async (id: string): Promise<BlockData | null> => {
-    const result = await client.runCommand({type: 'get-block', id})
+  const getBlock = async (id: string, options: ExactIds = {}): Promise<BlockData | null> => {
+    const result = await client.runCommand({type: 'get-block', id, ...options})
     if (result === null || result === undefined) return null
     const raw = asRecord(result, 'get-block')
     const editedAt = raw.userUpdatedAt ?? raw.updatedAt
@@ -146,8 +147,8 @@ export const createBridgeGraph = (client: BridgeClient) => {
     })
   }
 
-  const getSubtree = async (rootId: string): Promise<BlockData[]> => {
-    const result = await client.runCommand({type: 'get-subtree', rootId})
+  const getSubtree = async (rootId: string, options: ExactIds = {}): Promise<BlockData[]> => {
+    const result = await client.runCommand({type: 'get-subtree', rootId, ...options})
     return Array.isArray(result) ? result as BlockData[] : []
   }
 
@@ -280,22 +281,23 @@ export const createBridgeGraph = (client: BridgeClient) => {
    *  bridge round-trip per backlink source, so processed mentions stay
    *  cheap to re-scan forever. Includes the last-edit timestamp for the
    *  settle and edit-hold gates. */
-  const blockViews = async (ids: string[]): Promise<Map<string, BlockView>> => {
+  const blockViews = async (ids: string[], workspaceId?: string): Promise<Map<string, BlockView>> => {
     const views = new Map<string, BlockView>()
     for (let offset = 0; offset < ids.length; offset += 500) {
       const chunk = ids.slice(offset, offset + 500)
       const placeholders = chunk.map(() => '?').join(', ')
       const rows = await sqlAll(
-        `SELECT id, properties_json, coalesce(user_updated_at, updated_at) AS edited_at
-           FROM blocks WHERE deleted = 0 AND id IN (${placeholders})`,
-        chunk,
+        `SELECT id, properties_json, created_at, coalesce(user_updated_at, updated_at) AS edited_at
+           FROM blocks WHERE deleted = 0 AND id IN (${placeholders})${workspaceId === undefined ? '' : ' AND workspace_id = ?'}`,
+        workspaceId === undefined ? chunk : [...chunk, workspaceId],
       )
       for (const row of rows) {
-        const {id, properties_json, edited_at} = row as Record<string, unknown>
+        const {id, properties_json, created_at, edited_at} = row as Record<string, unknown>
         if (typeof id !== 'string') continue
         views.set(id, {
           id,
           properties: parseProps(properties_json),
+          createdAt: typeof created_at === 'number' ? created_at : null,
           editedAtMs: typeof edited_at === 'number' ? edited_at : null,
         })
       }
