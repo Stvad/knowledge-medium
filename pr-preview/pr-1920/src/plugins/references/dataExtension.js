@@ -1,0 +1,1 @@
+export{IQ as referencesDataExtension}from"../../../chunks/app-Jg2pOety.js";

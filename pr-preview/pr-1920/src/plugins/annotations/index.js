@@ -1,0 +1,1 @@
+export{Mm as annotationsPlugin}from"../../../chunks/app-Jg2pOety.js";

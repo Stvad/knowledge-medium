@@ -1,0 +1,1 @@
+export{Jft as getOrCreateTypesPage,Yft as typesPageBlockId,Xft as typesPageSpec}from"../../chunks/app-Jg2pOety.js";

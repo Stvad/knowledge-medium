@@ -1,0 +1,1 @@
+export{W0 as annotationsDataExtension}from"../../../chunks/app-Jg2pOety.js";

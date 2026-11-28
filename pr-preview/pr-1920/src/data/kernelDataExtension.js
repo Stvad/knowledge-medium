@@ -1,0 +1,1 @@
+export{Rtt as kernelDataExtension}from"../../chunks/app-Jg2pOety.js";

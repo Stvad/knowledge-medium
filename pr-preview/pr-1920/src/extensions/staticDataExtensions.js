@@ -1,0 +1,1 @@
+export{KZ as staticDataExtensions}from"../../chunks/app-Jg2pOety.js";

@@ -1,0 +1,1 @@
+export{g3 as characterCounterDataExtension}from"../../../chunks/app-Jg2pOety.js";

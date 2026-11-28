@@ -1,0 +1,1 @@
+export{vW as BLOCK_TITLE_TEXT_CLASS,yW as useBlockTitleTextClass}from"../../../chunks/app-Jg2pOety.js";

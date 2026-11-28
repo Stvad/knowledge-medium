@@ -1,0 +1,1 @@
+export{ld as appVersion}from"../chunks/app-Jg2pOety.js";

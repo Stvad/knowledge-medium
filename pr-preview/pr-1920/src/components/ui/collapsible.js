@@ -1,0 +1,1 @@
+"use client";export{fG as Collapsible,pG as CollapsibleContent,mG as CollapsibleTrigger}from"../../../chunks/app-Jg2pOety.js";

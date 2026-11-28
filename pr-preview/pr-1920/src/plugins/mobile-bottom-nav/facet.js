@@ -1,0 +1,1 @@
+export{WO as mobileBottomNavItemsFacet}from"../../../chunks/app-Jg2pOety.js";

@@ -1,0 +1,1 @@
+export{rL as ensureMetricsConsoleHook}from"../../chunks/app-Jg2pOety.js";

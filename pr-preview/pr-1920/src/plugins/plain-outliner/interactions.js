@@ -1,0 +1,1 @@
+export{ik as blockEditingContentRenderer}from"../../../chunks/app-Jg2pOety.js";

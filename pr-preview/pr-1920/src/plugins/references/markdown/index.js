@@ -1,0 +1,1 @@
+export{IS as referencesMarkdownExtension}from"../../../../chunks/app-Jg2pOety.js";

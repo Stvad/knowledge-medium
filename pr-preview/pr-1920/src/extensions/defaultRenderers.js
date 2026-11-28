@@ -1,0 +1,1 @@
+export{oB as defaultRegistry,sB as defaultRendererContributions,cB as defaultRenderersExtension}from"../../chunks/app-Jg2pOety.js";

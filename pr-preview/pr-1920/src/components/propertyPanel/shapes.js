@@ -1,0 +1,1 @@
+export{dX as propertyShapeLabel}from"../../../chunks/app-Jg2pOety.js";

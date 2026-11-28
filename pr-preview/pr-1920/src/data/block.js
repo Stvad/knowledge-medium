@@ -1,0 +1,1 @@
+export{Ftt as Block,Itt as requireLoadedBlock}from"../../chunks/app-Jg2pOety.js";

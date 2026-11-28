@@ -1,0 +1,1 @@
+export{BR as ClientLocalSettings,VR as clientLocalSettings}from"../../chunks/app-Jg2pOety.js";

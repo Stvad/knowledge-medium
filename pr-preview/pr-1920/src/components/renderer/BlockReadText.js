@@ -1,0 +1,1 @@
+export{VU as BlockReadText}from"../../../chunks/app-Jg2pOety.js";

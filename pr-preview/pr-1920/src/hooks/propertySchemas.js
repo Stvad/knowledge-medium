@@ -1,0 +1,1 @@
+export{sX as usePropertySchemas}from"../../chunks/app-Jg2pOety.js";

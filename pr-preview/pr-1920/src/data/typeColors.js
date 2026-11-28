@@ -1,0 +1,1 @@
+export{BI as DEFAULT_TYPE_COLORS,VI as defaultTypeColor,HI as pickLeastUsedTypeColor}from"../../chunks/app-Jg2pOety.js";

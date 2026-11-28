@@ -1,0 +1,1 @@
+export{n8 as aliasDataExtension}from"../../../chunks/app-Jg2pOety.js";

@@ -1,0 +1,1 @@
+export{SG as PropertyRow,CG as PropertyValueCell}from"../../../chunks/app-Jg2pOety.js";

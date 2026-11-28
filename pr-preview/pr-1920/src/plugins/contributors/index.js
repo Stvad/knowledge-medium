@@ -1,0 +1,1 @@
+export{f_ as contributorsPlugin}from"../../../chunks/app-Jg2pOety.js";

@@ -1,0 +1,1 @@
+export{xa as syncMetricsPlugin}from"../../../chunks/app-Jg2pOety.js";

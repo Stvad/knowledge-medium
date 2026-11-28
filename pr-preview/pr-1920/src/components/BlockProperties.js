@@ -1,0 +1,1 @@
+export{gG as BlockProperties}from"../../chunks/app-Jg2pOety.js";

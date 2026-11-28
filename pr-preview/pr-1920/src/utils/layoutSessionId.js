@@ -1,0 +1,1 @@
+export{bdt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,xdt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Sdt as __resetLayoutSessionIdForTesting,Cdt as getLayoutSessionId,wdt as isInstalledAppDisplayMode,Tdt as readOrCreateLayoutSessionId}from"../../chunks/app-Jg2pOety.js";

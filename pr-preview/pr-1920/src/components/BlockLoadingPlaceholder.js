@@ -1,0 +1,1 @@
+export{rB as BlockLoadingPlaceholder}from"../../chunks/app-Jg2pOety.js";

@@ -1,0 +1,1 @@
+export{wB as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,TB as openExtensionsSettings}from"../../chunks/app-Jg2pOety.js";

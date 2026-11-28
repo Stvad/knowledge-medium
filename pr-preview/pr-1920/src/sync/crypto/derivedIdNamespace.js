@@ -1,0 +1,1 @@
+export{Ppt as deriveWorkspaceIdNamespace}from"../../../chunks/app-Jg2pOety.js";

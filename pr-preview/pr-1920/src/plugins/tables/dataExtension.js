@@ -1,0 +1,1 @@
+export{sQ as tablesDataExtension}from"../../../chunks/app-Jg2pOety.js";

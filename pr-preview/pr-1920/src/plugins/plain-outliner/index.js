@@ -1,0 +1,1 @@
+export{tk as plainOutlinerPlugin}from"../../../chunks/app-Jg2pOety.js";

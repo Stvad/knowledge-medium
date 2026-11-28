@@ -1,0 +1,1 @@
+export{M$ as htmlDocumentTypeSeed}from"../../../chunks/app-Jg2pOety.js";

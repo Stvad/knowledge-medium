@@ -1,0 +1,1 @@
+export{RS as wikilinkMarkdownExtension}from"../../../../../chunks/app-Jg2pOety.js";

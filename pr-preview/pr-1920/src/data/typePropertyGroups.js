@@ -1,0 +1,1 @@
+export{VG as typePropertyGroups}from"../../chunks/app-Jg2pOety.js";

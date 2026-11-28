@@ -1,0 +1,1 @@
+export{sR as appUpdatePromptExtension}from"../../../chunks/app-Jg2pOety.js";

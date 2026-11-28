@@ -1,0 +1,1 @@
+export{GH as captureMediaVerb}from"../../chunks/app-Jg2pOety.js";

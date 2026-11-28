@@ -1,0 +1,1 @@
+export{rG as isFocalRender,iG as useIsFocalRender}from"../../chunks/app-Jg2pOety.js";

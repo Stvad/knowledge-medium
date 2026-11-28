@@ -1,0 +1,1 @@
+export{Zft as getOrCreatePropertiesPage,Qft as propertiesPageBlockId,$ft as propertiesPageSpec}from"../../chunks/app-Jg2pOety.js";

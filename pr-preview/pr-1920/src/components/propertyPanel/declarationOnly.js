@@ -1,0 +1,1 @@
+export{GG as declarationOnlyDefinitionForName,KG as declarationOnlyStatusText}from"../../../chunks/app-Jg2pOety.js";

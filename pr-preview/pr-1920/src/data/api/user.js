@@ -1,0 +1,1 @@
+export{A_t as SYSTEM_AUTHOR_PREFIX,j_t as isSystemAuthor,M_t as systemAuthor}from"../../../chunks/app-Jg2pOety.js";

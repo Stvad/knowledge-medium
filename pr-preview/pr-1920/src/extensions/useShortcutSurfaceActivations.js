@@ -1,0 +1,1 @@
+export{nU as useShortcutSurfaceActivations}from"../../chunks/app-Jg2pOety.js";

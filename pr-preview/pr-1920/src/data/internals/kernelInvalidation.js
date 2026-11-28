@@ -1,0 +1,1 @@
+export{vnt as emitKernelInvalidations,ynt as kernelInvalidationRule}from"../../../chunks/app-Jg2pOety.js";

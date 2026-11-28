@@ -1,0 +1,1 @@
+export{u$ as RENAME_BACKLINKS_PRECEDENCE,d$ as RENAME_BACKLINKS_PROCESSOR,f$ as applyRefRewrites,p$ as renameBacklinksProcessor,m$ as renameSameTxProcessors,h$ as replacementFor,g$ as splitBySurvivingSpan}from"../../../chunks/app-Jg2pOety.js";
