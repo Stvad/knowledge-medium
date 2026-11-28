@@ -1,1 +1,1 @@
-export{Jut as InvalidBlockIdError,Yut as assertCanonicalBlockId}from"../../chunks/app-BuyVLDrZ.js";
+export{Jut as InvalidBlockIdError,Yut as assertCanonicalBlockId}from"../../chunks/app-B1GABvzk.js";

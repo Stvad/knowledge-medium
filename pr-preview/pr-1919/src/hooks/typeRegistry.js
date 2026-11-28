@@ -1,1 +1,1 @@
-export{Nq as useTypes}from"../../chunks/app-BuyVLDrZ.js";
+export{Nq as useTypes}from"../../chunks/app-B1GABvzk.js";

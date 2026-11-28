@@ -1,1 +1,1 @@
-export{Zot as parsePropertyDefinitionMetadata,Qot as propertySchemaOriginForSeedKey}from"../../chunks/app-BuyVLDrZ.js";
+export{Zot as parsePropertyDefinitionMetadata,Qot as propertySchemaOriginForSeedKey}from"../../chunks/app-B1GABvzk.js";

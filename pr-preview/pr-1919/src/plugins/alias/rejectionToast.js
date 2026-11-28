@@ -1,1 +1,1 @@
-export{YC as aliasCollisionRejectionToast}from"../../../chunks/app-BuyVLDrZ.js";
+export{YC as aliasCollisionRejectionToast}from"../../../chunks/app-B1GABvzk.js";

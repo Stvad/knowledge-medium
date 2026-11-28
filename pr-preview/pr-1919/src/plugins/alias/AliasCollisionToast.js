@@ -1,1 +1,1 @@
-export{XC as AliasCollisionToast}from"../../../chunks/app-BuyVLDrZ.js";
+export{XC as AliasCollisionToast}from"../../../chunks/app-B1GABvzk.js";

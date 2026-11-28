@@ -1,1 +1,1 @@
-export{Or as TypeRegistrationTimeout,kr as createTypeBlock,Ar as findCandidatesByPropertyShape,jr as retagBlocks}from"../../chunks/app-BuyVLDrZ.js";
+export{Or as TypeRegistrationTimeout,kr as createTypeBlock,Ar as findCandidatesByPropertyShape,jr as retagBlocks}from"../../chunks/app-B1GABvzk.js";

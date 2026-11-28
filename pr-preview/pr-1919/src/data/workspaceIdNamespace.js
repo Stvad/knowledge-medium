@@ -1,1 +1,1 @@
-export{rpt as DerivedIdNamespaceUnavailableError,ipt as derivedIdNamespaceInTx,apt as resolveDerivedIdNamespace}from"../../chunks/app-BuyVLDrZ.js";
+export{rpt as DerivedIdNamespaceUnavailableError,ipt as derivedIdNamespaceInTx,apt as resolveDerivedIdNamespace}from"../../chunks/app-B1GABvzk.js";
