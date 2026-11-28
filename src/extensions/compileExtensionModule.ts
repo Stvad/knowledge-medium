@@ -1,20 +1,13 @@
-import { hex } from '@scure/base'
 import {extensionModuleParser, parseExtensionSource, sourcePinnedImports} from '@knowledge-medium/agent-cli/extensionImportSyntax'
 import {
   getCompiledModuleCache,
   type CompiledModuleCache,
   type CompiledRecord,
 } from '@/extensions/compiledModuleCache.js'
-import {transpileExtension} from './transpileExtension.js'
+import {buildApprovalRecord, COMPILER_VERSION, hashExtensionSource} from './buildApprovalRecord.js'
+import {linkVendoredImports} from './extensionImportPolicy.js'
+export {COMPILER_VERSION, hashExtensionSource} from './buildApprovalRecord.js'
 export {EXTENSION_BABEL_PRESETS} from './transpileExtension.js'
-
-// Bump when a compiler change invalidates cached output.
-// The cache version is separate from the source hash that grants approval.
-// v2: Emit inline source maps and a per-block sourceURL.
-// v3: Compile JSX against the automatic React runtime.
-// v4: Preserve uninitialized class fields under Babel 8.
-// v5: Validate compiled module imports and link dependencies by integrity.
-export const COMPILER_VERSION = '5'
 
 export type ExtensionModule = Record<string, unknown>
 
@@ -82,14 +75,15 @@ export function __resetCompileCacheForTest(): void {
   defaultCache.unpersistedUpgrades.clear()
 }
 
-/** Pure SHA-256 of the source. The compiler version is intentionally NOT
- *  mixed in here — see {@link COMPILER_VERSION}. This is the hash the
- *  device-local approval pins, and what the loader compares against
- *  `hashExtensionSource(live block.content)` to detect source drift. */
-export async function hashExtensionSource(content: string): Promise<string> {
-  const data = new TextEncoder().encode(content)
-  const digest = await crypto.subtle.digest('SHA-256', data)
-  return hex.encode(new Uint8Array(digest))
+async function linkExtensionRecord(
+  record: CompiledRecord, urlFor: (integrity: string, bytes: Uint8Array<ArrayBuffer>) => string,
+): Promise<string> {
+  if (!record.compiled.includes('km-vendored:')) return record.compiled
+  return linkVendoredImports(await extensionModuleParser(), record.compiled, integrity => {
+    const bytes = record.vendored?.[integrity]
+    if (!bytes) throw new Error(`Missing approved import ${integrity}`)
+    return urlFor(integrity, bytes)
+  })
 }
 
 /** Build an ESM module from already-transpiled JS via a blob URL. This
@@ -98,20 +92,13 @@ export async function hashExtensionSource(content: string): Promise<string> {
 async function defaultInstantiateViaBlob(record: CompiledRecord): Promise<ExtensionModule> {
   const urls = new Map<string, string>()
   try {
-    let compiled = record.compiled
-    if (compiled.includes('km-vendored:')) {
-      const {linkVendoredImports} = await import('./extensionImportPolicy.js')
-      const parse = await extensionModuleParser()
-      compiled = linkVendoredImports(parse, compiled, integrity => {
-        const previous = urls.get(integrity)
-        if (previous) return previous
-        const bytes = record.vendored?.[integrity]
-        if (!bytes) throw new Error(`Missing approved import ${integrity}`)
-        const url = URL.createObjectURL(new Blob([bytes], {type: 'text/javascript'}))
-        urls.set(integrity, url)
-        return url
-      })
-    }
+    const compiled = await linkExtensionRecord(record, (integrity, bytes) => {
+      const previous = urls.get(integrity)
+      if (previous) return previous
+      const url = URL.createObjectURL(new Blob([bytes], {type: 'text/javascript'}))
+      urls.set(integrity, url)
+      return url
+    })
     const entry = URL.createObjectURL(new Blob([compiled], {type: 'text/javascript'}))
     try {
       return await import(/* @vite-ignore */ entry) as ExtensionModule
@@ -242,8 +229,9 @@ async function upgradeApproval(
   const cached = cache.unpersistedUpgrades.get(blockId)
   if (cached?.sourceHash === approval.sourceHash) return cached
 
-  const compiled = await prepareRecord(blockId, approval.approvedSource, approval.sourceHash, approval.vendored)
+  const compiled = await prepareRecord(blockId, approval.approvedSource, approval.vendored)
   compiled.approvedAt = approval.approvedAt
+  compiled.sourceHash = approval.sourceHash
   let stillApproved: boolean
   try {
     stillApproved = await persistent.updateCompilation(blockId, approval, compiled)
@@ -294,7 +282,7 @@ export async function approveExtension(
     && [...(await pinnedImports(source)).values()].every(integrity => existing.vendored?.[integrity])) {
     return {contentHash: sourceHash}
   }
-  const record = await prepareRecord(blockId, source, sourceHash, frozen)
+  const record = await prepareRecord(blockId, source, frozen)
   await persistent.write(blockId, record)
   return {contentHash: sourceHash}
 }
@@ -304,24 +292,9 @@ async function pinnedImports(source: string) {
   return sourcePinnedImports(await parseExtensionSource(source))
 }
 
-async function prepareRecord(
-  blockId: string, source: string, sourceHash: string,
-  frozen?: CompiledRecord['vendored'],
-): Promise<CompiledRecord> {
-  const {pinnedImports: pins, ...output} = compileImplOverride ? {compiled: source, pinnedImports: new Map<string, string>()}
-    : await transpileExtension(source, blockId, platform.allowUnpinnedLive)
-  const record: CompiledRecord = {
-    ...output, sourceHash, approvedSource: source, compilerVersion: COMPILER_VERSION, approvedAt: Date.now(),
-  }
-  for (const [url, integrity] of pins) {
-    const {freezeExtensionImport, verifyFrozenExtensionImport} = await import('@knowledge-medium/agent-cli/freezeExtensionImports')
-    const stored = frozen?.[integrity]
-    const {bytes} = stored ? await verifyFrozenExtensionImport(url, stored, integrity)
-      : await freezeExtensionImport(url, integrity)
-    record.vendored ??= {}
-    record.vendored[integrity] = bytes
-  }
-  return record
+function prepareRecord(blockId: string, source: string, frozen?: CompiledRecord['vendored']) {
+  return buildApprovalRecord(blockId, source, {frozen, allowUnpinnedLive: platform.allowUnpinnedLive},
+    compileImplOverride ? async content => ({compiled: content, pinnedImports: new Map()}) : undefined)
 }
 
 async function instantiateRecord(blockId: string, record: CompiledRecord): Promise<CompileResult> {
@@ -395,7 +368,7 @@ export async function compileForVerification(
   return resolveCachedModule(cache, contentHash, blockId, async () => {
     let record: CompiledRecord
     try {
-      record = await prepareRecord(blockId, content, contentHash)
+      record = await prepareRecord(blockId, content)
     } catch (error) {
       throw new ExtensionTranspileError(blockId, error)
     }

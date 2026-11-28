@@ -1,4 +1,11 @@
 import {execFile} from 'node:child_process'
+import {once} from 'node:events'
+import {createServer} from 'node:http'
+import type {AddressInfo} from 'node:net'
+import {BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams} from '@/data/blockSchema'
+import {typesProp} from '@/data/properties'
+import {makeBlockData} from '@/data/test/factories'
+import {fixtureModule, fixtureSource, fixtureUrl} from './test/extensionFixture'
 import {mkdtemp, readdir, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -60,3 +67,130 @@ it('serves health and reads over the bridge from a production vite-node host wit
     await rm(dir, {recursive: true, force: true})
   }
 }, 65_000)
+
+it('runs only reviewed bytes, reports normalized synced drift and refuses invalid grants', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'headless-extension-launcher-'))
+  let bridge: Awaited<ReturnType<typeof startBridge>> | undefined
+  let host: ReturnType<typeof run> | undefined
+  const cdnRequests: string[] = []
+  const cdn = createServer((request, response) => {
+    cdnRequests.push(request.url ?? '')
+    response.end(fixtureModule)
+  })
+  try {
+    await once(cdn.listen(0, '127.0.0.1'), 'listening')
+    const origin = `http://127.0.0.1:${(cdn.address() as AddressInfo).port}`
+    const config = join(dir, 'config.json')
+    const token = 'fixture-bridge-token'
+    const tokenFile = join(dir, 'agent-token.json')
+    const initial = join(dir, 'initial.json')
+    const changes = join(dir, 'changes.json')
+    const unsafeSource = `console.info('fixture synced module evaluated'); export default null`
+    const grants = new Map([
+      ['fixture-reviewed', fixtureSource + '\n'],
+      ['fixture-unpinned', `import '${fixtureUrl}'; export default null`],
+      ['fixture-forbidden', `import 'node:fs'; export default null`],
+      ['fixture-host-forbidden', `import '@/plugins/agent-runtime/commands.js'; export default null`],
+      ['fixture-missing-export', `import {notAnExport} from '@/extensions/core.js'; console.info(notAnExport)`],
+      ['fixture-throws', `throw new Error('private evaluation error'); export default null`],
+      ['fixture-absent', unsafeSource],
+    ])
+    await Promise.all([
+      ...[...grants].map(([block, source]) => writeFile(join(dir, `${block}.tsx`), source)),
+      writeFile(config, JSON.stringify({
+        workspaceId: 'fixture', profile: 'test', mode: 'plaintext', stateDir: 'device', writable: true,
+        extensions: [...grants.keys(), 'fixture-unreadable'].map(block => ({block, file: `${block}.tsx`})),
+      })),
+      writeFile(tokenFile, JSON.stringify({profiles: {test: {token}}})),
+      writeFile(initial, JSON.stringify([
+        ...[...grants].filter(([block]) => block !== 'fixture-absent').map(([block, source]) =>
+          stageExtension(block, source + '\n  ', 1)),
+        stageExtension('fixture-unlisted', unsafeSource, 1),
+      ])),
+    ])
+    bridge = await startBridge(dir)
+    host = run(process.execPath, [join(import.meta.dirname, 'launch.ts'), 'run', config], {
+      env: {
+        PATH: process.env.PATH,
+        NODE_OPTIONS: `--import=${new URL('./test/hostPreload.ts', import.meta.url).href}`,
+        HEADLESS_TEST_INITIAL: initial,
+        HEADLESS_TEST_CHANGES: changes,
+        HEADLESS_TEST_ROLE: 'editor',
+        HEADLESS_TEST_CDN: origin + '/fixture.mjs',
+        AGENT_RUNTIME_URL: bridge.url,
+        AGENT_RUNTIME_BRIDGE_SECRET: bridge.secret,
+        AGENT_RUNTIME_TOKEN_FILE: tokenFile,
+        VITE_SUPABASE_URL: 'https://auth.invalid',
+        VITE_SUPABASE_ANON_KEY: 'fixture-public-key',
+        VITE_POWERSYNC_URL: 'https://sync.invalid',
+      },
+      encoding: 'utf8',
+      timeout: 55_000,
+      killSignal: 'SIGKILL',
+    })
+    const client = createBridgeClient({bridgeUrl: bridge.url, token, workspaceId: 'fixture', timeoutMs: 5_000})
+    const health = () => client.runCommand({type: 'health'})
+    const effectWrites = () => client.runCommand({type: 'sql',
+      sql: "SELECT content, created_by, updated_by FROM blocks WHERE content = 'reviewed-effect'"})
+    const refused = (block: string, reason: string) => ({block, state: 'refused', reason, effectIds: []})
+    const running = {block: 'fixture-reviewed', state: 'running', effectIds: ['reviewed-effect']}
+    await Promise.race([
+      vi.waitFor(async () => {
+        expect(await health()).toMatchObject({host: {closedReason: null, extensions: [
+          running, refused('fixture-unpinned', 'unpinned-import'), refused('fixture-forbidden', 'forbidden-import'),
+          refused('fixture-host-forbidden', 'forbidden-import'), refused('fixture-missing-export', 'load-error'),
+          refused('fixture-throws', 'load-error'), refused('fixture-absent', 'missing-block'),
+          refused('fixture-unreadable', 'reviewed-file-unreadable'),
+        ]}})
+        expect(await effectWrites()).toEqual([{content: 'reviewed-effect', created_by: 'member', updated_by: 'member'}])
+      }, {timeout: 32_000}),
+      host.then(() => { throw new Error('Host exited before running the fixture') }),
+    ])
+    expect(cdnRequests).toEqual(['/fixture.mjs'])
+    const {stdout: rss} = await run('ps', ['-o', 'rss=', '-p', String(host.child.pid)])
+    console.info(`Headless host RSS with fixture: ${Number(rss.trim())} KiB`)
+    // Both SQL and the observer see a staged server edit. The existing effect
+    // stays mounted and the synced source never becomes a module.
+    await writeFile(changes, JSON.stringify([stageExtension('fixture-reviewed', unsafeSource, 2)]))
+    host.child.kill('SIGUSR2')
+    await vi.waitFor(async () => {
+      const result = await health()
+      expect(result).toMatchObject({host: {extensions: expect.arrayContaining([{...running, state: 'update-available'}])}})
+      expect(JSON.stringify(result)).not.toContain(unsafeSource)
+    }, {timeout: 5_000})
+    expect(await effectWrites()).toHaveLength(1)
+    for (const command of [{type: 'enable-extension'}, {type: 'install-extension', source: unsafeSource}, {type: 'run-action', id: 'x'}] as const) {
+      await expect(client.runCommand(command)).rejects.toThrow(/(?:extension grants|actions are unavailable)/)
+    }
+    await writeFile(changes, JSON.stringify([["UPDATE workspace_members SET role = 'viewer' WHERE id = 'membership'", []]]))
+    host.child.kill('SIGUSR2')
+    await vi.waitFor(async () => {
+      expect(await health()).toMatchObject({host: {closedReason: null, readOnly: true, extensions: expect.arrayContaining([
+        refused('fixture-reviewed', 'not-writable'),
+      ])}})
+    }, {timeout: 5_000})
+    host.child.kill('SIGTERM')
+    const result = await host
+    const stdout = result.stdout.toString()
+    const stderr = result.stderr.toString()
+    expect(stdout.match(/fixture reviewed module evaluated/g)).toHaveLength(1)
+    expect(stdout.match(/fixture reviewed effect stopped/g)).toHaveLength(1)
+    expect(stdout).not.toContain('fixture synced module evaluated')
+    expect(stderr).toContain('Headless extension update-available fixture-reviewed')
+    expect(stderr).not.toContain('private evaluation error')
+  } finally {
+    host?.child.kill('SIGKILL')
+    await host?.catch(() => {})
+    bridge?.stop()
+    cdn.closeAllConnections()
+    await new Promise<void>(resolve => cdn.close(() => resolve()))
+    await rm(dir, {recursive: true, force: true})
+  }
+}, 70_000)
+
+function stageExtension(id: string, content: string, stamp: number) {
+  return [BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(makeBlockData({
+    id, workspaceId: 'fixture', content, createdAt: 1, updatedAt: stamp, userUpdatedAt: stamp,
+    properties: {[typesProp.name]: ['extension']},
+  }))]
+}

@@ -1,6 +1,6 @@
 # Installed extensions in the headless host
 
-> **Status:** Approved by the owner (2026-11-27); not yet implemented. Four decisions are settled by the owner; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
+> **Status:** Approved by the owner (2026-11-27). Slices 0–2 are implemented. The owner decisions are in [§9](#9-decisions). Last verified against code: 2026-11-27.
 > Claims are tagged as in [headless-client.md](headless-client.md). **[read]** means seen in the code. **[measured]** means run or queried, and the entry says where. **[reasoned]** means inferred; the slice that would verify it is named.
 
 ## 1. Goal
@@ -153,7 +153,7 @@ To allowlist an extension or take a new version, the operator:
 
 **Time zone.** The host chooses daily notes by local date (`formatIsoDate` **[read]**), so the service unit sets `TZ` to the owner's zone; the launcher passes the environment through. `health` reports the effective zone. This applies to the host's existing `daily-note` verb too (#1901).
 
-**Health.** `health.extensions` is one more contributor to the host's existing `hostHealth` composition, beside the upload hold and media. Each entry reports `running`, `update-available`, `missing` or `load-error` as a fixed string, served always. Free text comes only while read admission is open: an extension's `diagnosticsFacet` snapshots and its load-error message. These can carry workspace content or upstream errors, and `health` is served while the gate is closed, after a membership loss included.
+**Health.** `health.extensions` is one more contributor to the host's existing `hostHealth` composition, beside the upload hold and media. The command response includes `host.extensions`, with one entry per configured block and the eligible effect IDs declared by that block. The state is `running`, `update-available` or `refused`. A refusal has a fixed reason, including `missing-block`, `not-writable`, `unpinned-import`, `forbidden-import` and `load-error`. The report remains available with the gate closed. Extension diagnostics and raw load exceptions are excluded from this surface.
 
 ## 7. What the host honours
 

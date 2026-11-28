@@ -75,6 +75,9 @@ export interface DynamicExtensionsOptions {
    *  explicit `true`. */
   overrides?: Overrides
   errorReporter?: ExtensionLoadErrorReporter
+  logLoadError?: ExtensionLoadErrorReporter
+  evaluationSignal?: AbortSignal
+  onBlockLoaded?: (blockId: string) => void
   /** Reports the device-local trust status of enabled blocks that aren't
    *  running as-authored (needs-approval / update-available) so the
    *  settings UI can offer the right action. */
@@ -147,13 +150,17 @@ export const dynamicExtensionsExtension = (
     workspaceId,
     safeMode,
     overrides,
-    errorReporter,
+    errorReporter, logLoadError = logBlockLoadError, evaluationSignal, onBlockLoaded,
     approvalStatusReporter,
     cache,
     persistent,
     verifyLiveSource,
   } = options
   const effectiveOverrides: Overrides = overrides ?? new Map()
+  const reportError = (blockId: string, error: Error) => {
+    errorReporter?.(blockId, error)
+    logLoadError(blockId, error)
+  }
 
   // Gate 2 — device-local trust. Returns the runnable module, or null when
   // the block is enabled-by-intent but not currently runnable on this
@@ -179,6 +186,7 @@ export const dynamicExtensionsExtension = (
     const liveHash = await hashExtensionSource(block.content)
     let hasStaticUnpinnedImports: boolean | undefined
     try {
+      evaluationSignal?.throwIfAborted()
       const loaded = await loadApprovedExtension(block.id, approval, cache, persistent, record => {
         hasStaticUnpinnedImports = record.hasStaticUnpinnedImports ?? false
       })
@@ -207,6 +215,7 @@ export const dynamicExtensionsExtension = (
   const collected: AppExtension[] = []
 
   for (const block of extensionBlocks) {
+    if (evaluationSignal?.aborted) break
     // Pre-compile skip — `userExtensionToggle.id` is always `block.id`
     // and `defaultEnabled` is always false, so an enabled state requires
     // an explicit `true` in the overrides map. This check is what makes
@@ -244,10 +253,11 @@ export const dynamicExtensionsExtension = (
       }
       const exported = module.default as AppExtension
       const handle = userExtensionToggle(block)
-      const validated = validateAndPrefix(handle.of(exported), block.id, errorReporter)
+      const validated = validateAndPrefix(handle.of(exported), block.id, reportError, evaluationSignal)
+      onBlockLoaded?.(block.id)
       collected.push(validated ?? shell.of([]))
     } catch (error) {
-      reportBlockLoadError(errorReporter, block.id, error)
+      if (!evaluationSignal?.aborted) reportError(block.id, asError(error))
       collected.push(shell.of([]))
     }
   }
@@ -277,14 +287,15 @@ export const dynamicExtensionsExtension = (
 const validateAndPrefix = (
   extension: AppExtension,
   blockId: string,
-  errorReporter?: ExtensionLoadErrorReporter,
+  errorReporter: ExtensionLoadErrorReporter,
+  evaluationSignal?: AbortSignal,
 ): AppExtension => {
   if (extension === null || extension === undefined || extension === false) {
     return null
   }
 
   if (Array.isArray(extension)) {
-    const mapped = extension.map((child) => validateAndPrefix(child, blockId, errorReporter))
+    const mapped = extension.map((child) => validateAndPrefix(child, blockId, errorReporter, evaluationSignal))
     const boundary = getBoundary(extension)
     if (boundary) attachBoundary(mapped, boundary)
     return mapped
@@ -301,20 +312,21 @@ const validateAndPrefix = (
     // with no attribution. Catch + report here so the deferred path mirrors the
     // synchronous one, recovering to `null` (pruned, per the nullish grammar).
     return async (context) => {
+      if (evaluationSignal?.aborted) return null
       try {
         const inner = await (extension as (
           ctx: typeof context,
         ) => AppExtension | Promise<AppExtension>)(context)
-        return validateAndPrefix(inner, blockId, errorReporter)
+        return validateAndPrefix(inner, blockId, errorReporter, evaluationSignal)
       } catch (error) {
-        reportBlockLoadError(errorReporter, blockId, error)
+        if (!evaluationSignal?.aborted) errorReporter(blockId, asError(error))
         return null
       }
     }
   }
 
   if (isFacetContribution(extension)) {
-    return prefixContributionSource(extension, blockId, errorReporter)
+    return prefixContributionSource(extension, blockId, errorReporter, evaluationSignal)
   }
 
   throw new Error(
@@ -344,7 +356,8 @@ export const isExtensionContribution = (source: unknown, blockId: string): boole
 const prefixContributionSource = (
   contribution: FacetContribution<unknown>,
   blockId: string,
-  errorReporter?: ExtensionLoadErrorReporter,
+  errorReporter: ExtensionLoadErrorReporter,
+  evaluationSignal?: AbortSignal,
 ): FacetContribution<unknown> => {
   const blockSource = extensionContributionSource(blockId)
   const composed = contribution.source
@@ -363,24 +376,15 @@ const prefixContributionSource = (
     source: composed,
   }
   if (contribution.enables !== undefined) {
-    result.enables = validateAndPrefix(contribution.enables, blockId, errorReporter)
+    result.enables = validateAndPrefix(contribution.enables, blockId, errorReporter, evaluationSignal)
   }
   return result
 }
 
-/** Wrap a thrown block-load failure to an Error, attribute it to the block via
- *  `errorReporter`, and log it. Shared by the loader's synchronous per-block
- *  catch and the deferred function-export wrapper so the error-coercion idiom
- *  and the log-message wording live in one place (they'd otherwise silently
- *  drift). The caller owns recovery (push a shell vs. return null). */
-const reportBlockLoadError = (
-  errorReporter: ExtensionLoadErrorReporter | undefined,
-  blockId: string,
-  error: unknown,
-): void => {
-  const wrapped = error instanceof Error ? error : new Error(String(error))
-  errorReporter?.(blockId, wrapped)
-  console.error(`Failed to load extension block ${blockId}`, wrapped)
+const asError = (error: unknown): Error => error instanceof Error ? error : new Error(String(error))
+
+const logBlockLoadError: ExtensionLoadErrorReporter = (blockId, error) => {
+  console.error(`Failed to load extension block ${blockId}`, error)
 }
 
 const describeShape = (value: unknown): string => {

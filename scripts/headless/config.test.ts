@@ -49,3 +49,14 @@ it.each([
 it('refuses a key command on a plaintext config', async () => {
   await expect(read({...common, mode: 'plaintext', keyCommand: command})).rejects.toThrow('keyCommand')
 })
+
+it('resolves reviewed copies beside the config and rejects ambiguous grants', async () => {
+  const config = {...common, mode: 'plaintext'}
+  const entry = {block: 'fixture-block', file: 'reviewed.tsx'}
+  await expect(read({...config, extensions: [entry]})).resolves.toMatchObject({
+    extensions: [{...entry, file: join(dir, entry.file)}],
+  })
+  await expect(read({...config, extensions: [entry, {...entry, file: 'other.ts'}]}))
+    .rejects.toThrow('Each extension block must be listed only once')
+  await expect(read({...config, extensions: [{...entry, source: 'export default null'}]})).rejects.toThrow('source')
+})

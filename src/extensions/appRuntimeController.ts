@@ -29,7 +29,7 @@ type ReportBatch = Pick<BatchableKeyedStore<unknown>, 'beginBatch' | 'commitBatc
 /** Hands the runtime to the host before Repo installation. Reconcile after installation. */
 type RuntimeListener = (runtime: FacetRuntime) => void
 
-interface RuntimeResolutionOptions extends Pick<DynamicExtensionsOptions, 'cache' | 'persistent'> {
+interface RuntimeResolutionOptions extends Pick<DynamicExtensionsOptions, 'cache' | 'persistent' | 'logLoadError' | 'evaluationSignal' | 'onBlockLoaded'> {
   baseExtensions: readonly AppExtension[]
   context: AppRuntimeContext
   overrides: Overrides
@@ -54,7 +54,7 @@ export class AppRuntimeController {
 
   async resolve({
     baseExtensions, context, overrides, cache, persistent, errorStore, approvalStore,
-    signal, beforePublish, onRuntime, onLoadError,
+    signal, beforePublish, onRuntime, onLoadError, logLoadError, evaluationSignal, onBlockLoaded,
   }: RuntimeResolutionOptions): Promise<FacetRuntime | undefined> {
     if (signal.aborted) return
 
@@ -73,6 +73,7 @@ export class AppRuntimeController {
         baseExtensions,
         dynamicExtensionsExtension({
           repo, workspaceId, safeMode, overrides, cache, persistent,
+          logLoadError, evaluationSignal, onBlockLoaded,
           errorReporter: (blockId, error) => {
             if (signal.aborted) return
             errorStore.reportError(blockId, error)

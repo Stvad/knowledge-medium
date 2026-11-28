@@ -4,5 +4,6 @@
   "mode": "e2ee",
   "keyFile": "workspace.key",
   "profile": "headless-scratch",
-  "writable": false
+  "writable": false,
+  "extensions": []
 }

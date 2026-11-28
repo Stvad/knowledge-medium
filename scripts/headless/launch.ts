@@ -21,7 +21,7 @@ if (((await stat(stateDir)).mode & 0o777) !== 0o700) throw new Error('State dire
 const script = (name: string) => join(import.meta.dirname, name)
 // Keep the supervisor's PID and signals when enabling persistent Web Storage.
 process.execve!(process.execPath, [
-  process.execPath, '--experimental-webstorage', `--localstorage-file=${join(stateDir, DEVICE_STORAGE_FILENAME)}`,
+  process.execPath, '--experimental-vm-modules', '--experimental-webstorage', `--localstorage-file=${join(stateDir, DEVICE_STORAGE_FILENAME)}`,
   fileURLToPath(import.meta.resolve('vite-node/cli')), '--config', script('vite.config.ts'),
   script('cli.ts'), '--', action, file, ...extra,
 ], {...process.env, NODE_ENV: 'production'})
