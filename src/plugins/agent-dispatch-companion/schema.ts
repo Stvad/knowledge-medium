@@ -157,6 +157,16 @@ export const agentCancelProp = seedProperty({
   hidden: true,
 })
 
+export const agentRetryAtProp = seedProperty({
+  seedKey: 'system:agent-dispatch-companion/property/retry-at',
+  revision: 1,
+  name: 'agent:retry-at',
+  preset: 'number',
+  defaultValue: 0,
+  changeScope: scope,
+  hidden: true,
+})
+
 /** Every agent-protocol seed, in `AGENT_PROPS` order. */
 export const agentProtocolSeeds = [
   agentStatusProp,
@@ -172,4 +182,5 @@ export const agentProtocolSeeds = [
   agentActivityAtProp,
   agentAskedAtProp,
   agentCancelProp,
+  agentRetryAtProp,
 ] as const

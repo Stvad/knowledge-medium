@@ -52,6 +52,8 @@ export const PROPS = {
   cancel: 'agent:cancel',
   /** When the UI's Ask Agent gesture last fired: an explicit "go". */
   askedAt: 'agent:asked-at',
+  /** When the UI requested a retry of the existing failed mention. */
+  retryAt: 'agent:retry-at',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'

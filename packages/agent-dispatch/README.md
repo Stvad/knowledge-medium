@@ -41,6 +41,10 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.9.12
+
+Restart the daemon on 0.9.12 to use **Retry** from a failed mention's status chip. The request stays pending until the named watcher finds the mention and has a run slot. The new attempt keeps previous replies and resumes the existing session when that watcher supports resume. Scheduled SQL row tasks keep their failure details and their separate automatic retry policy.
+
 ## Upgrade to 0.9.11
 
 Publish `@knowledge-medium/agent-cli` 0.14.5 before publishing `@knowledge-medium/agent-dispatch` 0.9.11. Row tasks need the updated CLI for workspace-scoped reads and block creation timestamps. Install both releases and restart the dispatch daemon. Reload the app for exact reads of imported block IDs that look like references. If dispatch pairs with a headless host, update that host's checkout to a revision containing the bridge changes, refresh its dependencies and builds with `node scripts/ensure-deps.mjs`, and restart the headless host. Enabling `rowTasks` takes a fresh baseline even if the watcher already has a batch cursor.
@@ -423,7 +427,7 @@ To start it:
 6. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
 7. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session: a follow-up whose thread is still running is marked `agent:status=queued`, with an `agent:activity` saying why, and runs once that run ends). For parallel runs, mention outside the running thread — that starts a fresh session.
 
-Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 65 min (the longest allowed run plus grace) is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `agent:*` properties.
+Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 65 min (the longest allowed run plus grace) is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a failed mention, choose **Retry** on its status chip.
 
 **One daemon per trigger page.** A pidfile prevents two daemons of one instance on one machine (launchd + a manual run would double-claim and double-bill). Across machines, and across instances, there is no claim atomicity over LWW sync, so no two daemons may watch the same `target`: install each LaunchAgent on exactly one device, and give each daemon on a machine its own targets.
 

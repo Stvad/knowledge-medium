@@ -30,6 +30,8 @@ export const AGENT_PROPS = {
   /** Written by the Stop Agent action; the daemon clears it once the
    *  running task is aborted and parked as `error: cancelled`. */
   cancel: 'agent:cancel',
+  /** Set by Retry and consumed by the mention watcher when it accepts the run. */
+  retryAt: 'agent:retry-at',
 } as const
 
 export type ChipKind = 'queued' | 'running' | 'done' | 'error'

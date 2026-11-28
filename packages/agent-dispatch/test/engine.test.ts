@@ -11,6 +11,7 @@ import type {MemoryEntry} from '../src/memory'
 import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS} from '../src/watchers'
 
 const NOW = 1_800_000_000_000
+const firstMentionReplyKey = expect.stringMatching(/^reply:b-1:1:[0-9a-f-]+$/)
 
 interface FakeGraphSeed {
   beingEdited?: string[]
@@ -80,6 +81,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
         ...(args.error !== undefined ? {[PROPS.error]: args.error ?? ''} : {}),
         ...(args.activity !== undefined ? {[PROPS.activity]: args.activity ?? ''} : {}),
         ...(args.cancel !== undefined ? {[PROPS.cancel]: args.cancel ?? ''} : {}),
+        ...(args.retryAt !== undefined ? {[PROPS.retryAt]: args.retryAt} : {}),
       }
       blocks.set(id, target)
       propWrites.push({id, status: args.status, activity: args.activity})
@@ -472,7 +474,7 @@ describe('mention lifecycle', () => {
     // splitReply defaults on: one terminal reconcile of the reply subtree,
     // split along the outline (shape 'outline'), keyed by attempt.
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: 'Reply text', replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+      {parentId: 'b-1', markdown: 'Reply text', replyKey: firstMentionReplyKey, shape: 'outline', final: true},
     ])
     expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-1')
     expect(blocks.get('b-1')?.properties?.[PROPS.executor]).toBe('claude')
@@ -692,7 +694,7 @@ describe('mention lifecycle', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('') // flag cleared, won't re-cancel a rerun
     // A cancelled run never splits — the note lands as a single block.
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: '⏹️ agent-dispatch run cancelled', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+      {parentId: 'b-1', markdown: '⏹️ agent-dispatch run cancelled', replyKey: firstMentionReplyKey, shape: 'block', final: true},
     ])
     expect(runTask).toHaveBeenCalledTimes(1) // not re-run
   })
@@ -1037,6 +1039,48 @@ describe('mention lifecycle', () => {
     expect(reconciles[0].markdown).toContain('credit exhausted')
   })
 
+  it('retries a failed mention on explicit request and preserves its first reply', async () => {
+    const backlinks = [{id: 'b-1'}]
+    const {graph, blocks, reconciles} = fakeGraph({
+      backlinks,
+      blocks: {'b-1': {content: '[[review bot]] summarize this', properties: {[PROPS.session]: 'prior-session'}}},
+    })
+    const runTask = vi.fn<EngineDeps['runTask']>(async () => okRun())
+      .mockResolvedValueOnce(okRun({ok: false, exitCode: 1, stderr: 'Authentication expired', sessionId: null}))
+    const engine = engineWith({graph, runTask, config: mentionConfig({watchers: [
+      {kind: 'backlinks', name: 'review', target: 'review bot', settleMs: 0},
+    ]})})
+    await engine.tick()
+    await engine.drain()
+    const block = blocks.get('b-1')!
+    expect(block.properties).toMatchObject({[PROPS.status]: 'error', [PROPS.watcher]: 'review', [PROPS.attempts]: 1})
+    expect(reconciles[0].markdown).toContain('Authentication expired')
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledOnce()
+
+    block.properties = {...block.properties, [PROPS.retryAt]: NOW}
+    backlinks.pop()
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledOnce()
+    expect(block.properties).toMatchObject({[PROPS.status]: 'error', [PROPS.retryAt]: NOW})
+
+    backlinks.push({id: 'b-1'})
+    vi.mocked(graph.beingEditedBlocks).mockResolvedValue(new Map([['b-1', NOW]]))
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(2)
+    expect(runTask.mock.calls[1][0].resumeSessionId).toBe('prior-session')
+    expect(block.properties).toMatchObject({[PROPS.status]: 'done', [PROPS.attempts]: 2, [PROPS.retryAt]: 0})
+    expect(reconciles.map(reply => reply.replyKey)).toEqual([
+      firstMentionReplyKey,
+      expect.stringMatching(/^reply:b-1:2:[0-9a-f-]+$/),
+    ])
+  })
+
   it('leaves a visible reply even when infrastructure fails mid-task', async () => {
     const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
@@ -1093,7 +1137,7 @@ describe('mention lifecycle', () => {
     expect(runTask).not.toHaveBeenCalled()
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
     expect(reconciles).toEqual([{
-      parentId: 'b-1', markdown: expect.stringContaining('gave up after'), replyKey: 'park:b-1', shape: 'block', final: true,
+      parentId: 'b-1', markdown: expect.stringContaining('gave up after'), replyKey: expect.stringMatching(/^park:b-1:[0-9a-f-]+$/), shape: 'block', final: true,
     }])
 
     // Terminal: later ticks skip it entirely.
@@ -1886,7 +1930,8 @@ describe('live progress streaming', () => {
         {markdown: 'I found the reference.', final: false},
         {markdown: 'I found the reference. Here is the answer.', final: true},
       ])
-      expect(new Set(reconciles.map(r => r.replyKey))).toEqual(new Set(['reply:b-1:1']))
+      expect(reconciles[0].replyKey).toEqual(firstMentionReplyKey)
+      expect(new Set(reconciles.map(r => r.replyKey)).size).toBe(1)
       expect(reconciles.every(r => r.shape === 'block')).toBe(true)
       expect(propWrites.at(-1)?.status).toBe('done')
     } finally {
@@ -1912,7 +1957,7 @@ describe('live progress streaming', () => {
     await engine.drain()
 
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: 'final', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+      {parentId: 'b-1', markdown: 'final', replyKey: firstMentionReplyKey, shape: 'block', final: true},
     ])
   })
 
@@ -1990,7 +2035,7 @@ describe('live progress streaming', () => {
 
     // Exactly the one terminal reconcile — no infra-error reconcile after it.
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: 'the answer', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+      {parentId: 'b-1', markdown: 'the answer', replyKey: firstMentionReplyKey, shape: 'block', final: true},
     ])
   })
 
@@ -2043,7 +2088,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
     // One terminal reconcile of the reply subtree, split along the outline
     // (shape 'outline'). The app parses + reconciles the tree atomically.
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: firstMentionReplyKey, shape: 'outline', final: true},
     ])
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
 
@@ -2068,7 +2113,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
     await engine.drain()
 
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'block', final: true},
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: firstMentionReplyKey, shape: 'block', final: true},
     ])
     const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
     expect(prompt).not.toContain('block hierarchy')
@@ -2093,8 +2138,8 @@ describe('splitReply (reply as a block hierarchy)', () => {
     // the streamed placeholder block becomes the reply's first block (no
     // orphaning, no separate rootBlockId dance).
     expect(reconciles).toEqual([
-      {parentId: 'b-1', markdown: '💭 Claude is working…', replyKey: 'reply:b-1:1', shape: 'outline', final: false},
-      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+      {parentId: 'b-1', markdown: '💭 Claude is working…', replyKey: firstMentionReplyKey, shape: 'outline', final: false},
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: firstMentionReplyKey, shape: 'outline', final: true},
     ])
   })
 
@@ -2696,6 +2741,22 @@ describe('query row tasks', () => {
     expect(runTask).toHaveBeenCalledOnce()
     expect(propWrites.filter(write => write.status === 'running').map(write => write.id)).toEqual(['retry'])
     expect(blocks.get('retry')?.properties).toMatchObject({[PROPS.status]: 'done', [PROPS.attempts]: 2})
+  })
+
+  it('preserves the failure when a chip requests a retry of a SQL task', async () => {
+    const failure = {
+      [PROPS.status]: 'error', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 3,
+      [PROPS.error]: 'Authentication expired', [PROPS.retryAt]: NOW,
+    }
+    const {graph, blocks} = fakeGraph({blocks: {alpha: {properties: failure}}})
+    const state = memoryState()
+    await state.setRowTasks(rowTaskKey, {baselineIds: [], baselineMs: NOW, pending: [{id: 'alpha'}]})
+    const runTask = vi.fn(async () => okRun())
+
+    await tick(engineWith({graph, state, runTask, config: config({reply: false})}))
+
+    expect(runTask).not.toHaveBeenCalled()
+    expect(blocks.get('alpha')?.properties).toEqual(failure)
   })
 
   it.each([null, undefined])('skips an unclaimed row with creation timestamp %s', async createdAt => {

@@ -3,9 +3,7 @@
  * `agent:cancel` contract: it aborts a `running` task's child process,
  * parks the block `agent:status: error` + `agent:error: 'cancelled'`,
  * and clears `agent:cancel` itself. So the UI's only job is to write
- * `agent:cancel` on a block that's still `running` — the terminal
- * `error: cancelled` state is deliberately NOT re-runnable, so this
- * never touches other props or tries to reset the task.
+ * `agent:cancel` on a block that's still `running`.
  */
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'

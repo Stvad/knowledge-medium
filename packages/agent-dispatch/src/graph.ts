@@ -32,7 +32,7 @@ export interface MemoryScope {
 interface TaskPropsWrite {
   status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
   resumeOptions?: AgentResumeOptions | null,
-  attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
+  attempts?: number, activity?: string | null, cancel?: string | null, retryAt?: number, nowMs: number,
 }
 
 /** Blocks of memory a run's prompt shows (about 50 short lines). */
@@ -87,6 +87,7 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     // Clear the cancel REQUEST on terminal writes so a satisfied/stale
     // cancel never re-cancels a later rerun.
     if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
+    if (args.retryAt !== undefined) properties[PROPS.retryAt] = args.retryAt
     await writeTaskProps(id, properties)
   }
 

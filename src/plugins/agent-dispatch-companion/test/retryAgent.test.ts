@@ -28,17 +28,13 @@ const failedTask = async (properties: Record<string, unknown> = {}) => {
   return repo.block(id)
 }
 
-it('requeues the original request and retains the watcher, resume information, and reply attempt', async () => {
-  const retained = {
-    [AGENT_PROPS.watcher]: 'review',
+it('requests a retry without altering the original request or its failure details', async () => {
+  const block = await failedTask({
     [AGENT_PROPS.executor]: 'codex',
     [AGENT_PROPS.session]: 'codex:thread-1',
     [AGENT_PROPS.resumeOptions]: {version: 1, executor: 'codex'},
     [AGENT_PROPS.attempts]: 3,
     'other-property': 'keep',
-  }
-  const block = await failedTask({
-    ...retained,
     [AGENT_PROPS.error]: 'Authentication expired',
     [AGENT_PROPS.activity]: 'Thinking',
     [AGENT_PROPS.activityAt]: 120,
@@ -49,18 +45,11 @@ it('requeues the original request and retains the watcher, resume information, a
   await retryAgent(block)
 
   const row = (await block.load())!
-  expect(row.properties).toEqual({
+  expect(row.properties).toStrictEqual({
     ...before.properties,
-    ...retained,
-    [AGENT_PROPS.status]: 'queued',
-    [AGENT_PROPS.updatedAt]: expect.any(Number),
-    [AGENT_PROPS.error]: undefined,
-    [AGENT_PROPS.activity]: undefined,
-    [AGENT_PROPS.activityAt]: undefined,
-    [AGENT_PROPS.cancel]: undefined,
+    [AGENT_PROPS.retryAt]: expect.any(Number),
   })
-  expect(row.content).toBe(request)
-  expect(row.userUpdatedAt).toBeGreaterThan(before.userUpdatedAt!)
+  expect(row.content).toBe(before.content)
 })
 
 it('keeps a run that advanced since the user opened the failed chip', async () => {
@@ -70,15 +59,15 @@ it('keeps a run that advanced since the user opened the failed chip', async () =
 
   await retryAgent(block)
 
-  expect((await block.load())!.properties[AGENT_PROPS.status]).toBe('running')
+  expect((await block.load())!.properties[AGENT_PROPS.retryAt]).toBeUndefined()
 })
 
-it('does not queue a task without its original watcher', async () => {
+it('does not request a retry without the original watcher', async () => {
   const block = await failedTask({[AGENT_PROPS.watcher]: ''})
 
   await retryAgent(block)
 
-  expect((await block.load())!.properties[AGENT_PROPS.status]).toBe('error')
+  expect((await block.load())!.properties[AGENT_PROPS.retryAt]).toBeUndefined()
 })
 
 it('does not write retry metadata onto a deleted task', async () => {
@@ -88,7 +77,7 @@ it('does not write retry metadata onto a deleted task', async () => {
   await retryAgent(block)
 
   const row = await repo.tx(tx => tx.get(block.id), {scope: ChangeScope.BlockDefault})
-  expect(row?.properties[AGENT_PROPS.status]).toBe('error')
+  expect(row?.properties[AGENT_PROPS.retryAt]).toBeUndefined()
 })
 
 it('allows the task to disappear before Retry is selected', async () => {

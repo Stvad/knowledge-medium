@@ -21,6 +21,7 @@ import {
   agentAttemptsProp,
   agentCancelProp,
   agentErrorProp,
+  agentRetryAtProp,
   agentStatusProp,
   agentUpdatedAtProp,
   agentWatcherProp,
@@ -50,6 +51,7 @@ const REQUEUE_CLEARED_PROPS = [
   // clears agent:cancel on every terminal write, but drop it here too so
   // a re-queue can't hand a leftover flag to the fresh run).
   agentCancelProp,
+  agentRetryAtProp,
   agentWatcherProp,
 ] as const
 

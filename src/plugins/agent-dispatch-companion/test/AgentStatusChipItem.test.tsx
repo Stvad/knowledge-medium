@@ -69,6 +69,21 @@ describe('AgentStatusChipItem', () => {
     expect(retryAgentMock).toHaveBeenCalledExactlyOnceWith(block)
   })
 
+  it('keeps the failure visible until the watcher accepts the retry', () => {
+    withProperties({
+      'agent:status': 'error',
+      'agent:watcher': 'review',
+      'agent:error': 'Authentication expired',
+      'agent:retry-at': 500,
+    })
+    const {container} = render(<Chip block={block} />)
+
+    expect(chipNode(container)?.getAttribute('data-agent-dispatch-chip')).toBe('error')
+    expect(chipNode(container)?.getAttribute('title')).toContain('Authentication expired · Retry requested')
+    expect(screen.getByText('Retry pending')).toBeVisible()
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
   it('updates the running activity age and warning on the mounted chip', () => {
     vi.useFakeTimers()
     vi.setSystemTime(100_000)
