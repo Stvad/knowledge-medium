@@ -1,1 +1,1 @@
-export{EI as BlockEmbed}from"../../../chunks/app-C8XOxj7D.js";
+export{EI as BlockEmbed}from"../../../chunks/app-DU4h-_RX.js";

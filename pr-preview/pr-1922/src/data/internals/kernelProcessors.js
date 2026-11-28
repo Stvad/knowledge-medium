@@ -1,1 +1,1 @@
-export{Gnt as KERNEL_PROCESSORS}from"../../../chunks/app-C8XOxj7D.js";
+export{Gnt as KERNEL_PROCESSORS}from"../../../chunks/app-DU4h-_RX.js";

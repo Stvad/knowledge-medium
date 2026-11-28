@@ -1,1 +1,1 @@
-export{_nt as loadTypeIdsByBlock}from"../../chunks/app-C8XOxj7D.js";
+export{_nt as loadTypeIdsByBlock}from"../../chunks/app-DU4h-_RX.js";
