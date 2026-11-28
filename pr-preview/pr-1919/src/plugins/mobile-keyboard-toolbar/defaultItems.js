@@ -1,1 +1,1 @@
-export{wO as defaultToolbarItems}from"../../../chunks/app-CIp246Ux.js";
+export{wO as defaultToolbarItems}from"../../../chunks/app-BBNYzX6z.js";

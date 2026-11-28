@@ -1,1 +1,1 @@
-export{KN as CompactReferenceLink}from"../../../chunks/app-CIp246Ux.js";
+export{KN as CompactReferenceLink}from"../../../chunks/app-BBNYzX6z.js";

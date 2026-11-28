@@ -1,1 +1,1 @@
-export{Fp as computePromotedFromChildren,Ip as detectInlineAttribute}from"../../../chunks/app-CIp246Ux.js";
+export{Fp as computePromotedFromChildren,Ip as detectInlineAttribute}from"../../../chunks/app-BBNYzX6z.js";

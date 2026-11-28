@@ -1,1 +1,1 @@
-export{UY as AppRuntimeContextProvider,WY as useAppRuntime}from"../../chunks/app-CIp246Ux.js";
+export{UY as AppRuntimeContextProvider,WY as useAppRuntime}from"../../chunks/app-BBNYzX6z.js";

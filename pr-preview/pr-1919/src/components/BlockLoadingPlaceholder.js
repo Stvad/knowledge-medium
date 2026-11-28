@@ -1,1 +1,1 @@
-export{Nz as BlockLoadingPlaceholder}from"../../chunks/app-CIp246Ux.js";
+export{Nz as BlockLoadingPlaceholder}from"../../chunks/app-BBNYzX6z.js";

@@ -1,1 +1,1 @@
-export{hS as useFacetValue}from"../../chunks/app-CIp246Ux.js";
+export{hS as useFacetValue}from"../../chunks/app-BBNYzX6z.js";

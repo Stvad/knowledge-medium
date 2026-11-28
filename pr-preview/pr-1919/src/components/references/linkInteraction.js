@@ -1,1 +1,1 @@
-export{YN as classifyLinkInteraction}from"../../../chunks/app-CIp246Ux.js";
+export{YN as classifyLinkInteraction}from"../../../chunks/app-BBNYzX6z.js";

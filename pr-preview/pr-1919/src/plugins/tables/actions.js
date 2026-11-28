@@ -1,1 +1,1 @@
-export{nc as tableConversionActions}from"../../../chunks/app-CIp246Ux.js";
+export{nc as tableConversionActions}from"../../../chunks/app-BBNYzX6z.js";

@@ -1,1 +1,1 @@
-export{ty as authorIdOf}from"../../../chunks/app-CIp246Ux.js";
+export{ty as authorIdOf}from"../../../chunks/app-BBNYzX6z.js";

@@ -1,1 +1,1 @@
-export{Cp as collectTypeCandidates,wp as formatTypeCandidateReport}from"../../../chunks/app-CIp246Ux.js";
+export{Cp as collectTypeCandidates,wp as formatTypeCandidateReport}from"../../../chunks/app-BBNYzX6z.js";
