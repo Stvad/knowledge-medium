@@ -1,1 +1,1 @@
-export{cX as usePropertySchemas}from"../../chunks/app-BRSevbJc.js";
+export{cX as usePropertySchemas}from"../../chunks/app-qRlX8gxn.js";

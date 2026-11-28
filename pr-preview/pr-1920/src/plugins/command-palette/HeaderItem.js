@@ -1,1 +1,1 @@
-export{IF as CommandPaletteHeaderItem}from"../../../chunks/app-BRSevbJc.js";
+export{IF as CommandPaletteHeaderItem}from"../../../chunks/app-qRlX8gxn.js";
