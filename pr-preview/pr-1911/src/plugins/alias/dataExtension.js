@@ -1,1 +1,0 @@
-export{M6 as aliasDataExtension}from"../../../chunks/app-65YW1UUl.js";

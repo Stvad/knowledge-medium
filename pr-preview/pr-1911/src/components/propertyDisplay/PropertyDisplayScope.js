@@ -1,1 +1,0 @@
-export{yB as PropertyDisplayScope}from"../../../chunks/app-65YW1UUl.js";
