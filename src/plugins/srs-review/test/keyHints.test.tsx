@@ -25,7 +25,8 @@ import {
   srsReviewActionContext,
   srsReviewActions,
 } from '../actions.ts'
-import { gradeButtonHint, keyHintsByActionId, useActionKeyHints } from '../keyHints.ts'
+import { keyHintsByActionId, useActionKeyHints } from '@/shortcuts/actionKeyHints.js'
+import { gradeButtonHint } from '../keyHints.ts'
 
 const AGAIN_ACTION_ID = SRS_GRADE_ACTION_IDS.get(SrsSignal.AGAIN)!
 

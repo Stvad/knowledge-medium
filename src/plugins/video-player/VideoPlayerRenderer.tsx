@@ -1,14 +1,16 @@
 import ReactPlayer from 'react-player'
 import { BlockRendererProps, BlockRenderer } from '@/types.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
-import { useContent } from '@/hooks/block.js'
+import { useContent, useHandle } from '@/hooks/block.js'
 import { useUIStateBlock } from '@/data/globalState.js'
-import { topLevelBlockIdProp } from '@/data/properties.js'
+import { panelViewModeProp, topLevelBlockIdProp } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import { Button } from '@/components/ui/button.js'
+import { shortcutTitle, useActionKeyHint } from '@/shortcuts/actionKeyHints.js'
 import { PanelRightOpen } from 'lucide-react'
+import { TOGGLE_VIDEO_NOTES_VIEW_ACTION_ID, VIDEO_PLAYER_CONTEXT } from './actions.ts'
 import { registerVideoPlayer } from './registry.ts'
 import { enterVideoNotesView } from './notes.ts'
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
@@ -34,6 +36,26 @@ export const isPlayableVideoBlock = (block: Block): boolean => {
   const blockData = block.peek()
   const url = blockData ? standaloneHttpUrl(blockData.content) : null
   return !!(url && ReactPlayer.canPlay?.(url))
+}
+
+export const VideoNotesViewButton = ({operation, ...props}: ComponentProps<typeof Button> & {operation: 'open' | 'close'}) => {
+  const closing = operation === 'close'
+  const label = closing ? 'Close video notes view' : 'Open video notes view'
+  const uiStateBlock = useUIStateBlock()
+  // Nested videos can open their own notes view while the key closes the pane's current one.
+  const paneIsInNotesView = useHandle(uiStateBlock, {
+    selector: doc => doc?.properties[panelViewModeProp.name] === VIDEO_NOTES_VIEW_MODE,
+  })
+  const hint = useActionKeyHint(VIDEO_PLAYER_CONTEXT, TOGGLE_VIDEO_NOTES_VIEW_ACTION_ID)
+  return (
+    <Button
+      {...props}
+      aria-label={label}
+      title={shortcutTitle(label, closing === paneIsInNotesView && hint
+        ? `${hint} while the video block or a note is focused`
+        : undefined)}
+    />
+  )
 }
 
 /** The shared video CONTENT renderer (the design's arrangement/rendering
@@ -142,12 +164,11 @@ export const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
       </div>
 
       {!inNotesView && canEnterNotesView && (
-        <Button
+        <VideoNotesViewButton
           type="button"
           variant="secondary"
           size="icon"
-          aria-label="Open video notes view"
-          title="Open video notes view"
+          operation="open"
           className="absolute right-2 top-2 opacity-0 shadow-md transition-opacity group-hover/video-player:opacity-100 focus-visible:opacity-100"
           onClick={() => {
             // uiStateBlock IS the panel row in panel contexts — the enter
@@ -157,7 +178,7 @@ export const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
           }}
         >
           <PanelRightOpen className="h-4 w-4"/>
-        </Button>
+        </VideoNotesViewButton>
       )}
     </div>
   )

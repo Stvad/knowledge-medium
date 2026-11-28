@@ -14,6 +14,7 @@
  * and dispatches `refreshAppRuntime`, after which `HotkeyReconciler`
  * picks up the new bindings via the next `getEffectiveActions` pass.
  */
+import { formatChord } from '@/shortcuts/formatChord.js'
 import {useCallback, useMemo, useState} from 'react'
 import {Pencil, RotateCcw, X, Plus, AlertTriangle} from 'lucide-react'
 import type {PropertyEditorProps} from '@/data/api'
@@ -31,7 +32,6 @@ import type {
   ActionContextType,
 } from '@/shortcuts/types.js'
 import {KeyCaptureInput} from './KeyCaptureInput.tsx'
-import {formatChord} from './keyCapture.ts'
 import {
   overrideEntryKey,
   type StoredKeybindingOverrides,

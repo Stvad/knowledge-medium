@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
+import { formatChord } from '@/shortcuts/formatChord.js'
 import { describe, expect, it, beforeEach } from 'vitest'
 import {
   chordFromEvent,
-  formatChord,
   isModifierOnly,
   normalizeChord,
 } from '../keyCapture.ts'
@@ -153,9 +153,10 @@ describe('formatChord', () => {
     expect(formatChord('Control+Shift+BracketLeft')).toBe('⌃⇧[')
   })
 
-  it('spells Control out off-Mac, where ⌃ reads as noise', () => {
+  it('separates modifier names off Mac and distinguishes Meta from Control', () => {
     stubPlatform('Win32')
-    expect(formatChord('Control+d')).toBe('CtrlD')
+    expect(formatChord('Control+d')).toBe('Ctrl+D')
+    expect(formatChord('$mod+Shift+Backslash Meta+k')).toBe('Ctrl+Shift+\\ Meta+K')
     stubPlatform('MacIntel')
     expect(formatChord('Control+d')).toBe('⌃D')
   })

@@ -1,3 +1,4 @@
+import { formatChord } from '@/shortcuts/formatChord.js'
 import { useMemo, useState, useSyncExternalStore } from 'react'
 import {
   CommandDialog,
@@ -17,7 +18,6 @@ import {
   type ActionContextType,
 } from '@/shortcuts/types.js'
 import { Kbd } from '@/components/ui/kbd'
-import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
 import { groupBy } from 'lodash-es'
 import { commandPaletteToggle } from './toggleStore.ts'
 import { COMMAND_PALETTE_CONTEXT } from './context.ts'

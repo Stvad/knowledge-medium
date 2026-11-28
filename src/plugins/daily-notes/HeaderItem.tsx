@@ -8,11 +8,14 @@
 import type { MouseEvent } from 'react'
 import { CalendarDays } from 'lucide-react'
 import { useRepo } from '@/context/repo.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { useActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
-import { resolveCurrentDailyNoteIso } from './actions.ts'
+import { OPEN_DAILY_NOTE_PICKER_ACTION_ID, resolveCurrentDailyNoteIso } from './actions.ts'
 
 export function DailyNotePickerHeaderItem() {
+  const hint = useActionKeyHint(ActionContextTypes.GLOBAL, OPEN_DAILY_NOTE_PICKER_ACTION_ID)
   const repo = useRepo()
 
   const handleClick = async (event: MouseEvent<HTMLButtonElement>) => {
@@ -38,7 +41,7 @@ export function DailyNotePickerHeaderItem() {
           console.error('[DailyNotePickerHeaderItem] Open picker failed', error)
         })
       }}
-      title="Open daily note picker"
+      title={shortcutTitle('Open daily note picker', hint)}
       aria-label="Open daily note picker"
     >
       <CalendarDays className="h-5 w-5"/>

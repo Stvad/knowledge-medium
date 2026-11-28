@@ -1,6 +1,6 @@
 /**
  * Pure helpers for converting a KeyboardEvent into a tinykeys chord
- * string and displaying chord strings back as Mac-friendly glyphs.
+ * string.
  *
  * Cross-platform on capture: the user's primary modifier (Cmd on
  * macOS, Ctrl elsewhere) is normalised to `$mod`, so a chord captured
@@ -13,12 +13,7 @@
  * `Shift`) so the same physical chord always serialises identically.
  */
 
-// `isMacPlatform` now lives in the shared platform module (`src/utils/platform.ts`)
-// so every $mod/Mac-glyph check agrees. Imported (this file uses it below) AND
-// re-exported, so `useKeyInspector.ts` (which imports it from here) keeps a
-// single import surface — same pattern as the `normalizeChord` re-export below.
 import { isMacPlatform } from '@/utils/platform.js'
-import { splitPressTokens } from '@/shortcuts/canonicalizeChord.js'
 export { isMacPlatform }
 
 /** Map raw `KeyboardEvent.key` values to tinykeys' canonical names. */
@@ -157,96 +152,6 @@ export const modifierPreview = (
 ): string | null => {
   const parts = modifierParts(event)
   return parts.length ? parts.join('+') : null
-}
-
-/** Resolved `$mod` glyph for the current platform: ⌘ on macOS (Cmd),
- *  Ctrl elsewhere. Matches what tinykeys actually binds (`Meta` on Mac,
- *  `Control` on Windows/Linux) — see PLATFORM detection in
- *  node_modules/tinykeys/dist/tinykeys.mjs. Cached at module load
- *  since platform doesn't change mid-session. */
-const platformModGlyph = (): string =>
-  isMacPlatform() ? '⌘' : 'Ctrl'
-
-const GLYPH_BY_TOKEN: Record<string, string> = {
-  cmd: '⌘',
-  meta: '⌘',
-  alt: '⌥',
-  option: '⌥',
-  shift: '⇧',
-  enter: '⏎',
-  escape: 'Esc',
-  esc: 'Esc',
-  space: 'Space',
-  arrowleft: '←',
-  arrowright: '→',
-  arrowup: '↑',
-  arrowdown: '↓',
-  left: '←',
-  right: '→',
-  up: '↑',
-  down: '↓',
-  backspace: '⌫',
-  delete: 'Del',
-  tab: '⇥',
-}
-
-/** `KeyboardEvent.code` names for punctuation keys, mapped to their US
- *  glyph for display — bindings authored code-form ('Control+Shift+
- *  Backquote') would otherwise render the raw code word. */
-const CODE_KEY_GLYPHS: Record<string, string> = {
-  Backquote: '`',
-  BracketLeft: '[',
-  BracketRight: ']',
-  Backslash: '\\',
-  Semicolon: ';',
-  Quote: "'",
-  Comma: ',',
-  Period: '.',
-  Slash: '/',
-  Minus: '-',
-  Equal: '=',
-}
-
-/** Strip tinykeys' `KeyX`/`DigitN` code prefixes for display, so
- *  `KeyY` shows as `Y` and `Digit3` as `3`; punctuation code names map
- *  to their glyph. */
-const stripCodePrefix = (part: string): string => {
-  const letter = part.match(/^Key([A-Z])$/)
-  if (letter) return letter[1]!
-  const digit = part.match(/^Digit(\d)$/)
-  if (digit) return digit[1]!
-  return CODE_KEY_GLYPHS[part] ?? part
-}
-
-/** Render a chord string ('$mod+Shift+k') as display glyphs ('⌘⇧K' on
- *  Mac, 'Ctrl⇧K' on Win/Linux). `$mod` resolves to the platform-native
- *  primary modifier — mirrors what tinykeys actually binds. Multi-press
- *  sequences ('g g') keep their space separator so the glyph hint
- *  reflects "press g, then g". Letters are uppercased for scan-ability;
- *  modifier tokens map to their Mac-conventional glyphs. */
-export const formatChord = (chord: string): string => {
-  // Sequence chords are space-separated; format each press independently
-  // and rejoin with the same separator so "g g" displays as "G G".
-  return chord.split(' ').map(press =>
-    // The tokenizer storage uses: a plain split('+') eats the key of
-    // `Shift++` and shows the bare modifier.
-    splitPressTokens(press)
-      .map(part => {
-        if (part === '$mod') return platformModGlyph()
-        const lower = part.toLowerCase()
-        // Literal Control matches ctrlKey on EVERY platform, but the ⌃
-        // glyph only reads as "Ctrl" to Mac users — elsewhere spell it
-        // out, matching how `$mod` renders (a list would otherwise show
-        // the same physical key two ways: 'CtrlK' and '⌃D').
-        if (lower === 'ctrl' || lower === 'control') return isMacPlatform() ? '⌃' : 'Ctrl'
-        const glyph = GLYPH_BY_TOKEN[lower]
-        if (glyph) return glyph
-        const stripped = stripCodePrefix(part)
-        if (stripped.length === 1) return stripped.toUpperCase()
-        return stripped.charAt(0).toUpperCase() + stripped.slice(1)
-      })
-      .join(''),
-  ).join(' ')
 }
 
 // `normalizeChord` now lives in the shared canonicaliser so dedup,

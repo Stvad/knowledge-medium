@@ -1,9 +1,12 @@
 import { Clock } from 'lucide-react'
 import { useRepo } from '@/context/repo.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { useActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
 import { useBlockOpener } from '@/utils/navigation.js'
-import { openRecentsPage } from './target.js'
+import { OPEN_RECENTS_ACTION_ID, openRecentsPage } from './target.js'
 
 export function RecentsHeaderItem() {
+  const hint = useActionKeyHint(ActionContextTypes.GLOBAL, OPEN_RECENTS_ACTION_ID)
   const repo = useRepo()
   const openBlock = useBlockOpener({plainClick: 'navigator'})
 
@@ -19,7 +22,7 @@ export function RecentsHeaderItem() {
           .then(target => { if (target) openBlock(event, target) })
           .catch(error => { console.error('[recents] could not open Recents', error) })
       }}
-      title="Recently edited blocks"
+      title={shortcutTitle('Recently edited blocks', hint)}
       aria-label="Open recents"
     >
       <Clock className="h-4 w-4"/>

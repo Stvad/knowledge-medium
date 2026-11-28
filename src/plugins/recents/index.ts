@@ -10,11 +10,11 @@ import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
 import type { Repo } from '@/data/repo'
-import { openRecentsPage } from './target.js'
+import { OPEN_RECENTS_ACTION_ID, openRecentsPage } from './target.js'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
 import { RecentsPageBlockRenderer } from './RecentsPageBlockRenderer.tsx'
 
-export const OPEN_RECENTS_ACTION_ID = 'open_recents'
+export { OPEN_RECENTS_ACTION_ID } from './target.js'
 
 const openRecents = async (repo: Repo): Promise<void> => {
   const target = await openRecentsPage(repo)

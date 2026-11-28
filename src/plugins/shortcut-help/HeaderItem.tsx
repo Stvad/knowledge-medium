@@ -1,9 +1,9 @@
-import { isMacPlatform } from '@/utils/platform.js'
-import { shortcutHelpToggle } from './toggleStore.ts'
-
-const getShortcut = () => (isMacPlatform() ? '⌘/' : 'Ctrl+/')
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { useActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
+import { SHORTCUT_HELP_ACTION_ID, shortcutHelpToggle } from './toggleStore.ts'
 
 export function ShortcutHelpHeaderItem() {
+  const hint = useActionKeyHint(ActionContextTypes.GLOBAL, SHORTCUT_HELP_ACTION_ID)
   return (
     <button
       type="button"
@@ -11,7 +11,7 @@ export function ShortcutHelpHeaderItem() {
       // Keep editor focus until the overlay acquires its edit-mode keepalive.
       onMouseDown={event => event.preventDefault()}
       onClick={() => shortcutHelpToggle.toggle()}
-      title={`Open shortcut help (?) or press ${getShortcut()}`}
+      title={shortcutTitle('Open shortcut help', hint)}
       aria-label="Help"
     >
       <span aria-hidden="true" className="font-semibold">?</span>

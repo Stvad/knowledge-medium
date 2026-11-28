@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { Suspense, useEffect, type ReactNode } from 'react'
+import { Suspense, useEffect, type ComponentType, type ReactNode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
@@ -11,12 +11,19 @@ import {
 } from '@/shortcuts/ActiveContexts.js'
 import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.js'
 import {
+  KEYBINDING_OVERRIDE_USER_SOURCE,
+  keybindingOverridesFacet,
+} from '@/shortcuts/keybindingOverrides.js'
+import {
   type ActionContextConfig,
   ActionContextTypes,
   type ActionConfig,
   type BaseShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { Plus } from 'lucide-react'
+import { quickFindAction } from '@/plugins/quick-find'
+import { leftSidebarCoreSection } from '../index.ts'
+import { leftSidebarSectionsFacet } from '../facet.ts'
 import { LeftSidebar, LeftSidebarShortcutsSection } from '../LeftSidebar.tsx'
 import { leftSidebarToggle } from '../toggleStore.ts'
 
@@ -78,12 +85,14 @@ function GlobalContextActivator() {
 function renderWithActions(
   actions: readonly ActionConfig[],
   children: ReactNode,
+  sections: readonly {id: string; component: ComponentType<{closeSidebar: () => void}>}[] = [],
 ) {
   const runtime = resolveFacetRuntimeSync([
     actionContextsFacet.of(globalContext),
     ...actions.map(action => actionsFacet.of(action)),
+    ...sections.map(section => leftSidebarSectionsFacet.of(section)),
   ])
-  return render(
+  const view = render(
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
         <GlobalContextActivator/>
@@ -91,6 +100,7 @@ function renderWithActions(
       </ActiveContextsProvider>
     </AppRuntimeContextProvider>,
   )
+  return {runtime, ...view}
 }
 
 afterEach(() => {
@@ -152,5 +162,25 @@ describe('LeftSidebarShortcutsSection', () => {
         deactivate: expect.any(Function),
       }),
     )
+  })
+})
+
+describe('LeftSidebarCoreSection shortcut hints', () => {
+  it('updates the Jump to row hint when its action is remapped', async () => {
+    const {runtime} = renderWithActions([quickFindAction], <LeftSidebar/>, [leftSidebarCoreSection])
+    act(() => leftSidebarToggle.open())
+
+    const jumpTo = await screen.findByRole('button', {name: 'Jump to...'})
+    expect(jumpTo).toHaveAttribute('title', 'Jump to... (app shortcut Ctrl+P)')
+
+    act(() => {
+      runtime.setRuntimeContributions(keybindingOverridesFacet, KEYBINDING_OVERRIDE_USER_SOURCE, [{
+        actionId: quickFindAction.id,
+        binding: {keys: 'KeyR'},
+        source: KEYBINDING_OVERRIDE_USER_SOURCE,
+      }])
+    })
+
+    expect(jumpTo).toHaveAttribute('title', 'Jump to... (app shortcut R)')
   })
 })

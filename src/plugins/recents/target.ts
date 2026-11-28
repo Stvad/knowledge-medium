@@ -1,6 +1,8 @@
 import type { Repo } from '@/data/repo'
 import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
 
+export const OPEN_RECENTS_ACTION_ID = 'open_recents'
+
 /** Materialize the workspace's Recents page and say where to open it; `null`
  *  when no workspace is active. The kernel-page registry (`SystemPage`) marks
  *  it eager, but bootstrap may skip a failed create; point-of-use retries it.

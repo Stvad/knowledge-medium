@@ -47,7 +47,7 @@ import {
   type SrsReviewController,
 } from './actions.ts'
 import { GradeButtons, ShowAnswerButton } from './ReviewControls.tsx'
-import { useActionKeyHints } from './keyHints.ts'
+import { useActionKeyHints } from '@/shortcuts/actionKeyHints.js'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
 /** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own

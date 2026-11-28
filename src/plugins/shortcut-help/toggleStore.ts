@@ -1,5 +1,7 @@
 import { createToggleStore } from '@/utils/toggleStore.js'
 
+export const SHORTCUT_HELP_ACTION_ID = 'shortcut_help'
+
 /** Open/closed state for the shortcut-help overlay. The mounted
  *  `ShortcutHelpOverlay` reads it via `useSyncExternalStore`; the global
  *  `shortcut_help` action flips it. External callers reach it through

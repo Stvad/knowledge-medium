@@ -10,6 +10,10 @@ import { definitionSeedsFacet } from '@/data/facets.js'
 import { makeBlockData } from '@/data/test/factories.js'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
 import type { BlockLayoutSlots } from '@/extensions/blockInteraction.js'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { formatChord } from '@/shortcuts/formatChord.js'
+import type { ReactNode } from 'react'
 import type { BlockRendererProps } from '@/types'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
@@ -57,6 +61,7 @@ vi.mock('@/data/globalState.ts', async () => {
 
 import { VideoNotesLayout, VideoNotesRenderer, videoNotesLayoutContribution } from '../VideoNotesRenderer.tsx'
 import { VideoPlayerContentRenderer, VideoPlayerRenderer } from '../VideoPlayerRenderer.tsx'
+import { videoPlayerActionsExtension } from '../actions.ts'
 import { VIDEO_NOTES_VIEW_MODE, videoNotesPaneRatioProp } from '../view.ts'
 import { editorFocusRequestProp, focusedBlockLocationProp, panelViewModeProp, topLevelBlockIdProp } from '@/data/properties'
 import { panelRenderScopeId } from '@/utils/renderScope'
@@ -137,13 +142,19 @@ const ChildrenProbe = () => {
   )
 }
 
+const renderWithVideoActions = (ui: ReactNode) => render(
+  <AppRuntimeContextProvider value={resolveFacetRuntimeSync(videoPlayerActionsExtension)}>
+    {ui}
+  </AppRuntimeContextProvider>,
+)
+
 const renderLayout = (contextOverrides: object = {}) => {
   const slots = {
     block: repo.block(VIDEO),
     Children: ChildrenProbe,
     Shell: ({children}: {children: (props?: object) => React.ReactNode}) => <>{children()}</>,
   } as unknown as BlockLayoutSlots
-  return render(
+  return renderWithVideoActions(
     <BlockContextProvider
       initialValue={{
         panelId: PANEL,
@@ -233,7 +244,9 @@ describe('VideoNotesLayout', () => {
     expect(screen.getByTestId('react-player')).toBeTruthy()
     expect(screen.getByTestId('children-slot')).toBeTruthy()
     expect(screen.getAllByTitle('Resize video notes panes').length).toBeGreaterThan(0)
-    expect(screen.getByLabelText('Close video notes view')).toBeTruthy()
+    expect(screen.getByLabelText('Close video notes view')).toHaveAttribute('title',
+      `Close video notes view (${formatChord('Alt+Shift+n')} while the video block or a note is focused)`,
+    )
     // The shared content renderer registered its player handle under the
     // SAME scope the shortcut activations will pass (deps.renderScopeId).
     expect(registerSpy).toHaveBeenCalledWith(VIDEO, PANE_SCOPE, expect.anything())
@@ -396,15 +409,26 @@ describe('pane resize drag', () => {
 })
 
 describe('enter affordance gating', () => {
-  const renderContent = () => render(
+  const renderContent = () => renderWithVideoActions(
     <BlockContextProvider initialValue={{renderScopeId: 'outline:video-1', scopeRootId: VIDEO}}>
       <VideoPlayerContentRenderer block={repo.block(VIDEO)}/>
     </BlockContextProvider>,
   )
 
-  it('shows the enter button when the ui-state block is a panel row', () => {
+  it('shows the enter button and its shortcut when the panel has no notes view open', async () => {
+    await repo.block(PANEL).set(panelViewModeProp, undefined)
     renderContent()
-    expect(screen.getByLabelText('Open video notes view')).toBeTruthy()
+    expect(screen.getByLabelText('Open video notes view')).toHaveAttribute('title',
+      `Open video notes view (${formatChord('Alt+Shift+n')} while the video block or a note is focused)`,
+    )
+  })
+
+  it('omits the open hint inside a notes view where the shortcut would close it', () => {
+    // A nested video inherits the panel row. Its render context has the notes
+    // view mode cleared so it can still render the inline player.
+    expect(repo.block(PANEL).peekProperty(panelViewModeProp)).toBe(VIDEO_NOTES_VIEW_MODE)
+    renderContent()
+    expect(screen.getByLabelText('Open video notes view')).toHaveAttribute('title', 'Open video notes view')
   })
 
   it('hides the enter button on non-panel surfaces where entering would silently no-op', async () => {
@@ -420,7 +444,7 @@ describe('enter affordance gating', () => {
 })
 
 describe('playing-state sync with native playback', () => {
-  const renderContent = () => render(
+  const renderContent = () => renderWithVideoActions(
     <BlockContextProvider initialValue={{renderScopeId: 'outline:video-1', scopeRootId: VIDEO}}>
       <VideoPlayerContentRenderer block={repo.block(VIDEO)}/>
     </BlockContextProvider>,

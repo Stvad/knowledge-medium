@@ -12,7 +12,7 @@ import { hasEditableTarget } from '@/shortcuts/utils.js'
 import { Keyboard } from 'lucide-react'
 import { ShortcutHelpHeaderItem } from './HeaderItem.tsx'
 import { ShortcutHelpOverlay } from './ShortcutHelpOverlay.tsx'
-import { shortcutHelpToggle } from './toggleStore.ts'
+import { SHORTCUT_HELP_ACTION_ID, shortcutHelpToggle } from './toggleStore.ts'
 
 export { ShortcutHelpOverlay } from './ShortcutHelpOverlay.tsx'
 export { ShortcutHelpHeaderItem } from './HeaderItem.tsx'
@@ -23,7 +23,7 @@ export const shortcutHelpHeaderItem: HeaderItemContribution = {
   component: ShortcutHelpHeaderItem,
 }
 
-export const SHORTCUT_HELP_ACTION_ID = 'shortcut_help'
+export { SHORTCUT_HELP_ACTION_ID } from './toggleStore.ts'
 
 export const shortcutHelpMount: AppMountContribution = {
   id: 'shortcut-help.overlay',
@@ -67,7 +67,7 @@ export const shortcutHelpAction: ActionConfig<typeof ActionContextTypes.GLOBAL> 
     shortcutHelpToggle.toggle()
   },
   defaultBinding: {
-    keys: ['Shift+?', '?', '$mod+/'],
+    keys: ['$mod+/', 'Shift+?', '?'],
   },
 }
 

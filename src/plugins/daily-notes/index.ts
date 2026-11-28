@@ -66,7 +66,11 @@ import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { activeWorkspaceIdPreferringHash } from '@/utils/navigation.js'
 import { CalendarDays } from 'lucide-react'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
-import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
+import {
+  dailyNotesActions,
+  OPEN_DAILY_NOTE_PICKER_ACTION_ID,
+  resolveCurrentDailyNoteIso,
+} from './actions.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DayPropertyControl } from './DayPropertyControl'
@@ -105,6 +109,7 @@ export {
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,
   OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
   OPEN_TODAY_ACTION_ID,
+  OPEN_DAILY_NOTE_PICKER_ACTION_ID,
   appendTodayDailyBlockInStack,
   resolveCurrentDailyNoteIso,
 } from './actions.ts'
@@ -113,8 +118,6 @@ export {
   type DailyNotePickerAnchorRect,
   type DailyNotePickerProps,
 } from './DailyNotePicker.tsx'
-
-export const OPEN_DAILY_NOTE_PICKER_ACTION_ID = 'open_daily_note_picker'
 
 export const dateScrubOverlayMount: AppMountContribution = {
   id: 'daily-notes.date-scrub-overlay',

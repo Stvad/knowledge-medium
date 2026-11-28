@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { headerItemsFacet } from '@/extensions/core.js'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { systemStatusPlugin } from '@/plugins/system-status'
@@ -22,7 +23,7 @@ describe('shortcut help header item', () => {
     expect(item).toEqual(shortcutHelpHeaderItem)
     expect(item?.region).toBe('end')
 
-    render(<ShortcutHelpHeaderItem/>)
+    render(<AppRuntimeContextProvider value={runtime}><ShortcutHelpHeaderItem/></AppRuntimeContextProvider>)
     const button = screen.getByRole('button', {name: 'Help'})
 
     expect(button).not.toHaveClass('hidden')

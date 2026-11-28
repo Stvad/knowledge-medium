@@ -191,6 +191,9 @@ const insertGestureAtCursor = (editorView: EditorView): InsertGesture => {
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
 export const OPEN_PREFERENCES_ACTION_ID = 'open_preferences'
 export const RELOAD_IN_SAFE_MODE_ACTION_ID = 'reload_in_safe_mode'
+export const CLOSE_CURRENT_PANEL_ACTION_ID = 'close_current_panel'
+export const TOGGLE_MAXIMIZE_PANEL_ACTION_ID = 'toggle_maximize_panel'
+export const EDIT_MODE_CM_ACTION_PREFIX = 'edit.cm'
 
 const createNodeInActivePanelFromGlobalContext = async (
   uiStateBlock: Block,
@@ -338,7 +341,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   }
 
   const closeCurrentPanelBlock: BlockAction = {
-    id: 'close_current_panel',
+    id: CLOSE_CURRENT_PANEL_ACTION_ID,
     description: 'Close current panel',
     handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
       await deletePanelRow(repo, uiStateBlock.id)
@@ -350,7 +353,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   }
 
   const toggleMaximizePanelBlock: BlockAction = {
-    id: 'toggle_maximize_panel',
+    id: TOGGLE_MAXIMIZE_PANEL_ACTION_ID,
     description: 'Maximize / restore current panel',
     icon: Maximize2,
     handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
@@ -691,7 +694,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   // isEditing→false write into the selection's transaction, so there's no
   // intermediate render where the block is both editing and selected.
   const extendSelectionUpEdit = {
-    ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionUpBlock, {idPrefix: 'edit.cm'}),
+    ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionUpBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtStart(deps.editorView)) return
       const extended = await extendSelectionUp(
@@ -707,7 +710,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
   const extendSelectionDownEdit = {
-    ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionDownBlock, {idPrefix: 'edit.cm'}),
+    ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionDownBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtEnd(deps.editorView)) return
       const extended = await extendSelectionDown(
@@ -1146,14 +1149,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         keys: 'Delete',
       },
     },
-    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, indentBlock, {idPrefix: 'edit.cm'}),
-    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, outdentBlock, {idPrefix: 'edit.cm'}),
-    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomInBlock, {idPrefix: 'edit.cm'}),
-    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomOutBlock, {idPrefix: 'edit.cm'}),
-    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, openFocusedInPanelBlock, {idPrefix: 'edit.cm'}),
-    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, closeCurrentPanelBlock, {idPrefix: 'edit.cm'}),
-    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, toggleMaximizePanelBlock, {idPrefix: 'edit.cm'}),
-    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, insertExampleExtensionsBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, indentBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, outdentBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomInBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomOutBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, openFocusedInPanelBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, closeCurrentPanelBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, toggleMaximizePanelBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, insertExampleExtensionsBlock, {idPrefix: EDIT_MODE_CM_ACTION_PREFIX}),
     moveBlockUpCM,
     moveBlockDownCM,
     extendSelectionDownEdit,
