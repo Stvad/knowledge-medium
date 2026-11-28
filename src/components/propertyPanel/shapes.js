@@ -1,1 +1,1 @@
-export{wX as propertyShapeLabel}from"../../../chunks/app-CsaqKFAa.js";
+export{wX as propertyShapeLabel}from"../../../chunks/app-DV68zRfN.js";

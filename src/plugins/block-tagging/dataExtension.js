@@ -1,1 +1,1 @@
-export{rp as blockTaggingDataExtension}from"../../../chunks/app-CsaqKFAa.js";
+export{rp as blockTaggingDataExtension}from"../../../chunks/app-DV68zRfN.js";

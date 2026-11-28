@@ -1,1 +1,1 @@
-export{ipt as hasSupabaseAuthConfig,apt as isAuthCallbackUrl,opt as readPersistedSession,spt as sessionUserToAppUser,cpt as supabase}from"../../chunks/app-CsaqKFAa.js";
+export{ipt as hasSupabaseAuthConfig,apt as isAuthCallbackUrl,opt as readPersistedSession,spt as sessionUserToAppUser,cpt as supabase}from"../../chunks/app-DV68zRfN.js";

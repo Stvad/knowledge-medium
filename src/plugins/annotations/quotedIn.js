@@ -1,1 +1,1 @@
-export{Mm as quotedInFooterContribution}from"../../../chunks/app-CsaqKFAa.js";
+export{Mm as quotedInFooterContribution}from"../../../chunks/app-DV68zRfN.js";

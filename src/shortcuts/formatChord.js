@@ -1,1 +1,1 @@
-export{tV as formatChord}from"../../chunks/app-CsaqKFAa.js";
+export{tV as formatChord}from"../../chunks/app-DV68zRfN.js";
