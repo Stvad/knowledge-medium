@@ -405,6 +405,7 @@ type EngineInsertOpts = TxInsertOpts & EngineWriteOpts
 
 export class TxImpl implements Tx {
   readonly meta: TxMeta
+  get readDb(): Tx['readDb'] { return this.ctx.txDb }
   private readonly userWrittenIds = new Set<string>()
   private readonly explicitlyUnsetProperties = new Map<string, Set<string>>()
   private userWritesFinished = false

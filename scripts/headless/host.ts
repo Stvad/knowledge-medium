@@ -1,4 +1,3 @@
-import {provideRuntimeGlobals} from '../agent-eval/nodeShims'
 import {setTimeout as nextTimerTurn} from 'node:timers/promises'
 import {PowerSyncDatabase} from '@powersync/node'
 import type {SupabaseClient} from '@supabase/supabase-js'
@@ -41,6 +40,14 @@ async function waitForWorkspace(db: PowerSyncDatabase, workspaceId: string, sign
 
 const untilAbort = (signal: AbortSignal): Promise<void> =>
   signal.aborted ? Promise.resolve() : new Promise(resolve => signal.addEventListener('abort', () => resolve(), {once: true}))
+
+const effectiveTimeZone = (): string => {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  if (zone !== undefined) return zone
+  const offset = -new Date().getTimezoneOffset()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `UTC${offset < 0 ? '-' : '+'}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`
+}
 
 export interface ServeOptions {
   connect?: typeof connectWorkspaceSync
@@ -107,7 +114,7 @@ export async function serveDatabase(
       hostHealth: async () => ({
         ...await hold.health(),
         mediaUploads: await media.health(),
-        commit, readOnly: active.isReadOnly,
+        commit, timeZone: effectiveTimeZone(), readOnly: active.isReadOnly,
         baselineSyncedAt: baseline ?? null,
         lastSyncedAt: db.currentStatus.lastSyncedAt?.getTime() ?? null,
         closedReason: gate ? gate.reason() : 'Starting gate',
@@ -167,7 +174,9 @@ export async function runHost(
   config: HeadlessConfig, user: User, signal: AbortSignal, supabase: SupabaseClient, releaseStaleQueue = false,
 ) {
   if (!hasRemoteSyncConfig) throw new Error('Set VITE_POWERSYNC_URL to run the headless host')
-  provideRuntimeGlobals()
+  // Mode pins use window.localStorage. Keep document absent so dependencies
+  // can distinguish this process from a browser.
+  Object.assign(globalThis, {window: globalThis})
   const db = new PowerSyncDatabase({
     schema: createClientPowerSyncSchema(),
     database: {dbLocation: config.stateDir, dbFilename: dbFilenameForUser(user.id), readWorkerCount: 1},

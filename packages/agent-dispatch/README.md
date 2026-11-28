@@ -41,6 +41,14 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.9.11
+
+Publish `@knowledge-medium/agent-cli` 0.14.5 before publishing `@knowledge-medium/agent-dispatch` 0.9.11. Row tasks need the updated CLI for workspace-scoped reads and block creation timestamps. Install both releases and restart the dispatch daemon. Reload the app for exact reads of imported block IDs that look like references. If dispatch pairs with a headless host, update that host's checkout to a revision containing the bridge changes, refresh its dependencies and builds with `node scripts/ensure-deps.mjs`, and restart the headless host. Enabling `rowTasks` takes a fresh baseline even if the watcher already has a batch cursor.
+
+Backlink watchers now wait for the edit hold and settle window before re-queuing a stale `running` mention. A task claimed under a watcher's former name stays with that name after a rename, so the renamed watcher cannot re-queue or park it. A claim write failure refunds its launch allowance and leaves the task eligible to retry on the next tick. Every watcher configuration now stops on corrupt state and preserves the file for recovery, including a backlinks-only daemon's baselines and launch history.
+
+With spawn delivery, pressing Stop on a running or queued mention or row task whose run disappeared parks the block with `agent:status=error` and `agent:error=cancelled`. It stays parked after the 65-minute stale window. For a running channel mention, the daemon clears only the Stop flag so the channel session can finish and record its own status.
+
 ## Upgrade to 0.9.10
 
 A claude watcher can list the non-builtin plugins its runs may load in `runner.allowedPlugins`, by the `name@marketplace` id that `enabledPlugins` uses in `runner.cwd`'s settings, for example `"allowedPlugins": ["code-guard@team-plugins"]`. In 0.9.9 any such plugin made every run fail with `Unexpected Claude init inventory: plugin …`. A listed plugin's hooks and agents load with the run, and its skills do too when `allowedTools` names `Skill`. With `Agent` in `defaultAllowedTools`, a run can hand work to a subagent the plugin defines, which gets only the run's tools. A tool or MCP server it adds is still refused unless `allowedTools` or the dispatch MCP config names it.
@@ -464,6 +472,41 @@ Registrations are ephemeral tab state: they die with the tab and expire after 10
 ## Query watchers
 
 Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in the state file, `~/.config/knowledge-medium/agent-dispatch-state.json` unless `statePath` or `instance` says otherwise (alongside the backlink-watcher baselines); the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).
+
+### One task per matching block
+
+With `"rowTasks": true`, each eligible block gets a separate spawned run. Select one row per exact, live block id and filter by workspace and source type. A query over all blocks can match the new property-value blocks created by the daemon’s own bookkeeping. The daemon independently verifies membership and logs skipped ids. The first successful scan records the existing live block IDs and a timestamp without claiming those blocks. That ID set stays fixed, so a block seen in the first scan remains excluded even if it later leaves and re-enters the result. An unclaimed block discovered on a later scan must have been created at or after the baseline timestamp, including the same millisecond. This excludes older blocks that only become visible after sync, restore, or a query change. Blocks carrying `agent:asked-at` are reserved for mention watchers. If Ask Agent is invoked on a row already claimed, dispatch releases the claim for the mention after the live run ends or an abandoned running claim becomes stale. The mention starts with its own attempt count and reply child. A single result set is limited to 20,000 rows.
+
+For example, this watcher selects voice-note message blocks with an audio URL and no task status. Replace both workspace placeholders with the same workspace id and supply your task instructions in `prompt`.
+
+```json
+{
+  "workspaceId": "<workspace-id>",
+  "watchers": [
+    {
+      "kind": "query",
+      "name": "voice-notes",
+      "rowTasks": true,
+      "reply": false,
+      "sql": "SELECT b.id, json_extract(b.properties_json, '$.\"matrix:audio-url\"') AS audio_url FROM blocks b WHERE b.workspace_id = ? AND b.deleted = 0 AND audio_url IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(b.properties_json, '$.types') t WHERE t.value = 'matrix-message') AND json_extract(b.properties_json, '$.\"agent:status\"') IS NULL",
+      "params": [
+        "<workspace-id>"
+      ],
+      "prompt": "<task instructions>\nBlock {{blockId}}\n{{subtree}}\nSelected columns: {{row}}"
+    }
+  ]
+}
+```
+
+The row template receives `{{row}}` (one JSON object with all selected columns), `{{blockId}}`, `{{subtree}}` (a fresh outline including properties), and `{{watcherName}}`. Batch templates continue to receive `{{newRows}}`. Select only columns needed by the run. The daemon saves the original columns for pending rows in its local state file before launching any of them. Keep that file across restarts so a claim, an edit, or a changing query result can remove a row from the SQL without losing its retry.
+
+The daemon refuses malformed state at startup and keeps no backup copies. Existing batch and backlink state without `rowTasks` still loads. A row-task entry from a development build that lacks `baselineMs` is invalid.
+
+If the daemon reports invalid state, stop it and preserve the damaged file unchanged. If the file is valid JSON and the problem is confined to one watcher, inspect its saved `pending` snapshots before editing a copy. Remove that watcher's entry under `rowTasks` and put the repaired copy at the configured state path. Each key encodes `[workspaceId, watcherName]` as a JSON string. If the whole file is unusable, move it aside so the daemon starts with fresh watcher baselines, query cursors, and launch history. Resetting state discards the affected snapshots. Queued or stale running claims remain on their blocks and can be stranded by a fresh baseline. Review those blocks and their partial edits before restarting, and decide which tasks to retry or re-arm manually.
+
+The block carries its status, attempt count, and failure reason. A completed block stays done even when its edits make the SQL match again. Preserve its `agent:*` properties when editing it. Each block has one task status, so choose disjoint sources for watchers that should do independent work. Failed row runs queue again up to three claims in total. A stale running claim follows the same limit. Exhaustion parks the task with `agent:status=error` and `agent:error`. Stop cancels a live run and parks it immediately. Make edits safe to repeat after any failure or crash. The next attempt reads a fresh `{{subtree}}` that can contain partial edits from the previous attempt and, with `reply: true`, its ⚠️ failure child.
+
+Each row uses the daemon's shared `maxConcurrent` and `runsPerHour` limits and the same `settleMs` and `editHoldMs` as a mention (250 ms and 120,000 ms by default). Set `reply` to `false` for in-place work. This suppresses both success and error children. With the default `true`, the daemon posts an outline reply on success and a failure note on a failed attempt. Row tasks use spawn delivery. Watcher Memory belongs to backlinks watchers and lives under their target page.
 
 ## km MCP server standalone
 
