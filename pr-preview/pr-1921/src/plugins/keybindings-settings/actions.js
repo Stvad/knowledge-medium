@@ -1,1 +1,1 @@
-export{QP as openKeybindingsSettingsAction}from"../../../chunks/app-Cl4eX0-E.js";
+export{QP as openKeybindingsSettingsAction}from"../../../chunks/app-CcTNgYAa.js";

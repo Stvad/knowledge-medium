@@ -1,1 +1,1 @@
-export{KB as formatChord}from"../../chunks/app-Cl4eX0-E.js";
+export{JB as formatChord}from"../../chunks/app-CcTNgYAa.js";

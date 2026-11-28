@@ -1,1 +1,1 @@
-export{apt as getOrCreatePropertiesPage,opt as propertiesPageBlockId,spt as propertiesPageSpec}from"../../chunks/app-Cl4eX0-E.js";
+export{spt as getOrCreatePropertiesPage,cpt as propertiesPageBlockId,lpt as propertiesPageSpec}from"../../chunks/app-CcTNgYAa.js";

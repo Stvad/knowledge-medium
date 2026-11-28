@@ -1,1 +1,1 @@
-export{V8 as agentRuntimeDataExtension}from"../../../chunks/app-Cl4eX0-E.js";
+export{U8 as agentRuntimeDataExtension}from"../../../chunks/app-CcTNgYAa.js";
