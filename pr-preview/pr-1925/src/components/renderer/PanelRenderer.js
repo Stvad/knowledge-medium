@@ -1,1 +1,1 @@
-export{Vz as PanelRenderer}from"../../../chunks/app-Bs0NPOmG.js";
+export{Wz as PanelRenderer}from"../../../chunks/app-DENLERP0.js";

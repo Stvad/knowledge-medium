@@ -1,1 +1,1 @@
-export{VP as seedTutorial}from"../../../chunks/app-Bs0NPOmG.js";
+export{WP as seedTutorial}from"../../../chunks/app-DENLERP0.js";

@@ -1,1 +1,1 @@
-export{tk as plainOutlinerPlugin}from"../../../chunks/app-Bs0NPOmG.js";
+export{ik as plainOutlinerPlugin}from"../../../chunks/app-DENLERP0.js";

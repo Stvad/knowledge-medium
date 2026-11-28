@@ -1,1 +1,1 @@
-export{V$ as htmlDocumentDataExtension}from"../../../chunks/app-Bs0NPOmG.js";
+export{W$ as htmlDocumentDataExtension}from"../../../chunks/app-DENLERP0.js";

@@ -1,1 +1,1 @@
-export{oW as ExtensionRenderBoundary}from"../../chunks/app-Bs0NPOmG.js";
+export{lW as ExtensionRenderBoundary}from"../../chunks/app-DENLERP0.js";

@@ -1,1 +1,1 @@
-export{tvt as defineQuery}from"../../../chunks/app-Bs0NPOmG.js";
+export{ovt as defineQuery}from"../../../chunks/app-DENLERP0.js";

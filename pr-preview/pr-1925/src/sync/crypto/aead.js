@@ -1,1 +1,1 @@
-export{zot as open,Bot as seal}from"../../../chunks/app-Bs0NPOmG.js";
+export{Wot as open,Got as seal}from"../../../chunks/app-DENLERP0.js";

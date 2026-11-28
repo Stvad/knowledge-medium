@@ -1,1 +1,1 @@
-export{_X as usePropertySchemas}from"../../chunks/app-Bs0NPOmG.js";
+export{bX as usePropertySchemas}from"../../chunks/app-DENLERP0.js";

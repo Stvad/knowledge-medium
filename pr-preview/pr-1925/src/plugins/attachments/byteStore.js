@@ -1,1 +1,1 @@
-export{UT as ASSETS_ROOT,WT as InMemoryByteStore,GT as OpfsByteStore,KT as assetPathSegments,qT as createByteStore,JT as decodeSegment,YT as getByteStore,XT as workspacePathSegments}from"../../../chunks/app-Bs0NPOmG.js";
+export{KT as ASSETS_ROOT,qT as InMemoryByteStore,JT as OpfsByteStore,YT as assetPathSegments,XT as createByteStore,ZT as decodeSegment,QT as getByteStore,$T as workspacePathSegments}from"../../../chunks/app-DENLERP0.js";
