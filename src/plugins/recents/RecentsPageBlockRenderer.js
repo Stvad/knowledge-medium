@@ -1,1 +1,1 @@
-export{xj as RecentsList,Sj as RecentsPageBlockRenderer}from"../../../chunks/app-C_dId685.js";
+export{Cj as RecentsList,wj as RecentsPageBlockRenderer}from"../../../chunks/app-BDPhr5j0.js";

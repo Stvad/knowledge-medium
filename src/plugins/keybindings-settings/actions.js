@@ -1,1 +1,1 @@
-export{JP as openKeybindingsSettingsAction}from"../../../chunks/app-C_dId685.js";
+export{XP as openKeybindingsSettingsAction}from"../../../chunks/app-BDPhr5j0.js";

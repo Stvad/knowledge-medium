@@ -1,1 +1,1 @@
-export{KB as BlockFrame,qB as BulletDot,JB as DefaultBlockLayout,YB as DefaultBlockRenderer}from"../../../chunks/app-C_dId685.js";
+export{pV as BlockFrame,mV as BulletDot,hV as DefaultBlockLayout,gV as DefaultBlockRenderer}from"../../../chunks/app-BDPhr5j0.js";

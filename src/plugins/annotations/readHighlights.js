@@ -1,1 +1,1 @@
-export{Kg as SOURCE_SPANS_ATTRIBUTE,qg as THREAD_HIGHLIGHTS_INPUT,Jg as remarkAnnotationMarks,Yg as renderedSourceKey,Xg as threadMarksMarkdownExtension}from"../../../chunks/app-C_dId685.js";
+export{qg as SOURCE_SPANS_ATTRIBUTE,Jg as THREAD_HIGHLIGHTS_INPUT,Yg as remarkAnnotationMarks,Xg as renderedSourceKey,Zg as threadMarksMarkdownExtension}from"../../../chunks/app-BDPhr5j0.js";
