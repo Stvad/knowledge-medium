@@ -1,1 +1,0 @@
-export{XB as GESTURE_ACTIVE,ZB as GESTURE_CANCEL,QB as GESTURE_IDLE,$B as NO_BLOCK_GESTURES_ATTRIBUTE,eV as TOUCH_HOLD_MS,tV as TOUCH_SLOP_PX,nV as allowsBlockGestures,rV as continuousGestureRecognizersFacet,iV as createBlockGestureController,aV as enabledTouchAction,oV as suppressNextClick,sV as unionTouchAction,cV as useContinuousGestures}from"../../chunks/app-DAtLXYfI.js";

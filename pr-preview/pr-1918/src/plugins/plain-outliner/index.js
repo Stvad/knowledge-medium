@@ -1,1 +1,0 @@
-export{$O as plainOutlinerPlugin}from"../../../chunks/app-DAtLXYfI.js";

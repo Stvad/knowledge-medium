@@ -1,1 +1,0 @@
-"use client";export{HW as Collapsible,UW as CollapsibleContent,WW as CollapsibleTrigger}from"../../../chunks/app-DAtLXYfI.js";

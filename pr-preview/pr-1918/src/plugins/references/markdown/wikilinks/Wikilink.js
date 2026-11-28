@@ -1,1 +1,0 @@
-export{LS as Wikilink}from"../../../../../chunks/app-DAtLXYfI.js";

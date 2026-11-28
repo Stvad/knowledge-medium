@@ -1,1 +1,0 @@
-export{I$ as geoDataExtension}from"../../../chunks/app-DAtLXYfI.js";

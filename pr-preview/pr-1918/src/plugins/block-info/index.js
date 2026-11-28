@@ -1,1 +1,0 @@
-export{_x as blockInfoPlugin}from"../../../chunks/app-DAtLXYfI.js";

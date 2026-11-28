@@ -1,1 +1,0 @@
-export{tp as blockTagsConfigUi}from"../../../chunks/app-DAtLXYfI.js";

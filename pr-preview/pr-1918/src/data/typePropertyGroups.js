@@ -1,1 +1,0 @@
-export{_G as typePropertyGroups}from"../../chunks/app-DAtLXYfI.js";

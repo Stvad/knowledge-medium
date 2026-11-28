@@ -1,1 +1,0 @@
-export{K4 as characterCounterDataExtension}from"../../../chunks/app-DAtLXYfI.js";

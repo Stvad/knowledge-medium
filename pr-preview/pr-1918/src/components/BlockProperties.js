@@ -1,1 +1,0 @@
-export{KW as BlockProperties}from"../../chunks/app-DAtLXYfI.js";

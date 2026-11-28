@@ -1,1 +1,0 @@
-export{c$ as htmlDocumentTypeSeed}from"../../../chunks/app-DAtLXYfI.js";

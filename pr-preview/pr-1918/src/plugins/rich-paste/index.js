@@ -1,1 +1,0 @@
-export{QC as richPastePlugin}from"../../../chunks/app-DAtLXYfI.js";

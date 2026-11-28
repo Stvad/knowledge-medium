@@ -1,1 +1,0 @@
-export{Tz as LazyBlockComponent}from"../../chunks/app-DAtLXYfI.js";

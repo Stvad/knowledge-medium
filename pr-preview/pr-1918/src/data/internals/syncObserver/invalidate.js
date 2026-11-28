@@ -1,1 +1,0 @@
-export{K7 as applySyncInvalidation}from"../../../../chunks/app-DAtLXYfI.js";
