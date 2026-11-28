@@ -263,7 +263,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: [
       'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUIStateBlock',
       'getUserBlock', 'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
-      'preferencesRootId', 'readPluginPref',
+      'pluginPrefsBlockUnder', 'preferencesRootId', 'readPluginPref',
     ],
     types: [],
   },

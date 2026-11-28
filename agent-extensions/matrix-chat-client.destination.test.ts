@@ -32,7 +32,7 @@ vi.mock('@/plugins/daily-notes/dailyNotes.js', async importOriginal => ({
 }))
 vi.mock('@/data/stateBlocks.js', () => ({
   preferencesRootId: (_repo: unknown, workspaceId: string) => workspaceId,
-  readPluginPref: (repo: ReturnType<typeof makeRepo>, page: string) => repo.prefs.get(page),
+  pluginPrefsBlockUnder: (repo: ReturnType<typeof makeRepo>, page: string) => repo.prefs.get(page),
   getPluginPrefsBlock: async (repo: ReturnType<typeof makeRepo>, workspaceId: string) => repo.prefs.get(workspaceId),
 }))
 

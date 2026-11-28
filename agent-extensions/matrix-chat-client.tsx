@@ -15,7 +15,7 @@ import {
   type PropertyEditorProps, type Tx,
 } from '@/data/api/index.js'
 import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
-import { getPluginPrefsBlock, preferencesRootId, readPluginPref } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, pluginPrefsBlockUnder, preferencesRootId } from '@/data/stateBlocks.js'
 import { pluginBlockId } from '@/extensions/pluginIds.js'
 import { propertyEditorOverridesFacet, definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { DeletedConflictError } from '@/data/api/errors.js'
@@ -1163,7 +1163,7 @@ export const matrixIngestEffect = {
         return
       }
 
-      const prefs = readPluginPref(repo, preferencesRootId(repo, workspaceId), matrixChatPrefsType)
+      const prefs = pluginPrefsBlockUnder(repo, preferencesRootId(repo, workspaceId), matrixChatPrefsType)
       let previousFingerprint: string | undefined
       const refresh = () => {
         if (started !== generation) return

@@ -349,17 +349,23 @@ export const preferencesRootId = (repo: Repo, workspaceId: string): string => {
   return page?.workspaceId === workspaceId ? page.userPageId : userPageBlockId(workspaceId, repo.user.id)
 }
 
-/** Read a preference without creating the prefs subtree. Omit the schema to
- *  subscribe to the same block and read several properties from one snapshot.
- *  Settings surfaces that write use `getPluginPrefsBlock`. */
-export function readPluginPref(repo: Repo, userPageId: string, type: TypeContribution): Block
-export function readPluginPref<T>(repo: Repo, userPageId: string, type: TypeContribution, schema: PropertySchema<T>): Promise<T>
-export function readPluginPref<T>(
-  repo: Repo, userPageId: string, type: TypeContribution, schema?: PropertySchema<T>,
-): Block | Promise<T> {
-  const block = repo.block(pluginPrefsBlockIdUnder(userPageId, type.id))
-  if (!schema) return block
-  return repo.load(block.id).then(row => (row ? block.peekProperty(schema) : undefined) ?? schema.defaultValue)
+/** Resolve a plugin prefs handle without loading or creating the prefs subtree. */
+export const pluginPrefsBlockUnder = (repo: Repo, userPageId: string, type: TypeContribution): Block =>
+  repo.block(pluginPrefsBlockIdUnder(userPageId, type.id))
+
+/** One plugin preference under the user page `userPageId` (usually
+ *  `preferencesRootId`), read without creating the prefs subtree: the stored
+ *  value, or the schema's default while there is none. For read paths; a
+ *  settings surface that writes uses `getPluginPrefsBlock`. */
+export const readPluginPref = async <T>(
+  repo: Repo,
+  userPageId: string,
+  type: TypeContribution,
+  schema: PropertySchema<T>,
+): Promise<T> => {
+  const id = pluginPrefsBlockIdUnder(userPageId, type.id)
+  const stored = (await repo.load(id)) ? repo.block(id).peekProperty(schema) : undefined
+  return stored ?? schema.defaultValue
 }
 
 /** Resolve the UI-state block scoped to the current panel context.
