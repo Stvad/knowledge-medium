@@ -841,6 +841,7 @@ const ensureMatrixTagBlock = async (
 
 // The type index covers live rows. A deleted message keeps its stored type and
 // metadata in its bag even though the index entry disappears.
+// Keep property matches type-scoped because only a cursor predating the key rename can replay an untyped legacy tombstone.
 const handledEvent = (
   db: Pick<Tx['readDb'], 'getOptional'>, workspaceId: string, eventId: string,
 ) => db.getOptional(
