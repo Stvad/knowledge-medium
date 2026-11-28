@@ -1,1 +1,1 @@
-export{wp as collectTypeCandidates,Tp as formatTypeCandidateReport}from"../../../chunks/app-CZ61ffg-.js";
+export{wp as collectTypeCandidates,Tp as formatTypeCandidateReport}from"../../../chunks/app-DdaBqYYK.js";

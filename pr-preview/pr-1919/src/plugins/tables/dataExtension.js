@@ -1,1 +1,1 @@
-export{iQ as tablesDataExtension}from"../../../chunks/app-CZ61ffg-.js";
+export{iQ as tablesDataExtension}from"../../../chunks/app-DdaBqYYK.js";
