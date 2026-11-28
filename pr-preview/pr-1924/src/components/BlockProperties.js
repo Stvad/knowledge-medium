@@ -1,0 +1,1 @@
+export{OG as BlockProperties}from"../../chunks/app-BvCTqwLw.js";

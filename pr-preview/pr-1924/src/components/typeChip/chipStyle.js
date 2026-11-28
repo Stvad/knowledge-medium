@@ -1,0 +1,1 @@
+export{RI as chipStyle}from"../../../chunks/app-BvCTqwLw.js";

@@ -1,0 +1,1 @@
+export{Z8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-BvCTqwLw.js";

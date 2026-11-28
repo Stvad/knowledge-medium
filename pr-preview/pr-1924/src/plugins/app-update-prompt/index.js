@@ -1,0 +1,1 @@
+export{TL as appUpdatePromptExtension}from"../../../chunks/app-BvCTqwLw.js";

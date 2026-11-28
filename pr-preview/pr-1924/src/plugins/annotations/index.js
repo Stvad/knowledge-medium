@@ -1,0 +1,1 @@
+export{Am as annotationsPlugin}from"../../../chunks/app-BvCTqwLw.js";

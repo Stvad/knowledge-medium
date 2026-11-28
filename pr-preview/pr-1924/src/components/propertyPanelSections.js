@@ -1,0 +1,1 @@
+export{QG as buildPropertyPanelSections}from"../../chunks/app-BvCTqwLw.js";

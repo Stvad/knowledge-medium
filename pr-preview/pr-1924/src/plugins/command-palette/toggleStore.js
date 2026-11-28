@@ -1,0 +1,1 @@
+export{MF as commandPaletteToggle}from"../../../chunks/app-BvCTqwLw.js";

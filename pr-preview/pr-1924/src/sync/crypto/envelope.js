@@ -1,0 +1,1 @@
+export{Got as ENVELOPE_PREFIX,Kot as GCM_TAG_BYTES,qot as NONCE_BYTES,Jot as SCHEMA_VERSION,Yot as decodeEnvelope,Xot as encodeEnvelope,Zot as hasEnvelopePrefix}from"../../../chunks/app-BvCTqwLw.js";

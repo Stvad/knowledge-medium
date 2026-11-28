@@ -1,0 +1,1 @@
+export{R5 as instrumentAdapter}from"../../../chunks/app-BvCTqwLw.js";

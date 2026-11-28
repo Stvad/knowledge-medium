@@ -1,0 +1,1 @@
+export{KF as SwipeActionMenu}from"../../../chunks/app-BvCTqwLw.js";

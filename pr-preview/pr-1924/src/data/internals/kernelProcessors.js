@@ -1,0 +1,1 @@
+export{qnt as KERNEL_PROCESSORS}from"../../../chunks/app-BvCTqwLw.js";

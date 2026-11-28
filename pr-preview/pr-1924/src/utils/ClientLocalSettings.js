@@ -1,0 +1,1 @@
+export{iR as ClientLocalSettings,aR as clientLocalSettings}from"../../chunks/app-BvCTqwLw.js";

@@ -1,0 +1,1 @@
+export{OS as geoContentDecoratorContribution}from"../../../chunks/app-BvCTqwLw.js";

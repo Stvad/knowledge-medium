@@ -1,0 +1,1 @@
+export{yQ as tablesDataExtension}from"../../../chunks/app-BvCTqwLw.js";

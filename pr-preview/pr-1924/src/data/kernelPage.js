@@ -1,0 +1,1 @@
+export{nft as getOrCreateKernelPage,rft as kernelPageBlockId}from"../../chunks/app-BvCTqwLw.js";

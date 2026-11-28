@@ -1,0 +1,1 @@
+export{kf as srsBlockDateAdapter}from"../../../chunks/app-BvCTqwLw.js";

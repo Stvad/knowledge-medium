@@ -1,0 +1,1 @@
+export{UP as seedTutorial}from"../../../chunks/app-BvCTqwLw.js";

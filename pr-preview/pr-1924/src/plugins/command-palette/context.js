@@ -1,0 +1,1 @@
+export{FF as COMMAND_PALETTE_ACTION_ID,IF as COMMAND_PALETTE_CONTEXT,LF as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,RF as commandPaletteActionContext}from"../../../chunks/app-BvCTqwLw.js";

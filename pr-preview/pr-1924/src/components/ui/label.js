@@ -1,0 +1,1 @@
+export{IM as Label}from"../../../chunks/app-BvCTqwLw.js";

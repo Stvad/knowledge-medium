@@ -1,0 +1,1 @@
+export{cW as ExtensionRenderBoundary}from"../../chunks/app-BvCTqwLw.js";

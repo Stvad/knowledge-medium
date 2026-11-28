@@ -1,0 +1,1 @@
+export{YN as CompactReferenceLink}from"../../../chunks/app-BvCTqwLw.js";

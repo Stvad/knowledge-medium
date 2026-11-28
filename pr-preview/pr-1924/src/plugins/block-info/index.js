@@ -1,0 +1,1 @@
+export{yx as blockInfoPlugin}from"../../../chunks/app-BvCTqwLw.js";

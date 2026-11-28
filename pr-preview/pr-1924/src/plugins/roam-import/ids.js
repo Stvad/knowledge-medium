@@ -1,0 +1,1 @@
+export{vm as resolveDailyPage}from"../../../chunks/app-BvCTqwLw.js";

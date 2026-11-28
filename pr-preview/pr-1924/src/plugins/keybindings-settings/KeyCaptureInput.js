@@ -1,0 +1,1 @@
+export{Ir as KeyCaptureInput}from"../../../chunks/app-BvCTqwLw.js";
