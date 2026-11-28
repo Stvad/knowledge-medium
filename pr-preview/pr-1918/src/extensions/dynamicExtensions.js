@@ -1,0 +1,1 @@
+export{UR as dynamicExtensionsExtension,WR as isExtensionContribution}from"../../chunks/app-DAtLXYfI.js";

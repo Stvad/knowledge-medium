@@ -1,0 +1,1 @@
+export{CG as AddPropertyForm}from"../../../chunks/app-DAtLXYfI.js";

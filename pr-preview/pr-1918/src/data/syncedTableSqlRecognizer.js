@@ -1,0 +1,1 @@
+export{j8 as SYNCED_TABLES,M8 as syncedWriteTarget,N8 as writeTargets}from"../../chunks/app-DAtLXYfI.js";

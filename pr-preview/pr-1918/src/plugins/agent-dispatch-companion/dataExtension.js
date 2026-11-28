@@ -1,0 +1,1 @@
+export{h8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-DAtLXYfI.js";

@@ -1,0 +1,1 @@
+export{DI as BlockEmbed}from"../../../chunks/app-DAtLXYfI.js";

@@ -1,0 +1,1 @@
+export{np as BlockTagsConfigEditor}from"../../../chunks/app-DAtLXYfI.js";

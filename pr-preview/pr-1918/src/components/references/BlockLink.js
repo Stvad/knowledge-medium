@@ -1,0 +1,1 @@
+export{JN as BlockLink}from"../../../chunks/app-DAtLXYfI.js";

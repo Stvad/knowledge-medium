@@ -1,0 +1,1 @@
+export{IR as ClientLocalSettings,LR as clientLocalSettings}from"../../chunks/app-DAtLXYfI.js";

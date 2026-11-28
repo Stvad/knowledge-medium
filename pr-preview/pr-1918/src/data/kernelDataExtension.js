@@ -1,0 +1,1 @@
+export{mtt as kernelDataExtension}from"../../chunks/app-DAtLXYfI.js";

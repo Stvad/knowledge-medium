@@ -1,0 +1,1 @@
+export{LZ as tablesDataExtension}from"../../../chunks/app-DAtLXYfI.js";

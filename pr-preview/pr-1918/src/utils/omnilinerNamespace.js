@@ -1,0 +1,1 @@
+export{XX as omnilinerNamespace}from"../../chunks/app-DAtLXYfI.js";
