@@ -1,0 +1,1 @@
+export{D$ as preferredSpanReplacement}from"../../../chunks/app-KZm-JQK3.js";

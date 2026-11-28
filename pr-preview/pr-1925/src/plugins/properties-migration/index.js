@@ -1,0 +1,1 @@
+export{Wc as migratePropertiesToBlocksAction,Bc as propertiesMigrationPlugin}from"../../../chunks/app-KZm-JQK3.js";

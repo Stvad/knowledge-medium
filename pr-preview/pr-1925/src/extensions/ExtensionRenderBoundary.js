@@ -1,0 +1,1 @@
+export{oW as ExtensionRenderBoundary}from"../../chunks/app-KZm-JQK3.js";

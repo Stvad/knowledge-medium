@@ -1,0 +1,1 @@
+export{rn as staticAppExtensions}from"../../chunks/app-KZm-JQK3.js";

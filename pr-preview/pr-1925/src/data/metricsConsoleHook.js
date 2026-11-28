@@ -1,0 +1,1 @@
+export{mB as ensureMetricsConsoleHook}from"../../chunks/app-KZm-JQK3.js";

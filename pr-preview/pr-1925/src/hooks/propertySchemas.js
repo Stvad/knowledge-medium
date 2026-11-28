@@ -1,0 +1,1 @@
+export{_X as usePropertySchemas}from"../../chunks/app-KZm-JQK3.js";

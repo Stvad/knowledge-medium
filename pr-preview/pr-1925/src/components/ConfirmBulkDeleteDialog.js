@@ -1,0 +1,1 @@
+export{TV as ConfirmBulkDeleteDialog}from"../../chunks/app-KZm-JQK3.js";

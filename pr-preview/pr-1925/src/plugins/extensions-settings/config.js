@@ -1,0 +1,1 @@
+export{pv as extensionsOverridesPresetCore,mv as extensionsOverridesProp,hv as extensionsPrefsType,gv as overridesCodec}from"../../../chunks/app-KZm-JQK3.js";

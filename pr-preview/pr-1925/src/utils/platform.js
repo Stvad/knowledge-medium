@@ -1,0 +1,1 @@
+export{eY as isIOS,tY as isMacPlatform}from"../../chunks/app-KZm-JQK3.js";

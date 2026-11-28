@@ -1,0 +1,1 @@
+export{MG as PropertyRow,NG as PropertyValueCell}from"../../../chunks/app-KZm-JQK3.js";

@@ -1,0 +1,1 @@
+export{qN as CompactReferenceLink}from"../../../chunks/app-KZm-JQK3.js";

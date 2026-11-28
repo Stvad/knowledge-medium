@@ -1,0 +1,1 @@
+export{la as ResponsivenessTotals,ua as SLOW_MS,da as observeResponsiveness}from"../../../chunks/app-KZm-JQK3.js";

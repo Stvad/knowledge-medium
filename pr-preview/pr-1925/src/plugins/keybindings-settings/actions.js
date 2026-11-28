@@ -1,0 +1,1 @@
+export{QP as openKeybindingsSettingsAction}from"../../../chunks/app-KZm-JQK3.js";

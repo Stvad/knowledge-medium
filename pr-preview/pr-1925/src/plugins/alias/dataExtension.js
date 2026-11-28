@@ -1,0 +1,1 @@
+export{f8 as aliasDataExtension}from"../../../chunks/app-KZm-JQK3.js";

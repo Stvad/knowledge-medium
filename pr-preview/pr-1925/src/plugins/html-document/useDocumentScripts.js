@@ -1,0 +1,1 @@
+export{pn as hasScripts,mn as useDocumentScripts}from"../../../chunks/app-KZm-JQK3.js";

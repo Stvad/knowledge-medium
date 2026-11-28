@@ -1,0 +1,1 @@
+export{iL as editorAutocompleteExtension}from"../../chunks/app-KZm-JQK3.js";

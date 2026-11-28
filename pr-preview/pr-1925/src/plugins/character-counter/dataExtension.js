@@ -1,0 +1,1 @@
+export{E3 as characterCounterDataExtension}from"../../../chunks/app-KZm-JQK3.js";

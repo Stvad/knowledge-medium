@@ -1,0 +1,1 @@
+export{ld as appVersion}from"../chunks/app-KZm-JQK3.js";

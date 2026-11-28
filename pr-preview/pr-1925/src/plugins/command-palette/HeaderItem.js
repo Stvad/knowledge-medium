@@ -1,0 +1,1 @@
+export{kF as CommandPaletteHeaderItem}from"../../../chunks/app-KZm-JQK3.js";

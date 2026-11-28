@@ -1,0 +1,1 @@
+export{YN as BlockLink}from"../../../chunks/app-KZm-JQK3.js";

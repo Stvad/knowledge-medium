@@ -1,0 +1,1 @@
+export{CL as appUpdatePromptExtension}from"../../../chunks/app-KZm-JQK3.js";

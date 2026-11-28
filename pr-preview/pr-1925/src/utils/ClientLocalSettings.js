@@ -1,0 +1,1 @@
+export{nR as ClientLocalSettings,rR as clientLocalSettings}from"../../chunks/app-KZm-JQK3.js";

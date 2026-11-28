@@ -1,0 +1,1 @@
+export{Jpt as deriveWorkspaceIdNamespace}from"../../../chunks/app-KZm-JQK3.js";

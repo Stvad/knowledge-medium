@@ -1,0 +1,1 @@
+export{X1 as matchCharTrigger}from"../../chunks/app-KZm-JQK3.js";

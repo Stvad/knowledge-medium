@@ -1,0 +1,1 @@
+export{qr as ExtensionsSettings}from"../../../chunks/app-KZm-JQK3.js";

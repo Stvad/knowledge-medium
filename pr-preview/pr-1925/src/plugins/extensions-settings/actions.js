@@ -1,0 +1,1 @@
+export{Qr as openExtensionsSettingsAction}from"../../../chunks/app-KZm-JQK3.js";

@@ -1,0 +1,1 @@
+export{GL as gestureBindingDescriptor,KL as matchesGestureEvent}from"../../chunks/app-KZm-JQK3.js";

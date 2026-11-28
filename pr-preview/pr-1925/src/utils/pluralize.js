@@ -1,0 +1,1 @@
+export{xrt as agree,Srt as pluralize}from"../../chunks/app-KZm-JQK3.js";

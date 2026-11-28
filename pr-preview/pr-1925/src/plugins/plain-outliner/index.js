@@ -1,0 +1,1 @@
+export{tk as plainOutlinerPlugin}from"../../../chunks/app-KZm-JQK3.js";
