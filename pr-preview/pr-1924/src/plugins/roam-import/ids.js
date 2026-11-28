@@ -1,1 +1,1 @@
-export{vm as resolveDailyPage}from"../../../chunks/app-BvCTqwLw.js";
+export{vm as resolveDailyPage}from"../../../chunks/app-BuZ8Aj1z.js";

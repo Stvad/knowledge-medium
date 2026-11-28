@@ -1,1 +1,1 @@
-export{JQ as referencesDataExtension}from"../../../chunks/app-BvCTqwLw.js";
+export{JQ as referencesDataExtension}from"../../../chunks/app-BuZ8Aj1z.js";

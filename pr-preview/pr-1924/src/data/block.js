@@ -1,1 +1,1 @@
-export{qtt as Block,Jtt as requireLoadedBlock}from"../../chunks/app-BvCTqwLw.js";
+export{Jtt as Block,Ytt as requireLoadedBlock}from"../../chunks/app-BuZ8Aj1z.js";

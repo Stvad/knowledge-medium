@@ -1,1 +1,1 @@
-export{OG as BlockProperties}from"../../chunks/app-BvCTqwLw.js";
+export{OG as BlockProperties}from"../../chunks/app-BuZ8Aj1z.js";

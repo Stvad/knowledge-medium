@@ -1,1 +1,1 @@
-export{iQ as staticDataExtensions}from"../../chunks/app-BvCTqwLw.js";
+export{iQ as staticDataExtensions}from"../../chunks/app-BuZ8Aj1z.js";
