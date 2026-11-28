@@ -8,7 +8,7 @@ const prompt = (blockId: string, dismissed = false) => ({
   blockId,
   name: blockId.toUpperCase(),
   kind: 'needs-approval' as const,
-  liveHash: 'h',
+  liveSource: 'SRC', liveHash: 'h',
   dismissed,
 })
 

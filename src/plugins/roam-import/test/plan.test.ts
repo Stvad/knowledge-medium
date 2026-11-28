@@ -1040,7 +1040,7 @@ describe('planImport', () => {
       uid: 'pUid',
       children: [
         {string: 'page_alias::LukeProg', uid: 'aliasUid'},
-        {string: 'page_alias::"Lily Anna", "Katerina Kolyada"', uid: 'quotedAliasUid'},
+        {string: 'page_alias::"Alias One", "Sample Person"', uid: 'quotedAliasUid'},
         {
           string: 'page_alias::built a prototype inside it, and it is thematically appropriate',
           uid: 'proseAliasUid',
@@ -1050,9 +1050,9 @@ describe('planImport', () => {
 
     expect(plan.pages[0].pageAliases).toEqual([])
     expect(plan.aliasesUsed.has('LukeProg')).toBe(true)
-    expect(plan.aliasesUsed.has('Lily Anna')).toBe(true)
-    expect(plan.aliasesUsed.has('Katerina Kolyada')).toBe(true)
-    expect(plan.aliasesUsed.has('"Lily Anna", "Katerina Kolyada"')).toBe(false)
+    expect(plan.aliasesUsed.has('Alias One')).toBe(true)
+    expect(plan.aliasesUsed.has('Sample Person')).toBe(true)
+    expect(plan.aliasesUsed.has('"Alias One", "Sample Person"')).toBe(false)
     expect(plan.aliasesUsed.has('built a prototype inside it, and it is thematically appropriate'))
       .toBe(false)
     expect(plan.diagnostics.some(d =>

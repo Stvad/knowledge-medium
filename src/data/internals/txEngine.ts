@@ -88,6 +88,7 @@ import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL,
   readHasLiveReferrer,
+  readLiveRowsForIds,
 } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
 import { deepFreeze, type BlockCache } from '@/data/blockCache'
@@ -100,10 +101,7 @@ import {
 } from './propertySchemaResolution'
 import { readIsChildBackedWorkspace, readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { viewGapReadsOver, type ViewGapReads } from '@/data/internals/syncObserver/reconcile'
-import {
-  definitionNameOf,
-  readPropertyDefinitionBags,
-} from '@/data/internals/propertyKeyScan'
+import { readLivePropertyDefinitionNames } from '@/data/internals/propertyKeyScan'
 import {
   encodedPropertyValueToChildContents,
   isLeftOutOfChildrenView,
@@ -641,17 +639,7 @@ export class TxImpl implements Tx {
   }
 
   async liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
-    if (ids.length === 0) return []
-    const out: BlockData[] = []
-    for (const chunk of chunksOf(ids, MAX_IDS_PER_IN_CLAUSE)) {
-      const rows = await this.ctx.txDb.getAll<BlockRow>(
-        `SELECT ${COLUMN_LIST} FROM blocks
-          WHERE workspace_id = ? AND deleted = 0 AND id IN (${buildInClause(chunk.length)})`,
-        [workspaceId, ...chunk],
-      )
-      out.push(...rows.map(parseBlockRow))
-    }
-    return out
+    return readLiveRowsForIds(this.ctx.txDb, workspaceId, ids)
   }
 
   async propertyFieldRowsForParents(
@@ -694,18 +682,7 @@ export class TxImpl implements Tx {
     workspaceId: string,
     names: readonly string[],
   ): Promise<Map<string, string[]>> {
-    if (names.length === 0) return new Map()
-    const rows = await readPropertyDefinitionBags(this.ctx.txDb, workspaceId)
-    const wanted = new Set(names)
-    const found = new Map<string, string[]>()
-    for (const row of rows) {
-      const name = definitionNameOf(row.bag)
-      if (name === undefined || !wanted.has(name)) continue
-      const ids = found.get(name) ?? []
-      ids.push(row.id)
-      found.set(name, ids)
-    }
-    return found
+    return readLivePropertyDefinitionNames(this.ctx.txDb, workspaceId, names)
   }
 
   /** §9 recognition, fieldId half, bound to this workspace's LIVE resolver. */

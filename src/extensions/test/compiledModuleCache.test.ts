@@ -1,3 +1,4 @@
+import * as compiler from '@/extensions/transpileExtension.js'
 // File-scoped IndexedDB polyfill — sets global `indexedDB`/`IDBKeyRange`
 // for this test file only (vitest isolates modules per file), so the
 // real IndexedDbCompiledModuleCache path runs in Node. Our records are
@@ -12,8 +13,7 @@ import {
   type CompiledRecord,
 } from '@/extensions/compiledModuleCache'
 import {
-  __setInstantiateImplForTest,
-  __setTranspileImplForTest,
+  setExtensionCompilePlatform,
   approveExtension,
   COMPILER_VERSION,
   createCompileCache,
@@ -31,17 +31,30 @@ const record = (over: Partial<CompiledRecord> = {}): CompiledRecord => ({
   ...over,
 })
 
+const stores: Array<[string, () => CompiledModuleCache]> = [
+  ['InMemoryCompiledModuleCache', () => new InMemoryCompiledModuleCache()],
+  ['IndexedDbCompiledModuleCache', () => new IndexedDbCompiledModuleCache()],
+]
+
 describe('CompiledModuleCache stores', () => {
   // Run the same contract against both implementations. The IndexedDB
   // one uses fake-indexeddb; a fresh instance reopening the same DB is
   // how we model a page reload.
-  const stores: Array<[string, () => CompiledModuleCache]> = [
-    ['InMemoryCompiledModuleCache', () => new InMemoryCompiledModuleCache()],
-    ['IndexedDbCompiledModuleCache', () => new IndexedDbCompiledModuleCache()],
-  ]
-
   for (const [name, make] of stores) {
     describe(name, () => {
+      it.each([
+        {changed: {sourceHash: 'replacement'}, sameGrant: false},
+        {changed: {approvedAt: 20}, sameGrant: false},
+        {changed: {compilerVersion: 'newer'}, sameGrant: true},
+      ])('preserves a superseding approval or compilation ($changed)', async ({changed, sameGrant}) => {
+        const store = make()
+        const original = record()
+        const replacement = {...original, ...changed, compiled: 'replacement'}
+        await store.write('superseded', replacement)
+        expect(await store.updateCompilation('superseded', original, {...original, compiled: 'obsolete'})).toBe(sameGrant)
+        expect(await store.read('superseded')).toEqual(replacement)
+      })
+
       it('round-trips a record', async () => {
         const store = make()
         await store.write(`${name}-rt`, record({compiled: 'CODE'}))
@@ -100,14 +113,14 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // Stub the pipeline so no real Babel / blob-URL import runs: transpile
     // tags the source, instantiate exposes which compiled string it built
     // from (and counts, so we can assert approve never instantiates).
-    restoreTranspile = __setTranspileImplForTest(async (content) => {
+    restoreTranspile = vi.spyOn(compiler, 'transpileExtension').mockImplementation(async (content) => {
       transpileCount += 1
-      return `transpiled:${content}`
-    })
-    restoreInstantiate = __setInstantiateImplForTest(async (compiled) => {
+      return {compiled: `transpiled:${content}`, importsUnpinned: false, hasStaticUnpinnedImports: false, pinnedImports: new Map()}
+    }).mockRestore
+    restoreInstantiate = setExtensionCompilePlatform({allowUnpinnedLive: true, instantiate: async ({compiled}) => {
       instantiateCount += 1
       return {default: compiled}
-    })
+    }})
   })
 
   afterEach(() => {
@@ -137,9 +150,9 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // The runtime error must surface later via the loader's errorReporter,
     // not abort the approve/enable action (#67 review).
     restoreInstantiate()
-    restoreInstantiate = __setInstantiateImplForTest(async () => {
+    restoreInstantiate = setExtensionCompilePlatform({allowUnpinnedLive: true, instantiate: async () => {
       throw new Error('module threw at import-eval')
-    })
+    }})
     const persistent = new InMemoryCompiledModuleCache()
 
     const result = await approveExtension('block-1', 'SRC', persistent) // does NOT throw
@@ -200,6 +213,37 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     })
   })
 
+  it.each(stores)('a revoke during recompilation stays revoked in %s', async (_name, makeStore) => {
+    const store = makeStore()
+    const stale = record({approvedSource: 'SRC'})
+    await store.write('race', stale)
+    vi.spyOn(compiler, 'transpileExtension').mockImplementationOnce(async () => {
+      await store.delete('race')
+      return {compiled: 'export default 1', importsUnpinned: false, hasStaticUnpinnedImports: false, pinnedImports: new Map()}
+    })
+    const loading = loadApprovedExtension('race', stale, createCompileCache(), store)
+    await expect(loading).rejects.toThrow(/approval changed/i)
+    expect(await store.read('race')).toBeUndefined()
+    expect(instantiateCount).toBe(0)
+  })
+
+  it('a failed upgrade save reuses the compiled approval on the next refresh', async () => {
+    const store = new InMemoryCompiledModuleCache()
+    const cache = createCompileCache()
+    const stale = record({approvedSource: 'SRC'})
+    await store.write('flaky', stale)
+    vi.spyOn(store, 'updateCompilation').mockRejectedValue(new Error('quota'))
+    await loadApprovedExtension('flaky', stale, cache, store)
+    await loadApprovedExtension('flaky', (await store.read('flaky'))!, cache, store)
+    expect(transpileCount).toBe(1)
+    expect(instantiateCount).toBe(1)
+    expect((await store.read('flaky'))?.compilerVersion).toBe(stale.compilerVersion)
+    const replacement = {...stale, approvedSource: 'REPLACEMENT', sourceHash: 'replacement'}
+    await store.write('flaky', replacement)
+    const loaded = await loadApprovedExtension('flaky', replacement, cache, store)
+    expect(loaded.module.default).toBe('transpiled:REPLACEMENT')
+  })
+
   it('approving changed source overwrites the row and re-pins to the new hash', async () => {
     const persistent = new InMemoryCompiledModuleCache()
     await approveExtension('src-1', 'V1', persistent)
@@ -218,6 +262,7 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // A swallowed write would let the caller set "enabled" intent against a
     // non-existent approval → a silent needs-approval loop (#67 review).
     const flaky: CompiledModuleCache = {
+      updateCompilation: vi.fn(),
       read: async () => undefined,
       write: async () => { throw new Error('write boom') },
       delete: async () => {},
@@ -229,6 +274,7 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
 
   it('readApproval resolves undefined (not throws) when the persistent read fails', async () => {
     const flaky: CompiledModuleCache = {
+      updateCompilation: vi.fn(),
       read: async () => { throw new Error('read boom') },
       write: async () => {},
       delete: async () => {},
@@ -277,6 +323,7 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // A transient read error is NOT "no approval" — callers that would pin
     // live source must fail closed on this.
     const flaky: CompiledModuleCache = {
+      updateCompilation: vi.fn(),
       read: async () => { throw new Error('read boom') },
       write: async () => {},
       delete: async () => {},

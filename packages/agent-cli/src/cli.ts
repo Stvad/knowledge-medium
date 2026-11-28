@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {randomUUID} from 'node:crypto'
 import {readFileSync} from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -974,6 +975,30 @@ cli
 
 
 cli
+  .command('pin-imports <file>', 'Pin HTTPS imports. Updates the extension file in place. Review the new URLs and integrity hashes before installing it.')
+  .action(async (file: string) => {
+    const target = await fs.realpath(file)
+    const source = await fs.readFile(target, 'utf8')
+    const {pinExtensionImports} = await import('./freezeExtensionImports.js')
+    const pinned = await pinExtensionImports(source)
+    if (pinned.source === source) return
+
+    const {mode} = await fs.stat(target)
+    const temporary = `${target}.${randomUUID()}.tmp`
+    try {
+      await fs.writeFile(temporary, pinned.source, {flag: 'wx', mode})
+      await fs.chmod(temporary, mode)
+      if (await fs.readFile(target, 'utf8') !== source) {
+        throw new Error('Extension source changed while pinning imports. Run pin-imports again on the new revision.')
+      }
+      await fs.rename(temporary, target)
+    } finally {
+      await fs.rm(temporary, {force: true})
+    }
+    for (const statement of pinned.rewrittenImports) console.log(statement)
+  })
+
+cli
   .command('install-extension <file> [...label]', wireDescription('install-extension'))
   .option('--verify', 'Verify the extension shape and report what it contributes')
   .option('--description <text>', 'Human-readable description')
@@ -991,6 +1016,15 @@ cli
     options: {verify?: boolean, description?: string, allowPresetChange?: boolean},
   ) => {
     const source = await fs.readFile(file, 'utf8')
+    const {parseExtensionSource, unpinnedExtensionImportUrls} = await import('./extensionImportSyntax.js')
+    try {
+      if (unpinnedExtensionImportUrls(await parseExtensionSource(source)).length > 0) {
+        process.stderr.write('Warning: This extension has unpinned HTTPS imports. Run `kmagent pin-imports <file>` to pin them.\n')
+      }
+    } catch (error) {
+      // Syntax diagnostics are owned by the app's extension compiler.
+      if (!(error instanceof SyntaxError)) throw error
+    }
     const basename = path.basename(file).replace(/\.[^.]+$/, '')
     const labelText = label.join(' ').trim()
     await runAndPrint({
@@ -1022,7 +1056,7 @@ cli
   })
 
 cli
-  .command('new-extension <name> [dir]', 'Scaffold a standalone extension project (default dir: ./<slug>). Emits a small WORKING extension in the shape the record-grain guide asks for — namespaced types, a ref property instead of an id string, one block per record via createTypedChild, done-ness composed from the built-in todo, a pure read path with a test — plus the `@/…` kernel declarations, so `npm install && npm run check` passes with no checkout of the app. Refuses to overwrite an existing directory.')
+  .command('new-extension <name> [dir]', 'Scaffold an extension. Defaults to the directory ./<slug>. Emits a small WORKING extension in the shape the record-grain guide asks for — namespaced types, a ref property instead of an id string, one block per record via createTypedChild, done-ness composed from the built-in todo, a pure read path with a test — plus the `@/…` kernel declarations, so `npm install && npm run check` passes with no checkout of the app. Refuses to overwrite an existing directory.')
   .action(async (name: string, dir: string | undefined) => {
     const slug = slugify(name)
     const title = titleize(slug)

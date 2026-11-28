@@ -78,6 +78,7 @@ export function AppRuntimeProvider({
 
   useEffect(() => {
     const resolution = new AbortController()
+    const utilitiesCss = ensureExtensionUtilitiesCss()
     void controller.resolve({
       baseExtensions,
       context: runtimeContext,
@@ -85,7 +86,7 @@ export function AppRuntimeProvider({
       errorStore,
       approvalStore,
       signal: resolution.signal,
-      beforePublish: waitForExtensionUtilitiesCss,
+      beforePublish: () => waitForExtensionUtilitiesCss(utilitiesCss),
       onRuntime: setRuntime,
       onLoadError: (blockId, error) => {
         toastExtensionLoadError(toastedLoadErrors.current, `${workspaceId}:${blockId}`, blockId, error)
@@ -118,10 +119,10 @@ export function AppRuntimeProvider({
 
 // Wait for the deferred safelist before the first dynamic-extension paint.
 // Bound the wait so a stalled stylesheet cannot block runtime publication.
-async function waitForExtensionUtilitiesCss(): Promise<void> {
+async function waitForExtensionUtilitiesCss(utilitiesCss: Promise<void>): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined
   await Promise.race([
-    ensureExtensionUtilitiesCss(),
+    utilitiesCss,
     new Promise(resolve => { timer = setTimeout(resolve, SAFELIST_WAIT_MS) }),
   ])
   clearTimeout(timer)

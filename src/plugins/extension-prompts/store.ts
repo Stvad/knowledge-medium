@@ -10,7 +10,7 @@
  * diagnostic reads this singleton.
  *
  * `pendingExtensionPrompts` is the pure reducer both surfaces share. It emits
- * EVERY pending (enabled-but-not-running) extension, tagged with whether the
+ * every pending extension approval, tagged with whether the
  * user has `dismissed` its prompt for the current source version. The two
  * surfaces then read that flag differently, which is the whole dismiss model:
  *   - the toast shows only the NON-dismissed prompts (dismiss silences the nag)
@@ -18,19 +18,13 @@
  *     ambient dot) while at least one is non-dismissed — so a dismissed prompt
  *     stays discoverable without nagging.
  */
+import {isEqual} from 'lodash-es'
 import {CallbackSet} from '@/utils/callbackSet.js'
-import type {ExtensionApprovalStatusMap} from '@/extensions/extensionApprovalStatus.js'
+import type {ExtensionApprovalStatus, ExtensionApprovalStatusMap} from '@/extensions/extensionApprovalStatus.js'
 import type {DismissalMap} from './dismissals.js'
 
-export interface PendingExtensionPrompt {
+export type PendingExtensionPrompt = ExtensionApprovalStatus & {
   blockId: string
-  name: string
-  kind: 'needs-approval' | 'update-available'
-  /** The live source hash this prompt is about — the key a dismissal pins
-   *  to, so a later source change re-surfaces the prompt. */
-  liveHash: string
-  /** Whether the user dismissed THIS prompt (this blockId + this liveHash).
-   *  Keyed per blockId: dismissing extension A never sets B's flag. */
   dismissed: boolean
 }
 
@@ -50,34 +44,11 @@ export const pendingExtensionPrompts = (
   for (const [blockId, status] of statuses) {
     out.push({
       blockId,
-      name: status.name,
-      kind: status.kind,
-      liveHash: status.liveHash,
+      ...status,
       dismissed: dismissals[blockId] === status.liveHash,
     })
   }
   return out
-}
-
-const samePrompts = (
-  a: readonly PendingExtensionPrompt[],
-  b: readonly PendingExtensionPrompt[],
-): boolean => {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i]
-    const y = b[i]
-    if (
-      x.blockId !== y.blockId ||
-      x.kind !== y.kind ||
-      x.liveHash !== y.liveHash ||
-      x.name !== y.name ||
-      x.dismissed !== y.dismissed
-    ) {
-      return false
-    }
-  }
-  return true
 }
 
 class ExtensionPromptStore {
@@ -93,7 +64,7 @@ class ExtensionPromptStore {
    *  `useSyncExternalStore` requirement) whenever the driver re-publishes an
    *  unchanged set — while still updating when a dismissal flips the dot. */
   set = (next: readonly PendingExtensionPrompt[]): void => {
-    if (samePrompts(this.prompts, next)) return
+    if (isEqual(this.prompts, next)) return
     this.prompts = next
     this.listeners.notify()
   }

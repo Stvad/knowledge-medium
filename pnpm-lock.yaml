@@ -496,9 +496,18 @@ importers:
 
   packages/agent-cli:
     dependencies:
+      '@babel/parser':
+        specifier: ^8.1.0
+        version: 8.1.0
+      '@babel/types':
+        specifier: ^8.1.0
+        version: 8.1.0
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.2
         version: 1.32.2(zod@4.6.7)
+      '@scure/base':
+        specifier: ^2.4.0
+        version: 2.4.0
       cac:
         specifier: ^7.1.0
         version: 7.1.0

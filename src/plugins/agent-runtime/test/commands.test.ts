@@ -1,3 +1,4 @@
+import * as compiler from '@/extensions/transpileExtension.js'
 // @vitest-environment happy-dom
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,7 +13,6 @@ import { contributorsDataExtension } from '@/plugins/contributors/dataExtension'
 import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExtension'
 import {
   __setCompileImplForTest,
-  __setTranspileImplForTest,
   COMPILER_VERSION,
   hashExtensionSource,
   readApproval,
@@ -703,7 +703,7 @@ describe('agent runtime commands', () => {
       // it already runs — in place, so the registry does not move. Diffing the
       // empty runtime would read it as dropping every id the block registers.
       await liveRatingExtension('install-untranspilable')
-      const restore = __setTranspileImplForTest(async () => {
+      const restore = vi.spyOn(compiler, 'transpileExtension').mockImplementation(async () => {
         throw new SyntaxError('Unexpected token')
       })
       try {
@@ -713,7 +713,7 @@ describe('agent runtime commands', () => {
         expect(result.verification?.ok).toBe(false)
         expect(result.verification?.errors[0]?.message).toContain('Unexpected token')
       } finally {
-        restore()
+        restore.mockRestore()
       }
     })
 
@@ -725,16 +725,16 @@ describe('agent runtime commands', () => {
       const id = await liveRatingExtension('install-nopin')
       const before = await readApproval(id)
       let attempts = 0
-      const restore = __setTranspileImplForTest(async () => {
+      const restore = vi.spyOn(compiler, 'transpileExtension').mockImplementation(async () => {
         attempts += 1
         // Transient: the scan's attempt fails, a retry would succeed.
         if (attempts === 1) throw new SyntaxError('transient')
-        return 'export default []'
+        return {compiled: 'export default []', importsUnpinned: false, hasStaticUnpinnedImports: false, pinnedImports: new Map()}
       })
       try {
         await install('install-nopin')
       } finally {
-        restore()
+        restore.mockRestore()
       }
       // One attempt only, and the pin is untouched.
       expect(attempts).toBe(1)

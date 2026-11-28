@@ -27,7 +27,7 @@
  */
 import {useEffect, useMemo, useRef} from 'react'
 import {useRepo} from '@/context/repo.js'
-import {useExtensionApprovalStatuses} from '@/extensions/extensionApprovalStatus.js'
+import {dynamicImportPinInstruction, extensionApprovalAction, useExtensionApprovalStatuses} from '@/extensions/extensionApprovalStatus.js'
 import {approveExtensionHere} from '@/extensions/approveExtensionHere.js'
 import {
   extensionPromptDismissals,
@@ -48,25 +48,25 @@ import {systemToggle} from '@/facets/togglable.js'
 
 const toastId = (blockId: string): string => `ext-approval:${blockId}`
 
-/** A prompt's toast content signature — reshow only when this changes, so an
- *  unchanged toast isn't torn down and re-animated on every re-publish. */
-const toastSignature = (prompt: PendingExtensionPrompt): string =>
-  `${prompt.kind}:${prompt.liveHash}`
-
 const promptMessage = (prompt: PendingExtensionPrompt): string =>
   prompt.kind === 'needs-approval'
     ? `“${prompt.name}” isn't enabled on this device`
-    : `“${prompt.name}” has an update available`
+    : prompt.kind === 'imports-unpinned'
+      ? `“${prompt.name}” loads imports from a live URL${extensionApprovalAction(prompt) ? '' : `. ${dynamicImportPinInstruction}`}`
+      : `“${prompt.name}” has an update available${prompt.importsUnpinned ? '. The older approved version loads imports from a live URL.' : ''}`
 
-const primaryLabel = (prompt: PendingExtensionPrompt): string =>
-  prompt.kind === 'needs-approval' ? 'Enable' : 'Update'
+/** A prompt's toast content signature — reshow only when this changes, so an
+ *  unchanged toast isn't torn down and re-animated on every re-publish. */
+const toastSignature = (prompt: PendingExtensionPrompt): string =>
+  `${prompt.kind}:${prompt.liveHash}:${promptMessage(prompt)}`
 
 const showPromptToast = (repo: Repo, prompt: PendingExtensionPrompt): void => {
+  const label = prompt.kind === 'needs-approval' ? 'Enable' : extensionApprovalAction(prompt)
   showInfo(promptMessage(prompt), {
     id: toastId(prompt.blockId),
     duration: Number.POSITIVE_INFINITY,
-    action: {
-      label: primaryLabel(prompt),
+    action: label ? {
+      label,
       onClick: (event) => {
         // Keep the toast open: sonner dismisses a toast on any action click
         // (scheduling an id-keyed removal ~200ms later), so a re-show under
@@ -76,7 +76,7 @@ const showPromptToast = (repo: Repo, prompt: PendingExtensionPrompt): void => {
         // put as the retry affordance (the error was already surfaced by
         // approveExtensionHere).
         event?.preventDefault()
-        void approveExtensionHere(repo, prompt.blockId, prompt.name).then((ok) => {
+        void approveExtensionHere(repo, prompt.blockId, prompt).then((ok) => {
           if (!ok) return
           // A fresh approval supersedes any earlier dismissal so a future
           // update can nudge again (and localStorage stays tidy).
@@ -87,7 +87,7 @@ const showPromptToast = (repo: Repo, prompt: PendingExtensionPrompt): void => {
           refreshAppRuntime()
         })
       },
-    },
+    } : undefined,
     cancel: {
       label: 'Dismiss',
       onClick: () =>

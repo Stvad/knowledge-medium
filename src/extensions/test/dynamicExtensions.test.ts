@@ -7,6 +7,8 @@ import {
 import {
   __setCompileImplForTest,
   createCompileCache,
+  approveExtension,
+  setExtensionCompilePlatform,
   hashExtensionSource,
   type CompileCache,
   type ExtensionModule,
@@ -911,6 +913,77 @@ describe('dynamicExtensionsExtension — gate 2 (device-local trust / #67)', () 
         liveHash: await hashExtensionSource('src-new'),
         approvedHash: await hashExtensionSource('src-old'),
       })
+    } finally {
+      restore()
+    }
+  })
+
+  it.each([
+    {imports: 'static', drift: false, expected: [{kind: 'imports-unpinned', hasStaticUnpinnedImports: true}]},
+    {imports: 'dynamic', drift: false, expected: [{kind: 'imports-unpinned', hasStaticUnpinnedImports: false}]},
+    {imports: 'mixed', drift: false, expected: [{kind: 'imports-unpinned', hasStaticUnpinnedImports: true}]},
+    {imports: 'static', drift: true, expected: [{kind: 'update-available', importsUnpinned: true}]},
+    {imports: 'none', drift: true, expected: [{kind: 'update-available', importsUnpinned: false}]},
+    {imports: 'none', drift: false, expected: []},
+  ])('keeps the approved code running and reports the status for the shown revision ($imports, $drift)', async ({imports, drift, expected}) => {
+    const staticImport = imports === 'static' || imports === 'mixed' ? "import 'https://cdn.example/module.mjs'; " : ''
+    const dynamicImport = imports === 'dynamic' || imports === 'mixed' ? "void import('https://cdn.example/lazy.mjs'); " : ''
+    const source = staticImport + dynamicImport + 'export default []'
+    const block = blockData({id: 'live-import', content: drift ? source + '\n' : source})
+    const approvalStatusReporter = vi.fn()
+    const instantiate = vi.fn(async () => ({default: labelsFacet.of('running')}))
+    const restore = setExtensionCompilePlatform({instantiate, allowUnpinnedLive: true})
+    try {
+      await approveExtension(block.id, source, persistent)
+      const runtime = await resolveFacetRuntime(loadExtensions([block], {
+        overrides: enableBlocks([block]), approvalStatusReporter,
+      }))
+      expect(runtime.read(labelsFacet)).toEqual(['running'])
+      expect(approvalStatusReporter.mock.calls.map(([, status]) => status))
+        .toEqual(expected.map(status => expect.objectContaining(status)))
+    } finally {
+      restore()
+    }
+  })
+
+  it('keeps the live import warning when an approval record lacks the static-import flag', async () => {
+    const source = "void import('https://cdn.example/lazy.mjs'); export default []"
+    const block = blockData({id: 'approval-without-static-flag', content: source})
+    const approvalStatusReporter = vi.fn()
+    const restore = setExtensionCompilePlatform({allowUnpinnedLive: true, instantiate: async () => ({default: []})})
+    try {
+      await approveExtension(block.id, source, persistent)
+      const stored = await persistent.read(block.id)
+      if (!stored?.importsUnpinned) throw new Error('Expected an approval with live imports')
+      const approval = {...stored}
+      delete approval.hasStaticUnpinnedImports
+      await persistent.write(block.id, approval)
+
+      await resolveFacetRuntime(loadExtensions([block], {overrides: enableBlocks([block]), approvalStatusReporter}))
+
+      expect(approvalStatusReporter).toHaveBeenCalledWith(block.id, expect.objectContaining({
+        kind: 'imports-unpinned', hasStaticUnpinnedImports: false,
+      }))
+    } finally {
+      restore()
+    }
+  })
+
+  it('offers Pin imports even when the live module fails to link', async () => {
+    const source = "import 'https://cdn.example/fixture.mjs'"
+    const block = blockData({id: 'offline-import', content: source})
+    const approvalStatusReporter = vi.fn()
+    const errorReporter = vi.fn()
+    const restore = setExtensionCompilePlatform({allowUnpinnedLive: true, instantiate: async () => {
+      throw new Error('fixture offline')
+    }})
+    try {
+      await approveExtension(block.id, source, persistent)
+      await resolveFacetRuntime(loadExtensions([block], {
+        overrides: enableBlocks([block]), approvalStatusReporter, errorReporter,
+      }))
+      expect(errorReporter).toHaveBeenCalledWith(block.id, expect.objectContaining({message: 'fixture offline'}))
+      expect(approvalStatusReporter).toHaveBeenCalledWith(block.id, expect.objectContaining({kind: 'imports-unpinned'}))
     } finally {
       restore()
     }

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   __setCompileImplForTest,
-  __setTranspileImplForTest,
   compileForVerification,
   createCompileCache,
   evictBlockFromCache,
@@ -136,15 +135,12 @@ describe('compileForVerification — default blob instantiate', () => {
     const revoked: string[] = []
     URL.createObjectURL = vi.fn(() => moduleUrl)
     URL.revokeObjectURL = vi.fn((url: string) => { revoked.push(url) })
-    // Transpile is the identity, so the real instantiate step runs on the source.
-    const restore = __setTranspileImplForTest(async content => content)
 
     try {
       const {module} = await compileForVerification("export default 'stub'", 'block-1', cache)
       expect(module.default).toBe('stub')
       expect(revoked).toEqual([moduleUrl])
     } finally {
-      restore()
       URL.createObjectURL = realCreate
       URL.revokeObjectURL = realRevoke
     }

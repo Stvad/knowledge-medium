@@ -203,7 +203,7 @@ describe('AppRuntimeController', () => {
     host.errorStore.beginBatch()
     host.errorStore.reportError('active', failure)
     host.approvalStore.beginBatch()
-    host.approvalStore.report('active', {kind: 'needs-approval', name: 'Active', liveHash: 'hash'})
+    host.approvalStore.report('active', {kind: 'needs-approval', name: 'Active', liveSource: 'fixture', liveHash: 'hash'})
     const extension = vi.fn(() => null)
 
     const runtime = await new AppRuntimeController().resolve({
@@ -342,7 +342,7 @@ describe('AppRuntimeController', () => {
     expect(host.setFacetRuntime).not.toHaveBeenCalled()
 
     const failure = new Error('Later error')
-    const approval = {kind: 'needs-approval', name: 'Later approval', liveHash: 'hash'} as const
+    const approval = {kind: 'needs-approval', name: 'Later approval', liveSource: 'fixture', liveHash: 'hash'} as const
     host.errorStore.reportError('later', failure)
     host.approvalStore.report('later', approval)
     expect(host.errorStore.getSnapshot().get('later')).toBe(failure)

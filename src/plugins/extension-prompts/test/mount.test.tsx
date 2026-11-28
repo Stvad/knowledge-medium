@@ -69,11 +69,11 @@ describe('ExtensionPromptSurface', () => {
 
   it('shows one keyed toast per pending extension', async () => {
     const store = new ExtensionApprovalStatusStore()
-    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
+    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveSource: 'SRC', liveHash: 'hm'})
     store.report('readwise', {
       kind: 'update-available',
       name: 'Readwise',
-      liveHash: 'hr',
+      liveSource: 'SRC', liveHash: 'hr',
       approvedHash: 'h0',
     })
     renderSurface(store)
@@ -93,10 +93,47 @@ describe('ExtensionPromptSurface', () => {
     expect(optsFor('readwise').action?.label).toBe('Update')
   })
 
+  it('offers Pin imports and forwards the revision displayed by the toast', async () => {
+    const store = new ExtensionApprovalStatusStore()
+    const prompt = {
+      kind: 'imports-unpinned' as const, name: 'Fixture', liveSource: 'source', liveHash: 'hash', hasStaticUnpinnedImports: true,
+    }
+    store.report('fixture', prompt)
+    renderSurface(store)
+    await waitFor(() => expect(optsFor('fixture').action?.label).toBe('Pin imports'))
+    expect(showInfo).toHaveBeenLastCalledWith(expect.not.stringContaining('Use a static import'), expect.anything())
+    await act(async () => { clickAction('fixture') })
+    expect(approveExtensionHere).toHaveBeenCalledWith(repo, 'fixture', expect.objectContaining(prompt))
+  })
+
+  it('explains how to pin a dynamic-only import without offering a broken action', async () => {
+    const store = new ExtensionApprovalStatusStore()
+    store.report('fixture', {
+      kind: 'imports-unpinned', name: 'Fixture', liveSource: 'source', liveHash: 'hash', hasStaticUnpinnedImports: false,
+    })
+    renderSurface(store)
+
+    await waitFor(() => expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Use a static import'), expect.anything()))
+    expect(optsFor('fixture').action).toBeUndefined()
+  })
+
+  it('adds the live import warning to an existing Update toast for the same revision', async () => {
+    const store = new ExtensionApprovalStatusStore()
+    const revision = {kind: 'update-available' as const, name: 'Fixture', liveSource: 'source', liveHash: 'hash', approvedHash: 'old'}
+    store.report('fixture', revision)
+    renderSurface(store)
+    await waitFor(() => expect(optsFor('fixture').action?.label).toBe('Update'))
+    expect(showInfo).toHaveBeenLastCalledWith(expect.not.stringContaining('loads imports from a live URL'), expect.anything())
+
+    act(() => store.report('fixture', {...revision, importsUnpinned: true}))
+    await waitFor(() => expect(showInfo).toHaveBeenLastCalledWith(expect.stringContaining('older approved version loads imports from a live URL'), expect.anything()))
+    expect(optsFor('fixture').action?.label).toBe('Update')
+  })
+
   it('dismissing one extension hides ONLY it, and persists — the repro', async () => {
     const store = new ExtensionApprovalStatusStore()
-    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
-    store.report('readwise', {kind: 'needs-approval', name: 'Readwise', liveHash: 'hr'})
+    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveSource: 'SRC', liveHash: 'hm'})
+    store.report('readwise', {kind: 'needs-approval', name: 'Readwise', liveSource: 'SRC', liveHash: 'hr'})
     renderSurface(store)
 
     await waitFor(() => expect(showInfo).toHaveBeenCalledTimes(2))
@@ -127,8 +164,8 @@ describe('ExtensionPromptSurface', () => {
 
   it('dismisses open toasts when the surface unmounts (plugin toggled off)', async () => {
     const store = new ExtensionApprovalStatusStore()
-    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
-    store.report('readwise', {kind: 'needs-approval', name: 'Readwise', liveHash: 'hr'})
+    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveSource: 'SRC', liveHash: 'hm'})
+    store.report('readwise', {kind: 'needs-approval', name: 'Readwise', liveSource: 'SRC', liveHash: 'hr'})
     const {unmount} = renderSurface(store)
 
     await waitFor(() => expect(showInfo).toHaveBeenCalledTimes(2))
@@ -143,8 +180,8 @@ describe('ExtensionPromptSurface', () => {
 
   it('Enable approves the clicked extension by its own blockId', async () => {
     const store = new ExtensionApprovalStatusStore()
-    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
-    store.report('readwise', {kind: 'needs-approval', name: 'Readwise', liveHash: 'hr'})
+    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveSource: 'SRC', liveHash: 'hm'})
+    store.report('readwise', {kind: 'needs-approval', name: 'Readwise', liveSource: 'SRC', liveHash: 'hr'})
     renderSurface(store)
 
     await waitFor(() => expect(showInfo).toHaveBeenCalledTimes(2))
@@ -157,7 +194,7 @@ describe('ExtensionPromptSurface', () => {
 
     // preventDefault keeps the toast open; we own dismissal (via the refresh).
     expect(event.preventDefault).toHaveBeenCalledTimes(1)
-    expect(approveExtensionHere).toHaveBeenCalledWith(repo, 'matrix', 'Matrix')
+    expect(approveExtensionHere).toHaveBeenCalledWith(repo, 'matrix', expect.objectContaining({name: 'Matrix', liveSource: 'SRC', liveHash: 'hm'}))
     expect(approveExtensionHere).not.toHaveBeenCalledWith(
       repo,
       'readwise',
@@ -169,7 +206,7 @@ describe('ExtensionPromptSurface', () => {
   it('keeps the toast open (no re-show, no dismiss) when the approval fails', async () => {
     approveExtensionHere.mockResolvedValueOnce(false)
     const store = new ExtensionApprovalStatusStore()
-    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
+    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveSource: 'SRC', liveHash: 'hm'})
     renderSurface(store)
 
     await waitFor(() => expect(showInfo).toHaveBeenCalledTimes(1))

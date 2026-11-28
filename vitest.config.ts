@@ -1,3 +1,4 @@
+import {readExtensionImportManifest} from './vite-plugins/extensionImportManifest.ts'
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
@@ -10,6 +11,7 @@ const TEST_FILES = '**/*.{test,spec}.{ts,tsx}'
 const isolatedTestFiles = listIsolatedTestFiles(TEST_FILES, import.meta.dirname)
 
 export default defineConfig({
+  define: {__EXTENSION_IMPORT_MANIFEST__: JSON.stringify(readExtensionImportManifest(import.meta.dirname))},
   plugins: [react()],
   test: {
     // Default to the `node` environment: most test files here are pure logic
@@ -87,6 +89,8 @@ export default defineConfig({
       '@': resolve(import.meta.dirname, './src'),
       // Same as vite.config.ts: the app reads the wire protocol from the
       // agent-cli SOURCE, not its last build in dist/.
+      '@knowledge-medium/agent-cli/extensionImportSyntax': resolve(import.meta.dirname, './packages/agent-cli/src/extensionImportSyntax.ts'),
+      '@knowledge-medium/agent-cli/freezeExtensionImports': resolve(import.meta.dirname, './packages/agent-cli/src/freezeExtensionImports.ts'),
       '@knowledge-medium/agent-cli/protocol': resolve(import.meta.dirname, './packages/agent-cli/src/protocol.ts'),
     }
   }

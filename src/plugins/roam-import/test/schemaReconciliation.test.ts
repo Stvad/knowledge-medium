@@ -1,5 +1,14 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {v5 as uuidv5} from 'uuid'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {propertyChangeScopeProp, seedKeyProp, showPropertiesProp} from '@/data/properties'
+import {seedWorkspaceRow, storeWorkspaceKey, stubLocalStorage} from '@/data/test/e2eeFixtures'
+import {withOuterReadsRefused} from '@/data/test/refuseOuterReads'
+import {PromotionViewGapError} from '@/data/userSchemasService'
+import {requireWorkspaceKeys} from '@/sync/keys/openWorkspaceKeys'
+import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
+import {deriveWorkspaceIdNamespace} from '@/sync/crypto/derivedIdNamespace'
 import { ChangeScope, type BlockData } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -49,6 +58,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 afterEach(async () => {
+  vi.restoreAllMocks()
   env.dispose()
   await env.h.cleanup()
 })
@@ -238,6 +248,167 @@ describe('collectSchemaReconciliationPlan', () => {
   })
 })
 
+describe('automatic promotion identity', () => {
+  const name = 'import:Status|1'
+  const publicNamespace = uuidv5('urn:knowledge-medium:property-promotion:v1', uuidv5.URL)
+  const slotId = (slot: number, namespace = publicNamespace) =>
+    uuidv5(JSON.stringify([WS, name, slot]), namespace)
+
+  const savedRow = (id: string) =>
+    env.repo.db.get('SELECT * FROM blocks WHERE id = ?', [id])
+
+  // Raw sync-shaped writes leave the projector behind the durable row.
+  const placeDefinition = async (id: string, storedName: string, deleted = false) => {
+    await env.repo.projectors.whenPrimed(env.repo.activeWorkspaceId!)
+    await env.repo.mutate.createChild({id, parentId: env.repo.propertiesPageId!})
+    await env.repo.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ?, deleted = ? WHERE id = ?',
+      [JSON.stringify({types: ['property-schema'], 'property-schema:name': storedName,
+        'property-schema:preset': 'number'}), Number(deleted), id],
+    ))
+    expect(env.repo.userSchemas.getSchemaBlockId(name)).toBeUndefined()
+  }
+
+  const register = async () => {
+    const diagnostics: string[] = []
+    await applySchemaReconciliation([{name, presetId: 'string'}], env.repo, diagnostics)
+    expect(diagnostics).toEqual([])
+    return env.repo.userSchemas.getSchemaBlockId(name)
+  }
+
+  it.each([
+    ['live derived', slotId(0)],
+    ['pre-fix random-id', 'legacy-definition'],
+  ] as const)('reuses a %s definition and its stored preset before the projector sees it', async (_, id) => {
+    await placeDefinition(id, name)
+    const before = await savedRow(id)
+    expect(await register()).toBe(id)
+    expect(env.repo.propertySchemas.get(name)?.codec.type).toBe('number')
+    expect(await savedRow(id)).toEqual(before)
+    expect(await env.repo.db.getAll('SELECT id FROM blocks WHERE parent_id = ?', [env.repo.propertiesPageId]))
+      .toEqual([{id}])
+  })
+
+  it.each([
+    {state: 'tombstoned', storedName: name, deleted: true},
+    {state: 'renamed', storedName: 'import:Archived', deleted: false},
+  ])('preserves the $state definition and advances to the same next slot', async ({storedName, deleted}) => {
+    const occupied = slotId(0)
+    await placeDefinition(occupied, storedName, deleted)
+    const before = await savedRow(occupied)
+    expect(await register()).toBe(slotId(1))
+    expect(await savedRow(occupied)).toEqual(before)
+    expect(env.repo.propertySchemas.get(name)?.codec.type).toBe('string')
+  })
+
+  it('promotes a free name that a declared seed stores but does not claim', async () => {
+    const seedId = propertyDefinitionBlockId(WS, showPropertiesProp.seedKey)
+    await placeDefinition(seedId, name)
+    await env.repo.db.execute(
+      'UPDATE blocks SET properties_json = json_set(properties_json, ?, ?) WHERE id = ?',
+      ['$.' + JSON.stringify(seedKeyProp.name), showPropertiesProp.seedKey, seedId],
+    )
+    const before = await savedRow(seedId)
+    expect(await register()).toBe(slotId(0))
+    expect(await savedRow(seedId)).toEqual(before)
+    expect(env.repo.propertySchemaResolverFor(WS).resolve(showPropertiesProp.name)).toMatchObject({
+      schema: {fieldId: seedId},
+    })
+  })
+
+  it('reserves an unreadable definition and reports it without minting a rival', async () => {
+    const id = 'unreadable-definition'
+    await placeDefinition(id, name)
+    await env.h.db.execute(
+      'UPDATE blocks SET properties_json = json_set(properties_json, ?, ?) WHERE id = ?',
+      ['$.' + JSON.stringify(propertyChangeScopeProp.name), 'invalid', id],
+    )
+    const diagnostics: string[] = []
+    await applySchemaReconciliation([{name, presetId: 'string'}], env.repo, diagnostics)
+    expect(diagnostics.join(' ')).toContain('does not resolve after registration')
+    expect(env.repo.propertyDefinitions?.unparseableDefinitionIds.has(id)).toBe(true)
+    expect(await env.h.db.getAll('SELECT id FROM blocks WHERE parent_id = ?', [env.repo.propertiesPageId]))
+      .toEqual([{id}])
+  })
+
+  it('keeps the shared definition when a writer undoes its import', async () => {
+    const id = await register()
+    const owner = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!, content: 'import'})
+    expect(await env.repo.undo()).toBe(true)
+    expect(await env.repo.db.get('SELECT deleted FROM blocks WHERE id = ?', [owner])).toEqual({deleted: 1})
+    expect(await env.repo.undo()).toBe(false)
+    expect(await env.repo.db.get('SELECT deleted FROM blocks WHERE id = ?', [id])).toEqual({deleted: 0})
+  })
+
+  it('reuses an unprojected definition on a locked, disconnected device', async () => {
+    const id = 'offline-definition'
+    const ws = 'locked-holder-workspace'
+    env.repo.setActiveWorkspaceId(ws)
+    await getOrCreatePropertiesPage(env.repo, ws)
+    await placeDefinition(id, name)
+    await seedWorkspaceRow(env.h.db, ws, env.repo.user.id, 'e2ee')
+    await expect(requireWorkspaceKeys(getWorkspaceKeyStore(), env.repo.user.id, ws)).rejects.toThrow(/unlock/)
+
+    const keyRead = vi.spyOn(getWorkspaceKeyStore(), 'get')
+    const gap = vi.spyOn(env.repo, 'syncViewGap').mockResolvedValue('disconnected')
+
+    expect(await register()).toBe(id)
+    expect(env.repo.propertySchemas.get(name)?.codec.type).toBe('number')
+    expect(keyRead).not.toHaveBeenCalled()
+    expect(gap).not.toHaveBeenCalled()
+  })
+
+  it('refuses a stale mint before unlocking the namespace or opening a write transaction', async () => {
+    await seedWorkspaceRow(env.h.db, WS, env.repo.user.id, 'e2ee')
+    const namespace = vi.spyOn(env.h.db, 'getOptional')
+    const keyRead = vi.spyOn(getWorkspaceKeyStore(), 'get')
+    const tx = vi.spyOn(env.repo, 'tx')
+    vi.spyOn(env.repo, 'syncViewGap').mockResolvedValue('download in progress')
+    await expect(env.repo.userSchemas.ensurePromotedSchema({name, presetId: 'string'})).rejects.toMatchObject({
+      name: 'PromotionViewGapError', message: expect.stringMatching(/not caught up.*download in progress/i),
+    })
+    expect(tx).not.toHaveBeenCalled()
+    expect(namespace.mock.calls.some(([sql]) => sql.includes('encryption_mode'))).toBe(false)
+    expect(keyRead).not.toHaveBeenCalled()
+  })
+
+  it.each(['none', 'e2ee'] as const)('refuses inside the write transaction when the late view is stale (%s)', async mode => {
+    const {repo} = env
+    const ws = `late-gap-${mode}`
+    repo.setActiveWorkspaceId(ws)
+    await getOrCreatePropertiesPage(repo, ws)
+    expect(await repo.workspaceViewGap(ws)).toBeNull()
+    const write = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementationOnce(async (fn, opts) => {
+      // Both the mode and the staged rows can change while the writer waits for the lock.
+      await seedWorkspaceRow(env.h.db, ws, repo.user.id, mode)
+      await env.h.db.execute("INSERT INTO blocks_synced_changes (id, op) VALUES ('late-definition', 'upsert')")
+      return write(fn, opts)
+    })
+    await withOuterReadsRefused(env.h.db, async () => {
+      await expect(repo.userSchemas.ensurePromotedSchema({name, presetId: 'string'}))
+        .rejects.toBeInstanceOf(PromotionViewGapError)
+    })
+    expect(await env.h.db.getAll('SELECT id FROM blocks WHERE parent_id = ?', [repo.propertiesPageId])).toEqual([])
+  })
+
+  it('derives the sealed slot from the workspace key and trimmed, case-sensitive registry name', async () => {
+    const userId = env.repo.user.id
+    stubLocalStorage()
+    try {
+      await seedWorkspaceRow(env.h.db, WS, userId, 'e2ee')
+      await storeWorkspaceKey(userId, WS)
+      const key = await requireWorkspaceKeys(getWorkspaceKeyStore(), userId, WS)
+      const namespace = await deriveWorkspaceIdNamespace(key.contentKeyHmac, 'km/property-promotion-ns/v1')
+      const schema = await env.repo.userSchemas.ensurePromotedSchema({name: ' ' + name + ' ', presetId: 'string'})
+      expect(schema.fieldId).toBe(slotId(0, namespace))
+    } finally {
+      await getWorkspaceKeyStore().delete(userId, WS)
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
 describe('applySchemaReconciliation', () => {
   it('persists property-schema blocks and registers each schema synchronously', async () => {
     const blocks: BlockData[] = [
@@ -321,7 +492,7 @@ describe('normalizeRefPropertyValues', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:isa': 'person'}),
       block('b', {'roam:page_alias': 'LukeProg'}),
-      block('c', {'roam:page_alias': '"Lily Anna", "Katerina Kolyada"'}),
+      block('c', {'roam:page_alias': '"Alias One", "Sample Person"'}),
       block('d', {'roam:page_alias': 'built a prototype inside it, and it is thematically appropriate'}),
       block('e', {'roam:page_alias': '{{[[mentions]]: [[Voice notes inbox process]]}}'}),
       block('f', {'roam:isa': 'mental model'}),
@@ -329,8 +500,8 @@ describe('normalizeRefPropertyValues', () => {
     const aliasIdMap = new Map([
       ['person', 'person-id'],
       ['LukeProg', 'alias-id'],
-      ['Lily Anna', 'lily-anna-id'],
-      ['Katerina Kolyada', 'katerina-id'],
+      ['Alias One', 'alias-one-id'],
+      ['Sample Person', 'sample-person-id'],
       ['mental model', 'mental-model-id'],
     ])
     const diagnostics: string[] = []
@@ -345,7 +516,7 @@ describe('normalizeRefPropertyValues', () => {
     )
     expect(blocks[0].properties['roam:isa']).toEqual(['person-id'])
     expect(blocks[1].properties['roam:page_alias']).toEqual(['alias-id'])
-    expect(blocks[2].properties['roam:page_alias']).toEqual(['lily-anna-id', 'katerina-id'])
+    expect(blocks[2].properties['roam:page_alias']).toEqual(['alias-one-id', 'sample-person-id'])
     expect(blocks[3].properties['roam:page_alias']).toEqual([])
     expect(blocks[4].properties['roam:page_alias']).toEqual([])
     expect(blocks[5].properties['roam:isa']).toEqual(['mental-model-id'])
@@ -501,18 +672,18 @@ describe('ensurePromotedPropertySchemas', () => {
   })
 
   it('abandons the batch when the active workspace changes mid-registration', async () => {
-    // `addSchema` targets whatever workspace is active, and each key is a
+    // `ensurePromotedSchema` targets whatever workspace is active, and each key is a
     // separate await — so a switch between keys would scatter definitions
     // across two workspaces.
     const blocks = [block('a', {'matrix:first': 'x', 'matrix:second': 'y'})]
-    const realAddSchema = env.repo.userSchemas.addSchema.bind(env.repo.userSchemas)
+    const realEnsure = env.repo.userSchemas.ensurePromotedSchema.bind(env.repo.userSchemas)
     let calls = 0
-    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = async (args) => {
+    vi.spyOn(env.repo.userSchemas, 'ensurePromotedSchema').mockImplementation(async args => {
       calls += 1
-      const result = await realAddSchema(args)
+      const result = await realEnsure(args)
       env.repo.setActiveWorkspaceId('ws-somewhere-else')
       return result
-    }
+    })
 
     const notes = await ensurePromotedPropertySchemas(env.repo, blocks)
 
@@ -521,21 +692,18 @@ describe('ensurePromotedPropertySchemas', () => {
   })
 
   it('names every key still lacking a definition, so a swallowed failure is not silent', async () => {
-    // addSchema can fail for reasons a caller's workspace check cannot see
+    // ensurePromotedSchema can fail for reasons a caller's workspace check cannot see
     // (it also compares the projector generation, so A->B->A throws while
     // activeWorkspaceId matches again). Such a key becomes a definition-less
     // cell — reported loudly rather than blocking the write, since deferring
     // on a persistent failure would stall the caller forever.
-    const realAddSchema = env.repo.userSchemas.addSchema.bind(env.repo.userSchemas)
-    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = async () => {
-      throw new Error('[addSchema] active workspace generation changed before schema creation')
-    }
+    vi.spyOn(env.repo.userSchemas, 'ensurePromotedSchema')
+      .mockRejectedValueOnce(new Error('[addSchema] active workspace generation changed before schema creation'))
 
     const notes = await ensurePromotedPropertySchemas(env.repo, [
       block('a', {'matrix:doomed': 'x'}),
     ])
 
-    ;(env.repo.userSchemas as {addSchema: typeof realAddSchema}).addSchema = realAddSchema
     expect(notes.join(' ')).toMatch(/matrix:doomed/)
     expect(notes.join(' ')).toMatch(/NO definition/)
   })
