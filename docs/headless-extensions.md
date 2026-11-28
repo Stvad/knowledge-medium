@@ -1,6 +1,6 @@
 # Installed extensions in the headless host
 
-> **Status:** Approved by the owner (2026-11-27). Slices 0–2 and the slice-3 code are implemented. The owner’s Matrix cutover is pending. The owner decisions are in [§9](#9-decisions). Last verified against code: 2026-11-27.
+> **Status:** Approved by the owner (2026-11-27). Slices 0–2 and the slice-3 code are implemented. The owner’s Matrix cutover is pending, and so is slice 0b (#1923). The owner decisions are in [§9](#9-decisions). Last verified against code: 2026-11-27.
 > Claims are tagged as in [headless-client.md](headless-client.md). **[read]** means seen in the code. **[measured]** means run or queried, and the entry says where. **[reasoned]** means inferred; the slice that would verify it is named.
 
 ## 1. Goal
@@ -234,7 +234,7 @@ Each gate clause and each refusal gets a named test, mutation-checked per AGENTS
 
    Nothing stops loading (D3). One installed extension reports `imports-unpinned` today.
 
-   **0b. End the transition.** Remove the live branch and bump `COMPILER_VERSION`, once a read-only query like §2's shows nothing unpinned is installed. That query shows only that sources migrated, which is why the bump rechecks device approvals. An extension still unpinned then stops loading until pinned, and its seeds drop out meanwhile, though no stored data changes. This gets its own issue when slice 0 is filed.
+   **0b. End the transition.** Remove the live branch and bump `COMPILER_VERSION`, once a read-only query like §2's shows nothing unpinned is installed. That query shows only that sources migrated, which is why the bump rechecks device approvals. An extension still unpinned then stops loading until pinned, and its seeds drop out meanwhile, though no stored data changes. Tracked in #1923.
 1. **Core seams, no change in tabs.**
    - The React-free runtime controller, with the tab's provider on top.
    - The platform setter.
