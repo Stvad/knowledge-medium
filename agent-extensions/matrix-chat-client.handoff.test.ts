@@ -104,6 +104,7 @@ const seed = async () => {
 const poll = async (device: Replica, replies: ((since: string | undefined) => unknown)[] = [], stopOnWarning = true) => {
   const controller = new AbortController()
   const requested: Array<string | undefined> = []
+  let transportError: unknown
   const unsubscribe = diagnostics.subscribe(() => {
     if (stopOnWarning && diagnostics.getSnapshot()?.severity === 'warning') queueMicrotask(() => controller.abort())
   })
@@ -112,11 +113,18 @@ const poll = async (device: Replica, replies: ((since: string | undefined) => un
       authedRequest: async (_method: string, _path: string, query: {since?: string}) => {
         requested.push(query.since)
         const reply = replies.shift()
-        if (reply) return reply(query.since)
+        if (reply) {
+          try { return await reply(query.since) } catch (error) {
+            transportError = error
+            controller.abort()
+            throw error
+          }
+        }
         controller.abort()
         return {}
       },
     }})
+    if (transportError) throw transportError
     expect(replies).toHaveLength(0)
     return requested
   } finally {
