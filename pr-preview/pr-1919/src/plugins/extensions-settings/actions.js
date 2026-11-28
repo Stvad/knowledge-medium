@@ -1,1 +1,1 @@
-export{Qr as openExtensionsSettingsAction}from"../../../chunks/app-CWbVzXEv.js";
+export{Qr as openExtensionsSettingsAction}from"../../../chunks/app-CZ61ffg-.js";
