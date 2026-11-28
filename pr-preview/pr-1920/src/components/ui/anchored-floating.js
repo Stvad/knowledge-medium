@@ -1,1 +1,0 @@
-export{oX as floatingAnchorFromRect,sX as useAnchoredFloating}from"../../../chunks/app-DAdoOGsM.js";

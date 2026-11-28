@@ -1,1 +1,0 @@
-export{V1 as matchCharTrigger}from"../../chunks/app-DAdoOGsM.js";

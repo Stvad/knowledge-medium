@@ -1,1 +1,0 @@
-export{VG as buildPropertyPanelSections}from"../../chunks/app-DAdoOGsM.js";

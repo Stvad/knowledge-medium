@@ -1,1 +1,0 @@
-export{kot as open,Aot as seal}from"../../../chunks/app-DAdoOGsM.js";

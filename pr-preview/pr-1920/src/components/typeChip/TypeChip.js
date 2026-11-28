@@ -1,1 +1,0 @@
-export{RI as TypeChip}from"../../../chunks/app-DAdoOGsM.js";

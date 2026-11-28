@@ -1,1 +1,0 @@
-export{rU as useShortcutSurfaceActivations}from"../../chunks/app-DAdoOGsM.js";

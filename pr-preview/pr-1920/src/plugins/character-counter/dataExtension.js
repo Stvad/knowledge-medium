@@ -1,1 +1,0 @@
-export{_3 as characterCounterDataExtension}from"../../../chunks/app-DAdoOGsM.js";

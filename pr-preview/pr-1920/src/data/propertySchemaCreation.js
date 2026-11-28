@@ -1,1 +1,0 @@
-export{pX as adoptOrCreatePropertySchema}from"../../chunks/app-DAdoOGsM.js";

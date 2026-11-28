@@ -1,1 +1,0 @@
-export{rH as useIsMobile,iH as usePointerCoarse}from"../../chunks/app-DAdoOGsM.js";

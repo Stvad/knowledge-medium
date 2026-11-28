@@ -1,1 +1,0 @@
-"use client";export{pG as Collapsible,mG as CollapsibleContent,hG as CollapsibleTrigger}from"../../../chunks/app-DAdoOGsM.js";

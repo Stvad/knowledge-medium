@@ -1,1 +1,0 @@
-export{Rvt as CHANGE_SCOPE_POLICIES,zvt as ChangeScope,Bvt as isChangeScope,Vvt as policyForScope,Hvt as scopeAllowedInReadOnly,Uvt as scopeIsUndoable,Wvt as scopePoliciesEquivalent,Gvt as scopeUploadsToServer,Kvt as sourceForScope}from"../../../chunks/app-DAdoOGsM.js";

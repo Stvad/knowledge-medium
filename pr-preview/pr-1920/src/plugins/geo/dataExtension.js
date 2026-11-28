@@ -1,1 +1,0 @@
-export{s1 as geoDataExtension}from"../../../chunks/app-DAdoOGsM.js";

@@ -1,1 +1,0 @@
-export{HG as typePropertyGroups}from"../../chunks/app-DAdoOGsM.js";

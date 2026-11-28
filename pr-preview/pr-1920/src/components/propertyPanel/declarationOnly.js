@@ -1,1 +1,0 @@
-export{KG as declarationOnlyDefinitionForName,qG as declarationOnlyStatusText}from"../../../chunks/app-DAdoOGsM.js";

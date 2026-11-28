@@ -1,1 +1,0 @@
-export{D5 as instrumentAdapter}from"../../../chunks/app-DAdoOGsM.js";

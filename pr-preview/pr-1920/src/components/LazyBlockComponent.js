@@ -1,1 +1,0 @@
-export{Xz as LazyBlockComponent}from"../../chunks/app-DAdoOGsM.js";

@@ -1,1 +1,0 @@
-export{qZ as staticDataExtensions}from"../../chunks/app-DAdoOGsM.js";

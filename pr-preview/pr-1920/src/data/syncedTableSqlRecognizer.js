@@ -1,1 +1,0 @@
-export{n5 as SYNCED_TABLES,r5 as syncedWriteTarget,i5 as writeTargets}from"../../chunks/app-DAdoOGsM.js";

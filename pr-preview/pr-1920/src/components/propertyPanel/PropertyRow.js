@@ -1,1 +1,0 @@
-export{CG as PropertyRow,wG as PropertyValueCell}from"../../../chunks/app-DAdoOGsM.js";

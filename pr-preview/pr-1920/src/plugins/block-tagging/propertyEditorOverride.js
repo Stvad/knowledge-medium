@@ -1,1 +1,0 @@
-export{np as blockTagsConfigUi}from"../../../chunks/app-DAdoOGsM.js";

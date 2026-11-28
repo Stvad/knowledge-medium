@@ -1,1 +1,0 @@
-export{fX as propertyShapeLabel}from"../../../chunks/app-DAdoOGsM.js";

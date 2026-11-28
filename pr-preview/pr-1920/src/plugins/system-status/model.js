@@ -1,1 +1,0 @@
-export{sd as getChipAppearance,cd as getSyncIndicatorView}from"../../../chunks/app-DAdoOGsM.js";

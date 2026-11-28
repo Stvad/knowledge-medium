@@ -1,1 +1,0 @@
-export{xV as GESTURE_ACTIVE,SV as GESTURE_CANCEL,CV as GESTURE_IDLE,wV as NO_BLOCK_GESTURES_ATTRIBUTE,TV as TOUCH_HOLD_MS,EV as TOUCH_SLOP_PX,DV as allowsBlockGestures,OV as continuousGestureRecognizersFacet,kV as createBlockGestureController,AV as enabledTouchAction,jV as suppressNextClick,MV as unionTouchAction,NV as useContinuousGestures}from"../../chunks/app-DAdoOGsM.js";

@@ -1,1 +1,0 @@
-export{UG as addProperty,WG as deleteProperty,GG as writeProperty}from"../../../chunks/app-DAdoOGsM.js";

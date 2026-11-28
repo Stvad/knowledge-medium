@@ -1,1 +1,0 @@
-export{X4 as contributorsDataExtension}from"../../../chunks/app-DAdoOGsM.js";

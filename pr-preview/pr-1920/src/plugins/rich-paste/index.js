@@ -1,1 +1,0 @@
-export{ew as richPastePlugin}from"../../../chunks/app-DAdoOGsM.js";

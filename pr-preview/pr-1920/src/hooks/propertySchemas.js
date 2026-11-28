@@ -1,1 +1,0 @@
-export{cX as usePropertySchemas}from"../../chunks/app-DAdoOGsM.js";

@@ -1,1 +1,0 @@
-export{kR as gestureBindingDescriptor,AR as matchesGestureEvent}from"../../chunks/app-DAdoOGsM.js";

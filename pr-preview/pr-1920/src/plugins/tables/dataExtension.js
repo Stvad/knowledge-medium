@@ -1,1 +1,0 @@
-export{cQ as tablesDataExtension}from"../../../chunks/app-DAdoOGsM.js";

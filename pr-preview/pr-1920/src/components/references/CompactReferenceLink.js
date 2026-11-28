@@ -1,1 +1,0 @@
-export{JN as CompactReferenceLink}from"../../../chunks/app-DAdoOGsM.js";

@@ -1,1 +1,0 @@
-export{T3 as RAW_CHARACTER_COUNT_PROFILE_ID,E3 as WORDS_COUNT_PROFILE_ID,D3 as charExcludeProp,O3 as charLimitProp,k3 as charProfileProp,A3 as charScopeProp}from"../../../chunks/app-DAdoOGsM.js";

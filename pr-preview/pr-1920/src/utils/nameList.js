@@ -1,1 +1,0 @@
-export{mrt as NAMES_IN_A_SENTENCE,hrt as describeNames,grt as firstFew}from"../../chunks/app-DAdoOGsM.js";

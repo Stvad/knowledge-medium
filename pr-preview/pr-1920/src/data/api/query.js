@@ -1,1 +1,0 @@
-export{G_t as defineQuery}from"../../../chunks/app-DAdoOGsM.js";

@@ -1,1 +1,0 @@
-export{ztt as kernelDataExtension}from"../../chunks/app-DAdoOGsM.js";

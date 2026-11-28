@@ -1,1 +1,0 @@
-export{frt as agree,prt as pluralize}from"../../chunks/app-DAdoOGsM.js";

@@ -1,1 +1,0 @@
-export{GJ as isIOS,KJ as isMacPlatform}from"../../chunks/app-DAdoOGsM.js";

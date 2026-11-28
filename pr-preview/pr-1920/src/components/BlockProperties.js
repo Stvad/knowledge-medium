@@ -1,1 +1,0 @@
-export{_G as BlockProperties}from"../../chunks/app-DAdoOGsM.js";

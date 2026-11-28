@@ -1,1 +1,0 @@
-export{apt as aliasSeatNamespacesInTx,opt as resolveAliasSeatNamespaces}from"../../chunks/app-DAdoOGsM.js";
