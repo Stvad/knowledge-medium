@@ -324,6 +324,15 @@ const validateAndPrefix = (
   )
 }
 
+const extensionContributionSource = (blockId: string): string => `block:${blockId}`
+
+/** Matches only the complete block ID in `block:<id>` or `block:<id>/…`. */
+export const isExtensionContribution = (source: unknown, blockId: string): boolean => {
+  if (typeof source !== 'string') return false
+  const prefix = extensionContributionSource(blockId)
+  return source === prefix || source.startsWith(`${prefix}/`)
+}
+
 /** Prefix the contribution's `source` with `block:<id>` (composing
  *  with any author-supplied source) AND recurse into `enables` so
  *  dragged-along contributions get the same provenance treatment as
@@ -337,7 +346,7 @@ const prefixContributionSource = (
   blockId: string,
   errorReporter?: ExtensionLoadErrorReporter,
 ): FacetContribution<unknown> => {
-  const blockSource = `block:${blockId}`
+  const blockSource = extensionContributionSource(blockId)
   const composed = contribution.source
     ? `${blockSource}/${contribution.source}`
     : blockSource

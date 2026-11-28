@@ -18,7 +18,7 @@
  * swap, `setCurrent` migrates the kept effects' subscriptions and
  * transient buckets onto the fresh runtime and re-fires subscribers so
  * they re-sync — without restarting the effect. `EffectReconciler` then
- * diffs `appEffectsFacet` by id and starts/stops only the delta.
+ * diffs the selected effects by id and starts/stops only the delta.
  */
 
 import {
@@ -29,11 +29,10 @@ import {
   type RuntimeContributionOptions,
   type RuntimeSourceId,
 } from '@/facets/facet.js'
-import {
-  appEffectsFacet,
-  type AppEffect,
-  type AppEffectCleanup,
-  type AppEffectContext,
+import type {
+  AppEffect,
+  AppEffectCleanup,
+  AppEffectContext,
 } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 
@@ -283,7 +282,7 @@ export class EffectReconciler {
   /** Whether `{repo, workspaceId, safeMode}` differs from the context the
    *  reconciler last captured — i.e. the next `reconcile` would be a full
    *  restart (cold) rather than a runtime-only diff (warm). This is the
-   *  single source of truth for "cold vs warm": `AppRuntimeProvider`
+   *  single source of truth for "cold vs warm": `AppRuntimeController`
    *  queries it to decide whether to commit the sync base runtime (cold
    *  start) or hold the current one for a same-context reload, instead of
    *  tracking the same latch separately. A never-reconciled or
@@ -297,10 +296,15 @@ export class EffectReconciler {
     )
   }
 
-  reconcile(repo: Repo, runtime: FacetRuntime, workspaceId: string, safeMode: boolean): void {
+  reconcile(
+    repo: Repo,
+    runtime: FacetRuntime,
+    workspaceId: string,
+    safeMode: boolean,
+    effects: readonly AppEffect[],
+  ): void {
     const ctxChanged = this.isColdFor(repo, workspaceId, safeMode)
 
-    const effects = runtime.read(appEffectsFacet)
     // Dedup by id, last-wins with a warn — matching the repo-wide facet
     // convention (mutatorsFacet / queriesFacet / … all warn + last-wins).
     // The override idiom plugin authors are taught is "register after the

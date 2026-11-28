@@ -56,7 +56,7 @@ import { readRuntimeActions } from '@/extensions/runtimeActions.js'
 import { invokeAction } from '@/shortcuts/actionDispatch.js'
 import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
-import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
+import { dynamicExtensionsExtension, isExtensionContribution } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
 import { combineFacetContributions, type FacetContribution } from '@/facets/facet.js'
 import { applyToggle, isEnabled, type Overrides } from '@/facets/togglable.js'
@@ -280,16 +280,6 @@ const serializeVerificationError = (blockId: string, error: Error) => ({
   name: error.name,
   message: error.message,
 })
-
-// Dynamic extension contributions are tagged with `block:<id>...`
-// sources (see prefixContributionSource in dynamicExtensions.ts). We
-// match the prefix so we capture both the bare `block:<id>` form and
-// any nested `block:<id>/<inner-source>` from enables chains.
-const isExtensionContribution = (source: unknown, blockId: string): boolean => {
-  if (typeof source !== 'string') return false
-  const prefix = `block:${blockId}`
-  return source === prefix || source.startsWith(`${prefix}/`)
-}
 
 /** One extension's contributions, resolved on their own.
  *

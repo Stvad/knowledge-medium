@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   dynamicExtensionsExtension,
+  isExtensionContribution,
   type DynamicExtensionsOptions,
 } from '@/extensions/dynamicExtensions'
 import {
@@ -42,6 +43,20 @@ const labelsFacet = defineFacet<string, string[]>({
   id: 'test.dynamic-labels',
   combine: (values) => [...values],
   empty: () => [],
+})
+
+describe('isExtensionContribution', () => {
+  it.each([
+    ['block:sample', true],
+    ['block:sample/author/nested', true],
+    ['block:sample-other/author', false],
+    ['block:other/sample', false],
+    ['plugin:block:sample', false],
+    [undefined, false],
+    [42, false],
+  ])('matches a complete block id in source %s', (source, expected) => {
+    expect(isExtensionContribution(source, 'sample')).toBe(expected)
+  })
 })
 
 const blockData = (overrides: Partial<BlockData>): BlockData => ({
