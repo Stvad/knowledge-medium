@@ -2333,17 +2333,17 @@ describe('importRoam', {timeout: 30_000}, () => {
   it('materializes conservative non-standard page_alias values without merging pages', async () => {
     const aliasExport: RoamExport = [
       {
-        title: 'Lily @evoenn',
-        uid: 'lilyPage',
+        title: 'Page Owner @sample',
+        uid: 'ownerPage',
         children: [
-          {string: 'page_alias::"Lily Anna", "Katerina Kolyada"', uid: 'lilyAliases'},
+          {string: 'page_alias::"Alias One", "Sample Person"', uid: 'sampleAliases'},
         ],
       },
       {
-        title: 'Katerina Kolyada',
-        uid: 'katerinaPage',
+        title: 'Sample Person',
+        uid: 'personPage',
         children: [
-          {string: 'still its own page', uid: 'katerinaChild'},
+          {string: 'still its own page', uid: 'personChild'},
         ],
       },
     ]
@@ -2357,18 +2357,18 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(summary.pagesMerged).toBe(0)
     expect(summary.aliasBlocksCreated).toBe(1)
 
-    const lily = await readBlock(roamBlockId(WORKSPACE, 'lilyPage'))
-    expect(lily).not.toBeNull()
-    const lilyProperties = JSON.parse(lily!.properties_json) as Record<string, unknown>
-    expect(lilyProperties[ROAM_PAGE_ALIAS_PROP]).toEqual([
-      computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Lily Anna', WORKSPACE),
-      roamBlockId(WORKSPACE, 'katerinaPage'),
+    const owner = await readBlock(roamBlockId(WORKSPACE, 'ownerPage'))
+    expect(owner).not.toBeNull()
+    const ownerProperties = JSON.parse(owner!.properties_json) as Record<string, unknown>
+    expect(ownerProperties[ROAM_PAGE_ALIAS_PROP]).toEqual([
+      computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Alias One', WORKSPACE),
+      roamBlockId(WORKSPACE, 'personPage'),
     ])
-    expect(lilyProperties[aliasesProp.name]).toEqual(['Lily @evoenn'])
+    expect(ownerProperties[aliasesProp.name]).toEqual(['Page Owner @sample'])
 
-    const katerina = await readBlock(roamBlockId(WORKSPACE, 'katerinaPage'))
-    expect(katerina).not.toBeNull()
-    expect(katerina?.parent_id).toBeNull()
+    const person = await readBlock(roamBlockId(WORKSPACE, 'personPage'))
+    expect(person).not.toBeNull()
+    expect(person?.parent_id).toBeNull()
   })
 
   it('stores mixed scalar and multi-value Roam attributes as arrays', async () => {
