@@ -29,17 +29,18 @@ type ReportBatch = Pick<BatchableKeyedStore<unknown>, 'beginBatch' | 'commitBatc
 /** Hands the runtime to the host before Repo installation. Reconcile after installation. */
 type RuntimeListener = (runtime: FacetRuntime) => void
 
-interface RuntimeResolutionOptions extends Pick<DynamicExtensionsOptions, 'cache' | 'persistent'> {
+interface RuntimeResolutionOptions extends Pick<DynamicExtensionsOptions, 'cache' | 'persistent' | 'logLoadError' | 'beforeEvaluate' | 'onBlockLoaded'> {
   baseExtensions: readonly AppExtension[]
   context: AppRuntimeContext
   overrides: Overrides
-  errorStore: ReportBatch & {reportError: ExtensionLoadErrorReporter}
-  approvalStore: ReportBatch & {report: ExtensionApprovalStatusReporter}
+  errorStore?: ReportBatch & {reportError: ExtensionLoadErrorReporter}
+  approvalStore?: ReportBatch & {report: ExtensionApprovalStatusReporter}
   /** Abort a previous resolution before starting another with the same stores. */
   signal: AbortSignal
   beforePublish?: () => Promise<void>
   onRuntime?: RuntimeListener
   onLoadError?: ExtensionLoadErrorReporter
+  logResolveError?: (error: unknown) => void
 }
 
 export class AppRuntimeController {
@@ -54,17 +55,18 @@ export class AppRuntimeController {
 
   async resolve({
     baseExtensions, context, overrides, cache, persistent, errorStore, approvalStore,
-    signal, beforePublish, onRuntime, onLoadError,
+    signal, beforePublish, onRuntime, onLoadError, logLoadError, beforeEvaluate, onBlockLoaded,
+    logResolveError = error => console.error('Failed to resolve app runtime', error),
   }: RuntimeResolutionOptions): Promise<FacetRuntime | undefined> {
     if (signal.aborted) return
 
     const {repo, workspaceId, safeMode} = context
-    errorStore.beginBatch()
-    approvalStore.beginBatch()
+    errorStore?.beginBatch()
+    approvalStore?.beginBatch()
 
     if (!workspaceId) {
-      errorStore.abandonBatch()
-      approvalStore.abandonBatch()
+      errorStore?.abandonBatch()
+      approvalStore?.abandonBatch()
       return
     }
 
@@ -73,31 +75,32 @@ export class AppRuntimeController {
         baseExtensions,
         dynamicExtensionsExtension({
           repo, workspaceId, safeMode, overrides, cache, persistent,
+          logLoadError, beforeEvaluate, onBlockLoaded,
           errorReporter: (blockId, error) => {
             if (signal.aborted) return
-            errorStore.reportError(blockId, error)
+            errorStore?.reportError(blockId, error)
             onLoadError?.(blockId, error)
           },
-          approvalStatusReporter: (blockId, status) => {
+          approvalStatusReporter: approvalStore && ((blockId, status) => {
             if (signal.aborted) return
             approvalStore.report(blockId, status)
-          },
+          }),
         }),
       ], {overrides, safeMode, context})
 
       if (beforePublish) await beforePublish()
       if (signal.aborted) return
 
-      errorStore.commitBatch()
-      approvalStore.commitBatch()
+      errorStore?.commitBatch()
+      approvalStore?.commitBatch()
       this.publish(repo, runtime, onRuntime)
       return runtime
     } catch (error) {
-      console.error('Failed to resolve app runtime', error)
+      logResolveError(error)
       // A superseded resolution no longer owns the stores' batches.
       if (!signal.aborted) {
-        errorStore.abandonBatch()
-        approvalStore.abandonBatch()
+        errorStore?.abandonBatch()
+        approvalStore?.abandonBatch()
       }
     }
   }

@@ -133,22 +133,26 @@ async function verifyModule(
   return {url: url.href, integrity, bytes}
 }
 
-export async function freezeExtensionImport(specifier: string, expectedIntegrity?: string) {
+export async function vendorModule(
+  specifier: string, expectedIntegrity?: string, storedBytes?: Uint8Array<ArrayBuffer>,
+) {
   const url = httpsModuleUrl(specifier)
   if (expectedIntegrity !== undefined && !extensionImportIntegrity.test(expectedIntegrity)) {
     throw new Error(`Invalid SHA-256 integrity pin for ${url.href}`)
   }
-  return verifyModule(url, await fetchModule(url), expectedIntegrity)
+  if (storedBytes && storedBytes.byteLength > MAX_MODULE_BYTES) {
+    throw new Error(`${url.href} exceeds the ${MAX_MODULE_BYTES}-byte module limit`)
+  }
+  const bytes = storedBytes ? new Uint8Array(storedBytes) : await fetchModule(url)
+  return verifyModule(url, bytes, expectedIntegrity)
 }
 
-export async function verifyFrozenExtensionImport(
-  specifier: string,
-  bytes: Uint8Array<ArrayBuffer>,
-  expectedIntegrity: string,
+export const freezeExtensionImport = vendorModule
+
+export function verifyFrozenExtensionImport(
+  specifier: string, bytes: Uint8Array<ArrayBuffer>, expectedIntegrity: string,
 ) {
-  const url = httpsModuleUrl(specifier)
-  if (bytes.byteLength > MAX_MODULE_BYTES) throw new Error(`${url.href} exceeds the ${MAX_MODULE_BYTES}-byte module limit`)
-  return verifyModule(url, new Uint8Array(bytes), expectedIntegrity)
+  return vendorModule(specifier, expectedIntegrity, bytes)
 }
 
 async function pinModule(specifier: string) {
@@ -200,7 +204,7 @@ export async function pinExtensionImports(source: string): Promise<{
     const key = JSON.stringify([specifier, existingIntegrity])
     let module = modules.get(key)
     if (!module) {
-      module = existingIntegrity ? await freezeExtensionImport(specifier, existingIntegrity) : await pinModule(specifier)
+      module = existingIntegrity ? await vendorModule(specifier, existingIntegrity) : await pinModule(specifier)
       modules.set(key, module)
     }
     recordImportPin(pins, module.url, module.integrity)

@@ -4,7 +4,7 @@ import {
 import {executeCommand} from '@/plugins/agent-runtime/commands'
 import type {AgentRuntimeContext} from '@/plugins/agent-runtime/protocol'
 
-const extensions = {refuse: 'extension loading requires a browser'}
+const extensions = {refuse: 'extension grants are configured on the host'}
 // `writable`: served once the gate is open and the host may upload. For writes
 // that bypass the Repo, so its read-only state cannot refuse them: add-media
 // stores bytes and queues their upload before its transaction.
@@ -53,7 +53,7 @@ const commands: Record<KnownCommandType, 'always' | 'open' | 'writable' | {refus
   'disable-extension': extensions,
   'uninstall-extension': extensions,
   'audit-extension': extensions,
-  'run-action': {refuse: 'actions require the app runtime'},
+  'run-action': {refuse: 'actions are unavailable on the headless host'},
   'run-backfill': {refuse: 'workspace backfills require an operator'},
   'audit-properties': {refuse: 'property audits require the operator path'},
   'add-media': 'writable',

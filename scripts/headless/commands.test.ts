@@ -43,7 +43,7 @@ const refusals: KnownAgentCommand[] = [
 it.each(refusals)('refuses $type even with an open gate', async command => {
   const error = command.type === 'action' || command.type === 'set-extension-enabled'
     ? `Unsupported headless command: ${command.type}`
-    : new RegExp(`^${command.type}: (?:arbitrary code|actions require|extension loading|workspace backfills|property audits)`)
+    : new RegExp(`^${command.type}: (?:arbitrary code|actions are unavailable|extension grants|workspace backfills|property audits)`)
   await expect(executeHeadlessCommand(command, context(), open)).rejects.toThrow(error)
 })
 

@@ -22,6 +22,7 @@ import type {SyncDrainStats} from '@/data/internals/syncObserver/observer'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {statusProp} from '@/plugins/todo/schema'
 import {serveDatabase, type ServeOptions} from './host'
+import * as hostExtensions from './extensions'
 import {assertReadSurface} from './test/readSurface'
 import type {HeadlessConfig} from './config'
 
@@ -721,4 +722,28 @@ it('admits a rejoining member with the role observed after its staged backlog dr
     finishDrain()
     await gate.stop()
   }
+})
+
+
+it('disconnects the database and closes the bridge if stopping extensions throws', async () => {
+  const {db} = fixture
+  const disconnect = vi.spyOn(db, 'disconnect')
+  const stop = vi.fn(() => { throw new Error('extension teardown failed') })
+  vi.spyOn(hostExtensions, 'prepareHostExtensions').mockResolvedValue({
+    stop, health: () => [], setWritableAdmission() {},
+  })
+  const controller = new AbortController()
+  const close = vi.fn(async () => {})
+  await expect(serveDatabase(db, plaintext(), user, controller.signal, {
+    connect: async () => {
+      await syncServer(db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+    },
+    register: async () => {
+      controller.abort()
+      return {close, postEvent: async () => {}}
+    },
+  })).rejects.toThrow('extension teardown failed')
+  expect(stop).toHaveBeenCalledOnce()
+  expect(close).toHaveBeenCalledOnce()
+  expect(disconnect).toHaveBeenCalledOnce()
 })

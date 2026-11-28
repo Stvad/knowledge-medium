@@ -200,3 +200,53 @@ it('preserves watcher visibility across an ordinary workspace update with blocks
     await gate.stop()
   }
 })
+
+it.each([
+  ['a download-only host', false, 'editor', false],
+  ['a viewer', true, 'viewer', false],
+  ['an upload hold', true, 'editor', true],
+] as const)('withholds writable admission for %s even when reads open', async (_, writable, role, held) => {
+  const {db} = fixture
+  await syncServer(db)([serverWorkspace(workspace), {...member, data: {...member.data, role}}])
+  const {repo} = createTestRepo({db, user, isReadOnly: true})
+  const onWritableAdmissionChanged = vi.fn()
+  const gate = startReadGate(db, repo, workspaceId, undefined, async () => {}, () => {}, {
+    writable, isUploadHeld: () => held, onWritableAdmissionChanged,
+  })
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(repo.isReadOnly).toBe(true)
+    expect(onWritableAdmissionChanged).not.toHaveBeenCalled()
+  } finally {
+    await gate.stop()
+  }
+})
+
+it('waits for preparation even when the member can already write and follows an in-place upload hold', async () => {
+  const {db} = fixture
+  await syncServer(db)([serverWorkspace(workspace), member])
+  const {repo} = createTestRepo({db, user, isReadOnly: true})
+  const preparing = holdBootstrap()
+  const open = vi.fn(() => preparing.pending)
+  const onWritableAdmissionChanged = vi.fn()
+  let held = false
+  const gate = startReadGate(db, repo, workspaceId, undefined, open, () => {}, {
+    writable: true, isUploadHeld: () => held, onWritableAdmissionChanged,
+  })
+  try {
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce())
+    expect(repo.isReadOnly).toBe(false)
+    expect(onWritableAdmissionChanged).not.toHaveBeenCalled()
+    preparing.finish()
+    await vi.waitFor(() => expect(onWritableAdmissionChanged.mock.calls).toEqual([[true]]))
+    held = true
+    gate.uploadHoldChanged()
+    expect(onWritableAdmissionChanged.mock.calls).toEqual([[true], [false]])
+    held = false
+    gate.uploadHoldChanged()
+    expect(onWritableAdmissionChanged.mock.calls).toEqual([[true], [false], [true]])
+  } finally {
+    preparing.finish()
+    await gate.stop()
+  }
+})

@@ -4,9 +4,15 @@ import {
   staticModuleReferences, unpinnedHttpsDynamicImport, visitModuleSyntax, type Node,
 } from '@knowledge-medium/agent-cli/extensionImportSyntax'
 
-interface ExtensionImportManifest {
+export interface ExtensionImportManifest {
   exactPageImports: Readonly<Record<string, string>>
   sourceSpecifiers: readonly string[]
+}
+
+export class ExtensionImportError extends Error {
+  constructor(message: string, readonly reason: 'forbidden-import' | 'unpinned-import' = 'forbidden-import') {
+    super(message)
+  }
 }
 
 const buildManifest = typeof __EXTENSION_IMPORT_MANIFEST__ === 'undefined'
@@ -60,7 +66,7 @@ export function resolveExtensionImport(
   manifest: ExtensionImportManifest = buildManifest,
 ): ExtensionImport {
   const resolved = findExtensionImport(specifier, grants, manifest)
-  if (!resolved) throw new Error(`Extension import is not allowed: ${specifier}. ${extensionImportHint(specifier)}`)
+  if (!resolved) throw new ExtensionImportError(`Extension import is not allowed: ${specifier}. ${extensionImportHint(specifier)}`)
   return resolved
 }
 
@@ -70,7 +76,7 @@ export function runnableSpecifier(specifier: string): boolean {
 
 function rejectAuthoredPlaceholder(specifier: string): void {
   if (specifier.startsWith(vendoredScheme) || specifier.startsWith(liveScheme)) {
-    throw new Error('Extension source cannot use a reserved import specifier')
+    throw new ExtensionImportError('Extension source cannot use a reserved import specifier')
   }
 }
 
@@ -109,7 +115,7 @@ export function createExtensionImportTransform() {
       rejectAuthoredPlaceholder(specifier)
       const liveUrl = unpinnedHttpsDynamicImport(node)
       if (!liveUrl) return
-      if (node.options) throw new Error('Pin HTTPS dynamic imports by moving them to a static import')
+      if (node.options) throw new ExtensionImportError('Pin HTTPS dynamic imports by moving them to a static import')
       node.source = {type: 'StringLiteral', value: rewriteLive(liveUrl)}
     })
   }
@@ -126,7 +132,7 @@ interface ExtensionImportReplacement extends ImportReference {
 }
 
 function referenceRange(node: Node): ImportReference {
-  if (node.start == null || node.end == null) throw new Error('Extension import has no source range')
+  if (node.start == null || node.end == null) throw new ExtensionImportError('Extension import has no source range')
   return {start: node.start, end: node.end}
 }
 
@@ -167,11 +173,11 @@ export function assertCompiledExtensionImports(
   function check(source: Node, isStatic: boolean) {
     const specifier = literalModuleSpecifier(source)
     if (specifier === undefined) {
-      throw new Error('Extension import() requires a literal module specifier. Replace the computed argument with a quoted path or a template literal without interpolations.')
+      throw new ExtensionImportError('Extension import() requires a literal module specifier. Replace the computed argument with a quoted path or a template literal without interpolations.')
     }
     const resolved = resolveExtensionImport(specifier, importGrants, grants.manifest)
     if (resolved.kind === 'live') {
-      if (!grants.allowUnpinnedLive) throw new Error(`Extension import requires an integrity pin: ${resolved.url}`)
+      if (!grants.allowUnpinnedLive) throw new ExtensionImportError(`Extension import requires an integrity pin: ${resolved.url}`, 'unpinned-import')
       liveReplacements.push({...referenceRange(source), value: resolved.url})
       hasStaticUnpinnedImports ||= isStatic
     }
@@ -180,7 +186,7 @@ export function assertCompiledExtensionImports(
   visitModuleSyntax(parse(compiled, {sourceType: 'module'}), (node, parent) => {
     const reference = moduleReference(node)
     if (reference?.source) check(reference.source, reference.kind === 'static')
-    if (isUnsupportedImportMeta(node, parent)) throw new Error('Extensions can only access import.meta.url. Replace other import.meta properties with explicit constants or literal import paths.')
+    if (isUnsupportedImportMeta(node, parent)) throw new ExtensionImportError('Extensions can only access import.meta.url. Replace other import.meta properties with explicit constants or literal import paths.')
   })
 
   return {

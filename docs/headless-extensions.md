@@ -1,6 +1,6 @@
 # Installed extensions in the headless host
 
-> **Status:** Approved by the owner (2026-11-27); not yet implemented. Four decisions are settled by the owner; all are in [§9](#9-decisions). Last verified against code: 2026-11-27.
+> **Status:** Approved by the owner (2026-11-27). Slices 0–2 are implemented. The owner decisions are in [§9](#9-decisions). Last verified against code: 2026-11-27.
 > Claims are tagged as in [headless-client.md](headless-client.md). **[read]** means seen in the code. **[measured]** means run or queried, and the entry says where. **[reasoned]** means inferred; the slice that would verify it is named.
 
 ## 1. Goal
@@ -25,7 +25,7 @@ Queried read-only on the owner's tab replica (all its workspaces), 2026-11-27 **
 
 So the whole case is two background effects. This design builds for them and for the general loading path they need. It does not build for a population that does not exist.
 
-## 3. What already exists
+## 3. Before slices 0–2
 
 - **The loader.** `dynamicExtensionsExtension` (`src/extensions/dynamicExtensions.ts`) applies two gates. Gate 1 is the synced enable intent (an overrides map keyed by block id), checked before compiling. Gate 2 is a device-local approval (#67) that pins the approved source, its hash and its compiled output. The loader validates the export, prefixes provenance (`block:<id>`), binds seeds, and reports a pin that differs from the live source as `update-available`. The approval store is injectable through `persistent`, and an in-memory implementation exists (`InMemoryCompiledModuleCache`) **[read]**.
 - **The runtime around it is React-bound.** `AppRuntimeProvider.tsx` resolves with the boundary-aware `resolveAppRuntime`, batches the error and approval stores, installs the runtime on the Repo, and drives `EffectReconciler` (`src/extensions/liveRuntime.ts`, itself React-free) **[read]**.
@@ -54,7 +54,7 @@ This section decides everything else.
 **No in-process mechanism isolates code that needs the Repo** **[reasoned]**. `node:vm` modules and ShadowRealm are not security boundaries; a worker thread shares the process's permissions; Node's `--permission` is process-wide and the host itself needs the key source and state directory; a separate process would need an RPC Repo, a new extension API, and would still read and write the whole graph. The one real lever is the daemon's OS user: a dedicated user with nothing else in its home.
 
 **The boundary: only locally granted bytes execute on the host.**
-1. **The grant is the host's config.** The host runs an extension block only if its config names that block id with the path of a reviewed copy of its source. Whoever can write the config or a named file as the daemon's OS user can grant code execution, as they already can by editing the checkout the host runs. That includes any agent session running as that user, and those sessions read graph content. No bridge verb grants, changes or revokes the grant, and no synced value takes part.
+1. **The grant is the host's config. The daemon’s effective user must own the config and every reviewed file, and group and other users must lack write permission on those files.** The host runs an extension block only if its config names that block id with the path of a reviewed copy of its source. Whoever can write the config or a named file as the daemon's OS user can grant code execution, as they already can by editing the checkout the host runs. That includes any agent session running as that user, and those sessions read graph content. No bridge verb grants, changes or revokes the grant, and no synced value takes part.
 2. **The host runs the reviewed copy, never the live block content** ([§9](#9-decisions) D1). The live block must still exist, since the loader walks live extension blocks: deleting it stops it at the next restart, and restoring it runs the reviewed copy again. A grant is revoked by removing its config line. When the live source differs, the host keeps running the reviewed copy, logs that a review is needed and reports `update-available`.
 3. **Imports are checked where they are linked.** One rule, owned by one function, decides what compiled code may import:
    - *allowed:* the page importmap's exact keys, `@/` modules from the same file set the production build emits (the `allSrcEntries` glob and its exclusions, so a test or service-worker file is refused on both platforms), and pinned imports ([§5](#pinned-url-imports));
@@ -153,7 +153,7 @@ To allowlist an extension or take a new version, the operator:
 
 **Time zone.** The host chooses daily notes by local date (`formatIsoDate` **[read]**), so the service unit sets `TZ` to the owner's zone; the launcher passes the environment through. `health` reports the effective zone. This applies to the host's existing `daily-note` verb too (#1901).
 
-**Health.** `health.extensions` is one more contributor to the host's existing `hostHealth` composition, beside the upload hold and media. Each entry reports `running`, `update-available`, `missing` or `load-error` as a fixed string, served always. Free text comes only while read admission is open: an extension's `diagnosticsFacet` snapshots and its load-error message. These can carry workspace content or upstream errors, and `health` is served while the gate is closed, after a membership loss included.
+**Health.** `health.extensions` is one more contributor to the host's existing `hostHealth` composition, beside the upload hold and media. The command response includes `host.extensions`, with one entry per configured block and the eligible effect IDs declared by that block. The state is `running`, `update-available` or `refused`. A refusal has a fixed reason, including `missing-block`, `not-writable`, `starting`, `unpinned-import`, `forbidden-import` and `load-error`. The report remains available with the gate closed. Extension diagnostics and raw load exceptions are excluded from this surface.
 
 ## 7. What the host honours
 
@@ -185,7 +185,7 @@ Everything else is the same code on both: the runtime controller and resolver, t
 |---|---|---|
 | Who grants an approval: a click in the tab, the config on the host | Different trust anchors ([§4](#4-trust)) | One record shape and store interface |
 | When a grant takes effect: at once in a tab, at restart on the host | The host has no UI to approve in | Config is read at boot |
-| Instantiation: blob URLs, or `vm` modules with a linker | A browser and Node load modules differently | Same compiled text, same import rule, native ESM linking on both. The host links `@/` modules as snapshots (`SyntheticModule`), so a later reassignment of a `let` export is not seen; kernel modules export functions and constants |
+| Instantiation: blob URLs, or `vm` modules with a linker | A browser and Node load modules differently | Same compiled text, same import rule, native ESM linking on both. The host links `@/` modules as snapshots (`SyntheticModule`), so a later reassignment of a `let` export is not seen; kernel modules export functions and constants. The React server and static browser facades use React's edge builds under Node, which expose the same API without keeping the daemon alive through a MessagePort |
 | Modules the host refuses beyond the shared rule | The compile, approval and command modules are an escape from the host's verb table | Enforced in the host's linker |
 | Overrides: the user's in a tab, the allowlist's on the host | The host reads no per-user intent | A nested toggle on the host takes its default |
 | Which effects start: all in a tab, allowlisted and writable on the host | The host runs unattended with an OS-level grant | The same controller, given a filter |
@@ -196,7 +196,7 @@ Everything else is the same code on both: the runtime controller and resolver, t
 | A cold host cache fetches pinned bytes at boot | A tab keeps its bytes in its approval record | One freezer |
 | Unpinned URL imports load live in tabs during the transition | D3; temporary | One flag, removed by slice 0b |
 
-A parity test runs one fixture extension through both instantiators. The fixture covers JSX, top-level `await`, a lazy `@/` import, default, named and namespace imports, a missing export, and policy refusals. The test asserts the same export values and the same refusals on both.
+The parity test compares the compiled approval record and vendored bytes for one fixture through the tab and host approval paths. Its import-rule table covers shared verdicts and the tab’s D3 exception. The launcher test separately exercises native VM evaluation with the fixture’s JSX, top-level `await`, lazy `@/` import, default, named and namespace imports, and a missing export.
 
 ## 9. Decisions
 
@@ -255,8 +255,7 @@ Deferred:
 
 | Unverified | Settled in |
 |---|---|
-| How the contributors processor attributes effect writes, which go through `repo.tx` directly rather than `executeCommand`'s contributor binding | slice 2 |
-| The `vm` instantiator with the full host running and real extensions, beyond the probe | slice 2 |
-| Whether `NODE_ENV=production` takes effect under vite-node for the host's React | slice 2 |
+| Contributor metadata when an effect edits a previously attributed row. A fresh fixture row uses the host account’s authorship fields and has no explicit creator-contributor value **[measured]**. | first attributed effect update |
+| The `vm` instantiator with installed production extensions. The launcher test exercises the full host with a fixture **[measured]**. | slice 3 |
 | Marginal memory of loaded extensions on the running host, the pinned SDK included, and whether that bundle runs under Node | slice 3, on the target |
 | Whether `target=es2024` keeps giving one self-contained file across esm.sh versions and packages. The freezer checks rather than assumes, so a change is a refusal, never a wrong load | slice 0, then on every pin |

@@ -9,7 +9,8 @@ type Admission = {role: WorkspaceRole} | ViewGap
 export const startReadGate = (
   db: CommonPowerSyncDatabase, repo: Repo, workspaceId: string, baseline: number | undefined,
   open: (signal: AbortSignal) => Promise<void>, visibility: (open: boolean) => void,
-  access = {writable: false, isUploadHeld: () => false},
+  access: {writable: boolean, isUploadHeld: () => boolean, onWritableAdmissionChanged?: (open: boolean) => void}
+    = {writable: false, isUploadHeld: () => false},
 ) => {
   let reason: string | null = 'Checking workspace access'
   let role: WorkspaceRole | null = null
@@ -19,6 +20,7 @@ export const startReadGate = (
   let pending: Promise<void> | undefined
   let dirty = false
   let stopped = false
+  let writableAdmission = false
 
   /** Why this host may not write now, or null. Owns the Repo's read-only state. */
   function writeRefusal(): string | null {
@@ -30,8 +32,16 @@ export const startReadGate = (
     return null
   }
 
+  function publishWritableAdmission() {
+    const next = reason === null && writeRefusal() === null
+    if (next === writableAdmission) return
+    writableAdmission = next
+    access.onWritableAdmissionChanged?.(next)
+  }
+
   function applyWritability() {
     repo.setReadOnly(writeRefusal() !== null)
+    publishWritableAdmission()
   }
 
   function resetPreparation(nextRole: WorkspaceRole | null) {
@@ -42,18 +52,18 @@ export const startReadGate = (
   }
 
   function close(message: string) {
+    reason = message
     resetPreparation(null)
     if (admitted) visibility(false)
     admitted = false
-    reason = message
   }
 
   // A stalled namespace read must not block demotion, removal or shutdown.
   function startPreparation(nextRole: WorkspaceRole) {
+    reason = 'Opening workspace data'
     resetPreparation(nextRole)
     const attempt = new AbortController()
     preparation = attempt
-    reason = 'Opening workspace data'
     void open(attempt.signal).then(() => {
       if (attempt.signal.aborted) return
       preparation = 'ready'
@@ -110,6 +120,7 @@ export const startReadGate = (
       reason = null
       if (!admitted) visibility(true)
       admitted = true
+      publishWritableAdmission()
     }
   }
 

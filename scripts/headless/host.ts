@@ -12,6 +12,7 @@ import {createSyncResolver} from '@/sync/keys/resolver'
 import {connectWorkspaceSync, createWorkspaceConnector, hasRemoteSyncConfig} from '@/services/powersync'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
+import {LiveRuntimeHandle} from '@/extensions/liveRuntime.js'
 import {createAgentRuntimeContext} from '@/plugins/agent-runtime/commands'
 import {watchEventsRegistry} from '@/plugins/agent-runtime/watchEvents'
 import {openWorkspaceData} from '@/bootstrap/openWorkspaceData'
@@ -26,6 +27,7 @@ import {requirePreferencesPage} from './preferencesPage'
 import {executeHeadlessCommand} from './commands'
 import {connectBridge, type HostBridge} from './bridge'
 import type {HeadlessConfig} from './config'
+import {prepareHostExtensions} from './extensions'
 import {readWorkspaceKey} from './workspaceKey'
 import {NO_MEDIA_REMOTE, openHostMedia, supabaseMediaRemote, type HostMediaRemote} from './media'
 
@@ -84,6 +86,7 @@ export async function serveDatabase(
   })
   let repo: Repo | undefined
   let bridge: HostBridge | undefined
+  let extensions: Awaited<ReturnType<typeof prepareHostExtensions>>
   let releaseBulk: (() => void) | undefined
   try {
     const existing = await db.getOptional<WorkspaceRow>(SELECT_LOCAL_WORKSPACE_BY_ID_SQL, [workspaceId])
@@ -106,14 +109,20 @@ export async function serveDatabase(
     repo = active
     if (cold) releaseBulk = active.holdBulkSyncLoad(workspaceId)
     active.setActiveWorkspaceId(workspaceId)
-    const runtime = resolveFacetRuntimeSync(staticDataExtensions, {repo: active, workspaceId, safeMode: false})
-    active.setFacetRuntime(runtime)
+    const runtimeContext = {repo: active, workspaceId, safeMode: false}
+    const baseRuntime = resolveFacetRuntimeSync(staticDataExtensions, runtimeContext)
+    const runtime = new LiveRuntimeHandle(baseRuntime)
+    active.setFacetRuntime(baseRuntime)
+    extensions = await prepareHostExtensions(config, runtimeContext, staticDataExtensions,
+      next => runtime.setCurrent(next), signal)
+    signal.throwIfAborted()
     const commit = resolveAppVersion().sha
     const context = createAgentRuntimeContext({
       repo: active, runtime, safeMode: false, media: media.agent,
       hostHealth: async () => ({
         ...await hold.health(),
         mediaUploads: await media.health(),
+        extensions: extensions?.health() ?? [],
         commit, timeZone: effectiveTimeZone(), readOnly: active.isReadOnly,
         baselineSyncedAt: baseline ?? null,
         lastSyncedAt: db.currentStatus.lastSyncedAt?.getTime() ?? null,
@@ -142,11 +151,22 @@ export async function serveDatabase(
       } else {
         watchEventsRegistry.disposeAll()
       }
-    }, {writable: config.writable === true, isUploadHeld: hold.isHeld})
+    }, {
+      writable: config.writable === true, isUploadHeld: hold.isHeld,
+      onWritableAdmissionChanged: open => extensions?.setWritableAdmission(open, async () => {
+        await gate?.readReason()
+      }),
+    })
     await untilAbort(signal)
   } finally {
     try {
-      await bridge?.close()
+      const loadingExtensions = extensions
+      extensions = undefined
+      try {
+        loadingExtensions?.stop()
+      } finally {
+        await bridge?.close()
+      }
     } finally {
       watchEventsRegistry.disposeAll()
       watchEventsRegistry.setTransport(null)

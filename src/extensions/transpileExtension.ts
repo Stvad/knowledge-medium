@@ -1,4 +1,4 @@
-import {assertCompiledExtensionImports, createExtensionImportTransform} from './extensionImportPolicy.js'
+import {assertCompiledExtensionImports, createExtensionImportTransform, type ExtensionImportManifest} from './extensionImportPolicy.js'
 
 /** Babel presets the extension loader transpiles with; tests that mirror the
  *  loader import this rather than restate it. The AUTOMATIC JSX runtime keeps
@@ -15,13 +15,17 @@ export const EXTENSION_BABEL_PRESETS: Array<[string, object]> = [
   ['typescript', {onlyRemoveTypeImports: false}],
 ]
 
+// A synced block ID must never break out of the generated sourceURL comment.
+export const extensionSourceFilename = (blockId: string): string =>
+  `${(blockId ?? 'extension-block').replace(/[^A-Za-z0-9._-]/g, '_')}.tsx`
+
 /** Load Babel on a compile miss. The inline source map preserves TSX
  *  locations and sourceURL names the generated blob script after revocation. */
-export async function transpileExtension(content: string, blockId: string, allowUnpinnedLive: boolean) {
+export async function transpileExtension(
+  content: string, blockId: string, allowUnpinnedLive: boolean, manifest?: ExtensionImportManifest,
+) {
   const Babel = await import('@babel/standalone')
-  // A synced block ID must never break out of the generated sourceURL comment.
-  const safeId = (blockId ?? 'extension-block').replace(/[^A-Za-z0-9._-]/g, '_')
-  const sourceName = `${safeId}.tsx`
+  const sourceName = extensionSourceFilename(blockId)
   const transform = createExtensionImportTransform()
   const transpiled = Babel.transform(content, {
     filename: sourceName,
@@ -31,7 +35,7 @@ export async function transpileExtension(content: string, blockId: string, allow
     plugins: [transform.plugin],
   })?.code
   if (!transpiled) throw new Error('Transpiled extension code is empty')
-  const checked = assertCompiledExtensionImports(Babel.packages.parser.parse, transpiled, {...transform, allowUnpinnedLive})
+  const checked = assertCompiledExtensionImports(Babel.packages.parser.parse, transpiled, {...transform, allowUnpinnedLive, manifest})
   return {
     ...checked,
     pinnedImports: transform.pinnedImports,
