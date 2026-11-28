@@ -1,1 +1,0 @@
-export{_V as GESTURE_ACTIVE,vV as GESTURE_CANCEL,yV as GESTURE_IDLE,bV as NO_BLOCK_GESTURES_ATTRIBUTE,xV as TOUCH_HOLD_MS,SV as TOUCH_SLOP_PX,CV as allowsBlockGestures,wV as continuousGestureRecognizersFacet,TV as createBlockGestureController,EV as enabledTouchAction,DV as suppressNextClick,OV as unionTouchAction,kV as useContinuousGestures}from"../../chunks/app-CtFBRNO9.js";

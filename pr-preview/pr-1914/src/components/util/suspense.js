@@ -1,1 +1,0 @@
-export{GX as SuspenseFallback}from"../../../chunks/app-CtFBRNO9.js";

@@ -1,1 +1,0 @@
-export{ap as blockTaggingDataExtension}from"../../../chunks/app-CtFBRNO9.js";

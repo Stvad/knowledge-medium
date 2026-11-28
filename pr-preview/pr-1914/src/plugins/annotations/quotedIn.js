@@ -1,1 +1,0 @@
-export{Pm as quotedInFooterContribution}from"../../../chunks/app-CtFBRNO9.js";

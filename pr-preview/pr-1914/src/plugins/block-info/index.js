@@ -1,1 +1,0 @@
-export{yx as blockInfoPlugin}from"../../../chunks/app-CtFBRNO9.js";

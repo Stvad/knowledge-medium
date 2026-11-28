@@ -1,1 +1,0 @@
-export{IF as CommandPaletteHeaderItem}from"../../../chunks/app-CtFBRNO9.js";

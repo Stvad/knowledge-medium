@@ -1,1 +1,0 @@
-export{r1 as geoDataExtension}from"../../../chunks/app-CtFBRNO9.js";

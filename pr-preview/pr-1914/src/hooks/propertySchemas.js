@@ -1,1 +1,0 @@
-export{iX as usePropertySchemas}from"../../chunks/app-CtFBRNO9.js";

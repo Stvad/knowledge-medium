@@ -1,1 +1,0 @@
-export{Wc as migratePropertiesToBlocksAction,Bc as propertiesMigrationPlugin}from"../../../chunks/app-CtFBRNO9.js";

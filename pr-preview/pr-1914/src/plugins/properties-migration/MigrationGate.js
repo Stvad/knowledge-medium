@@ -1,1 +1,0 @@
-export{Vc as MigrationGate}from"../../../chunks/app-CtFBRNO9.js";

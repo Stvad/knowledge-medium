@@ -1,1 +1,0 @@
-export{iw as attachmentsPlugin}from"../../../chunks/app-CtFBRNO9.js";

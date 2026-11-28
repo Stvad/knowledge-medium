@@ -1,1 +1,0 @@
-export{sR as appUpdatePromptExtension}from"../../../chunks/app-CtFBRNO9.js";

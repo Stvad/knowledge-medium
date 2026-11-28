@@ -1,1 +1,0 @@
-export{xB as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,SB as openExtensionsSettings}from"../../chunks/app-CtFBRNO9.js";

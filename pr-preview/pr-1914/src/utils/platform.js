@@ -1,1 +1,0 @@
-export{VJ as isIOS,HJ as isMacPlatform}from"../../chunks/app-CtFBRNO9.js";

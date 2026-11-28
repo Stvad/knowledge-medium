@@ -1,1 +1,0 @@
-export{b4 as annotationMarginOpenProp,x4 as annotationMarginShareProp}from"../../../chunks/app-CtFBRNO9.js";

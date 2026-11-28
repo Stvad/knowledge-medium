@@ -1,1 +1,0 @@
-export{qr as ExtensionsSettings}from"../../../chunks/app-CtFBRNO9.js";

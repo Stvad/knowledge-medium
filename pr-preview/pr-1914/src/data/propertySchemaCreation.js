@@ -1,1 +1,0 @@
-export{lX as adoptOrCreatePropertySchema}from"../../chunks/app-CtFBRNO9.js";

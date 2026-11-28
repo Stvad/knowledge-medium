@@ -1,1 +1,0 @@
-export{Cn as useFrameThemeCss}from"../../../chunks/app-CtFBRNO9.js";

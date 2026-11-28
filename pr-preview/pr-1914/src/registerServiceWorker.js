@@ -1,1 +1,0 @@
-export{gR as checkForAppUpdate,_R as registerServiceWorker}from"../chunks/app-CtFBRNO9.js";
