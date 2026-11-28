@@ -1,1 +1,0 @@
-export{lW as ExtensionRenderBoundary}from"../../chunks/app-BoNXuy6s.js";

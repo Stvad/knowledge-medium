@@ -1,1 +1,0 @@
-export{ar as birthdayPlugin}from"../../../chunks/app-BoNXuy6s.js";

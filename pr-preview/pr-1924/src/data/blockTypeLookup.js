@@ -1,1 +1,0 @@
-export{Snt as loadTypeIdsByBlock}from"../../chunks/app-BoNXuy6s.js";

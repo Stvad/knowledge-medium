@@ -1,1 +1,0 @@
-export{EC as useIsReadOnly}from"../../chunks/app-BoNXuy6s.js";

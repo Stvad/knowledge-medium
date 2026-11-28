@@ -1,1 +1,0 @@
-export{GP as EXTENSIONS_PAGE_TITLE,KP as TUTORIAL_DEFAULT_TITLE,qP as TUTORIAL_VIM_TITLE,HE as onboardingPlugin,WP as seedTutorial}from"../../../chunks/app-BoNXuy6s.js";

@@ -1,1 +1,0 @@
-export{MF as CommandPaletteHeaderItem}from"../../../chunks/app-BoNXuy6s.js";

@@ -1,1 +1,0 @@
-export{fR as dynamicExtensionsExtension,pR as isExtensionContribution}from"../../chunks/app-BoNXuy6s.js";

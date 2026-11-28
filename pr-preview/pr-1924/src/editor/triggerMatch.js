@@ -1,1 +1,0 @@
-export{$1 as matchCharTrigger}from"../../chunks/app-BoNXuy6s.js";

@@ -1,1 +1,0 @@
-export{BS as Wikilink}from"../../../../../chunks/app-BoNXuy6s.js";

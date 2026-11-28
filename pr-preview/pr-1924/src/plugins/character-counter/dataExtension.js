@@ -1,1 +1,0 @@
-export{k3 as characterCounterDataExtension}from"../../../chunks/app-BoNXuy6s.js";

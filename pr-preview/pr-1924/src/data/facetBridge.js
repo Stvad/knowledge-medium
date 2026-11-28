@@ -1,1 +1,0 @@
-export{G7 as FacetBridge}from"../../chunks/app-BoNXuy6s.js";

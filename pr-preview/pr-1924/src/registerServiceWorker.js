@@ -1,1 +1,0 @@
-export{FL as checkForAppUpdate,IL as registerServiceWorker}from"../chunks/app-BoNXuy6s.js";

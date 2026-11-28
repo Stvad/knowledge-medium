@@ -1,1 +1,0 @@
-export{bX as usePropertySchemas}from"../../chunks/app-BoNXuy6s.js";

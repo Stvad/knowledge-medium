@@ -1,1 +1,0 @@
-export{BG as BooleanPropertyEditor,VG as DatePropertyEditor,HG as ListPropertyEditor,UG as NumberPropertyEditor,WG as ObjectPropertyEditor,GG as StringPropertyEditor,KG as UrlPropertyEditor,qG as defaultValueForShape,JG as degradedFallbackSchema,YG as inferTypeFromValue,XG as resolvePropertyDisplay}from"../../../chunks/app-BoNXuy6s.js";

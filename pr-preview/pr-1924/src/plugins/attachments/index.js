@@ -1,1 +1,0 @@
-export{aw as attachmentsPlugin}from"../../../chunks/app-BoNXuy6s.js";

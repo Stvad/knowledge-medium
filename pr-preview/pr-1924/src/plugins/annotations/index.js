@@ -1,1 +1,0 @@
-export{Am as annotationsPlugin}from"../../../chunks/app-BoNXuy6s.js";

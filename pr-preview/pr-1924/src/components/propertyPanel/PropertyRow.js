@@ -1,1 +1,0 @@
-export{FG as PropertyRow,IG as PropertyValueCell}from"../../../chunks/app-BoNXuy6s.js";

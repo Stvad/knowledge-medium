@@ -1,1 +1,0 @@
-export{kG as BlockProperties}from"../../chunks/app-BoNXuy6s.js";

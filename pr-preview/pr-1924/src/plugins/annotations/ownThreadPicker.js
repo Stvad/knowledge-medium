@@ -1,1 +1,0 @@
-export{sh as moveCommentToOwnThread}from"../../../chunks/app-BoNXuy6s.js";

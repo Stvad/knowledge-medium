@@ -1,1 +1,0 @@
-export{tft as MIGRATIONS_PAGE_ALIAS,nft as getOrCreateMigrationsPage,rft as migrationsPageBlockId,ift as migrationsPageSpec}from"../../chunks/app-BoNXuy6s.js";

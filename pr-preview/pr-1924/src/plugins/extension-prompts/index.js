@@ -1,1 +1,0 @@
-export{uL as ExtensionPromptSurface,dL as extensionPromptsExtension}from"../../../chunks/app-BoNXuy6s.js";

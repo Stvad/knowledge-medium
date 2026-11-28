@@ -1,1 +1,0 @@
-export{kt as bootstrapWorkspace}from"../../chunks/app-BoNXuy6s.js";

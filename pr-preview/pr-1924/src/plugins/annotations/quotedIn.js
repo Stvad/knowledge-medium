@@ -1,1 +1,0 @@
-export{Mm as quotedInFooterContribution}from"../../../chunks/app-BoNXuy6s.js";

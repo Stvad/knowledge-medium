@@ -1,1 +1,0 @@
-export{yL as approveExtensionHere}from"../../chunks/app-BoNXuy6s.js";

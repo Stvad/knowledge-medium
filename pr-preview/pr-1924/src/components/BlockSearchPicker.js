@@ -1,1 +1,0 @@
-export{WC as BlockSearchPicker}from"../../chunks/app-BoNXuy6s.js";

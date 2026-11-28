@@ -1,1 +1,0 @@
-export{rY as isIOS,iY as isMacPlatform}from"../../chunks/app-BoNXuy6s.js";

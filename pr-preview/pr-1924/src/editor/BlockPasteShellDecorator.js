@@ -1,1 +1,0 @@
-export{XI as BlockPasteShellDecorator,ZI as blockPasteShellDecorator}from"../../chunks/app-BoNXuy6s.js";

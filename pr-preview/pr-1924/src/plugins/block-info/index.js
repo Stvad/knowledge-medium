@@ -1,1 +1,0 @@
-export{bx as blockInfoPlugin}from"../../../chunks/app-BoNXuy6s.js";

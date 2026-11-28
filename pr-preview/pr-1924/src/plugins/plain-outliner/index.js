@@ -1,1 +1,0 @@
-export{ik as plainOutlinerPlugin}from"../../../chunks/app-BoNXuy6s.js";

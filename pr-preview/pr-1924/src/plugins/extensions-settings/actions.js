@@ -1,1 +1,0 @@
-export{Qr as openExtensionsSettingsAction}from"../../../chunks/app-BoNXuy6s.js";

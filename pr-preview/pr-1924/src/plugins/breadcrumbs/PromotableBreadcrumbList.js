@@ -1,1 +1,0 @@
-export{$O as PromotableBreadcrumbList}from"../../../chunks/app-BoNXuy6s.js";

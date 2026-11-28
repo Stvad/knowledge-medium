@@ -1,1 +1,0 @@
-export{mv as extensionApiCatalog,hv as extensionApiRuntimeExports}from"../../chunks/app-BoNXuy6s.js";

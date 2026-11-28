@@ -1,1 +1,0 @@
-export{Ert as agree,Drt as pluralize}from"../../chunks/app-BoNXuy6s.js";

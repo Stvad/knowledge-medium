@@ -1,1 +1,0 @@
-export{Vc as MigrationGate}from"../../../chunks/app-BoNXuy6s.js";

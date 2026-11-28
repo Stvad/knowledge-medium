@@ -1,1 +1,0 @@
-export{aQ as staticDataExtensions}from"../../chunks/app-BoNXuy6s.js";
