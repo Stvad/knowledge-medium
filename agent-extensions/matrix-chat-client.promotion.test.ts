@@ -71,6 +71,7 @@ import matrixContributions, {
   matrixIngestEffect,
   messageNodeId,
   nextBatchKey,
+  publishDeviceCheckpoint,
   tokenKey,
   roomIdProp,
 } from './matrix-chat-client.tsx'
@@ -118,10 +119,6 @@ const setup = async (): Promise<Repo> => {
   return repo
 }
 
-/** Configure the extension the way the setup dialog would, and pre-seed the
- *  cursor: ingest deliberately ignores the events of a cursor-less first sync
- *  (that call only establishes a position), so without one no message is ever
- *  read. */
 const configureIngest = async (repo: Repo): Promise<void> => {
   window.localStorage.setItem(tokenKey(destination), 'secret-token')
   window.localStorage.setItem(
@@ -132,6 +129,8 @@ const configureIngest = async (repo: Repo): Promise<void> => {
   await block.set(homeserverProp, HOMESERVER)
   await block.set(roomIdProp, ROOM)
   await block.set(autoStartProp, true)
+  for (let upload; (upload = await sharedDb.db.getNextCrudTransaction());) await upload.complete()
+  await publishDeviceCheckpoint(repo, {...destination, autoStart: true, accessToken: 'secret-token'})
 }
 
 const messageEvent = (eventId: string, body: string) => ({

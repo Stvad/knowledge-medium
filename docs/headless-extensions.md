@@ -177,6 +177,15 @@ To allowlist an extension or take a new version, the operator:
 
 **Rollout.** No mixed-version machinery. The host is in the drain set: an extension that imports a new kernel export means deploy, update the checkout, restart the host.
 
+### Moving an existing Matrix room from a tab to the host
+
+1. Update and re-approve the installed Matrix extension on the original writer. Reload or close tabs running the older copy. Keep the room credential and the original browser storage until the handoff is verified.
+2. For an upgrade from a device-local cursor, let the original writer finish uploading and resolve rejected uploads. On **that writer**, run **Matrix: publish this writer’s saved position** once. A new room with no prior ingest can instead use **Matrix: Start fresh from now (new room)**, which explicitly skips earlier history. If an established room has lost its position, recover the original writer or a backup containing a known earlier position.
+3. Wait until the receiving replica can read the room's **Matrix room checkpoint**. It records the homeserver origin, room ID and opaque `matrix-checkpoint:nextBatch` in a workspace block. Resume always uses that shared position. A pending or quarantined upload leaves the checkpoint behind, so the next writer can replay the interval. Further idle polls advance the checkpoint once the messages have uploaded. No cursor needs copying.
+4. On a host with Matrix extension loading enabled (slices 2 and 3), configure the owner's preferences page, allowlist the reviewed extension and stop the daemon. Run `pnpm headless storage set <config.json> '<key>'` and supply the Matrix **access token** at the prompt. The key is `knowledge-medium:matrix:token:v2:` followed by the compact JSON array `["<workspace-id>","https://<homeserver-origin>","<room-id>"]`. Keep the same Matrix account and room. The access token stays in device storage. The sync position is visible to workspace readers and is encrypted with the block properties in an encrypted workspace.
+5. Start the host and check its Matrix diagnostic. Run **Matrix: stop message ingest on this device** in the old browser. Its other tabs observe the local stop marker. Both devices keep their credentials and the shared auto-start preference.
+6. With the host as the only writer, send a recognizable room message and verify it appears exactly once in the graph. If the host cannot ingest, run **Matrix: start message ingest** in the original browser to replay from the shared checkpoint. The same sequence works in reverse when handing ingest back.
+
 ## 8. Where tab and host differ
 
 Everything else is the same code on both: the runtime controller and resolver, the loader and its gates, the record shape, the transpile and its import rule, the freezer, the reconciler, every data facet, and the extensions' own source.

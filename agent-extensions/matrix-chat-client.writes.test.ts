@@ -20,7 +20,7 @@ vi.mock('@/data/targets.js', async importOriginal => ({
   createOrRestoreTargetBlock: writes.tag,
 }))
 
-import {nextBatchKey, pollLoop} from './matrix-chat-client.tsx'
+import {checkpointId, pollLoop} from './matrix-chat-client.tsx'
 
 const config = {
   workspaceId: 'first', baseUrl: 'https://matrix.test', roomId: '!room:matrix.test',
@@ -35,6 +35,9 @@ function fixture(body = 'example') {
   }
   const repo = {
     activeWorkspaceId: config.workspaceId,
+    load: async (id: string) => id === checkpointId(config) ? {
+      workspaceId: config.workspaceId, deleted: false, properties: {types: ['matrix-checkpoint'], 'matrix-checkpoint:nextBatch': 'before'},
+    } : null,
     db: {getOptional: vi.fn(async () => null)},
     snapshotTypeRegistries: () => ({}),
     tx: (run: (writer: typeof tx) => Promise<void>) => run(tx),
@@ -44,10 +47,7 @@ function fixture(body = 'example') {
   const batch = {next_batch: 'after', rooms: {join: {[config.roomId]: {timeline: {events: [event]}}}}}
   const client = {http: {authedRequest: vi.fn().mockResolvedValueOnce(batch)}}
   const switchWorkspace = () => { repo.activeWorkspaceId = 'second' }
-  const run = () => {
-    localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch: 'before'}))
-    return pollLoop(repo, config, new AbortController().signal, client)
-  }
+  const run = () => pollLoop(repo, config, new AbortController().signal, client)
   return {tx, repo, switchWorkspace, run}
 }
 
