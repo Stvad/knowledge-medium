@@ -931,6 +931,29 @@ describe('dynamicExtensionsExtension — gate 2 (device-local trust / #67)', () 
     }
   })
 
+  it('keeps the live import warning when an approval record lacks the static-import flag', async () => {
+    const source = "void import('https://cdn.example/lazy.mjs'); export default []"
+    const block = blockData({id: 'approval-without-static-flag', content: source})
+    const approvalStatusReporter = vi.fn()
+    const restore = setExtensionCompilePlatform({allowUnpinnedLive: true, instantiate: async () => ({default: []})})
+    try {
+      await approveExtension(block.id, source, persistent)
+      const stored = await persistent.read(block.id)
+      if (!stored?.importsUnpinned) throw new Error('Expected an approval with live imports')
+      const approval = {...stored}
+      delete approval.hasStaticUnpinnedImports
+      await persistent.write(block.id, approval)
+
+      await resolveFacetRuntime(loadExtensions([block], {overrides: enableBlocks([block]), approvalStatusReporter}))
+
+      expect(approvalStatusReporter).toHaveBeenCalledWith(block.id, expect.objectContaining({
+        kind: 'imports-unpinned', hasStaticUnpinnedImports: false,
+      }))
+    } finally {
+      restore()
+    }
+  })
+
   it('offers Pin imports even when the live module fails to link', async () => {
     const source = "import 'https://cdn.example/fixture.mjs'"
     const block = blockData({id: 'offline-import', content: source})

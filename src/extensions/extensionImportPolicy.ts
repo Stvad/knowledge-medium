@@ -94,12 +94,10 @@ export function createExtensionImportTransform() {
     for (const reference of references) {
       const url = reference.source.value
       rejectAuthoredPlaceholder(url)
+      const integrity = transform.pinnedImports.get(url)
       if (isUnpinnedHttpsModuleReference(reference)) {
         reference.source.value = rewriteLive(url)
-        continue
-      }
-      const integrity = transform.pinnedImports.get(url)
-      if (integrity && isRuntimeHttpsModuleReference(reference)) {
+      } else if (integrity && isRuntimeHttpsModuleReference(reference)) {
         reference.source.value = vendoredImportSpecifier(integrity)
         reference.attributes = []
       }

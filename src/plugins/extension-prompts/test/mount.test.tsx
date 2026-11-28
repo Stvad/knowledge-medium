@@ -101,6 +101,7 @@ describe('ExtensionPromptSurface', () => {
     store.report('fixture', prompt)
     renderSurface(store)
     await waitFor(() => expect(optsFor('fixture').action?.label).toBe('Pin imports'))
+    expect(showInfo).toHaveBeenLastCalledWith(expect.not.stringContaining('Use a static import'), expect.anything())
     await act(async () => { clickAction('fixture') })
     expect(approveExtensionHere).toHaveBeenCalledWith(repo, 'fixture', expect.objectContaining(prompt))
   })
@@ -122,6 +123,7 @@ describe('ExtensionPromptSurface', () => {
     store.report('fixture', revision)
     renderSurface(store)
     await waitFor(() => expect(optsFor('fixture').action?.label).toBe('Update'))
+    expect(showInfo).toHaveBeenLastCalledWith(expect.not.stringContaining('loads imports from a live URL'), expect.anything())
 
     act(() => store.report('fixture', {...revision, importsUnpinned: true}))
     await waitFor(() => expect(showInfo).toHaveBeenLastCalledWith(expect.stringContaining('older approved version loads imports from a live URL'), expect.anything()))
