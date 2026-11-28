@@ -1,1 +1,1 @@
-export{EU as ExtensionRenderBoundary}from"../../chunks/app-Bb_Mjsf2.js";
+export{qU as ExtensionRenderBoundary}from"../../chunks/app-CtFBRNO9.js";

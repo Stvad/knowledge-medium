@@ -1,1 +1,1 @@
-export{S_ as agentDispatchCompanionPlugin}from"../../../chunks/app-Bb_Mjsf2.js";
+export{C_ as agentDispatchCompanionPlugin}from"../../../chunks/app-CtFBRNO9.js";
