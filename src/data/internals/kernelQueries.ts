@@ -14,6 +14,8 @@
  */
 
 import { z } from 'zod'
+import { chunk } from 'lodash-es'
+import { buildInClause, MAX_IDS_PER_IN_CLAUSE } from './sqlBinds'
 import {
   defineQuery,
   blockPredicateSchema,
@@ -30,7 +32,7 @@ import {
   type AnyPropertySchema,
   type PropertyChildrenView,
 } from '@/data/api'
-import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, editTimeSql, type BlockRow } from '@/data/blockSchema'
+import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, editTimeSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { declaresExtensionType, EXTENSION_TYPE, SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
@@ -108,6 +110,22 @@ export const SELECT_BLOCK_BY_ID_SQL = `
   WHERE id = ?
     AND deleted = 0
 `
+
+export const readLiveRowsForIds = async (
+  db: Pick<ProcessorReadDb, 'getAll'>, workspaceId: string, ids: readonly string[],
+): Promise<BlockData[]> => {
+  if (ids.length === 0) return []
+  const out: BlockData[] = []
+  for (const batch of chunk(ids, MAX_IDS_PER_IN_CLAUSE)) {
+    const rows = await db.getAll<BlockRow>(
+      `SELECT ${SELECT_BLOCK_COLUMNS_SQL} FROM blocks
+        WHERE workspace_id = ? AND deleted = 0 AND id IN (${buildInClause(batch.length)})`,
+      [workspaceId, ...batch],
+    )
+    out.push(...rows.map(parseBlockRow))
+  }
+  return out
+}
 
 /** Type filter — array membership via the trigger-maintained block_types index. */
 export const SELECT_BLOCKS_BY_TYPE_SQL = `

@@ -205,6 +205,23 @@ export const definitionNameOf = (
   return typeof name === 'string' ? name : undefined
 }
 
+export const readLivePropertyDefinitionNames = async (
+  db: BagQuery, workspaceId: string, names: readonly string[],
+): Promise<Map<string, string[]>> => {
+  if (names.length === 0) return new Map()
+  const rows = await readPropertyDefinitionBags(db, workspaceId)
+  const wanted = new Set(names)
+  const found = new Map<string, string[]>()
+  for (const row of rows) {
+    const name = definitionNameOf(row.bag)
+    if (name === undefined || !wanted.has(name)) continue
+    const ids = found.get(name) ?? []
+    ids.push(row.id)
+    found.set(name, ids)
+  }
+  return found
+}
+
 /** Cells per property key on live blocks in the workspace — one row per
  *  (block, key), so a bag with a duplicated key counts twice.
  *
