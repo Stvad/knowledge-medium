@@ -1,1 +1,1 @@
-export{I8 as attachmentCleanerIOVerb}from"../../chunks/app-qFT5fKEQ.js";
+export{G8 as attachmentCleanerIOVerb}from"../../chunks/app-CzzPTp_C.js";
