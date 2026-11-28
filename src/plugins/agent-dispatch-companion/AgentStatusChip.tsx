@@ -7,9 +7,10 @@
  *  A top-right gutter item: `BlockGutterHost` places it, and with no chip
  *  the item renders null. */
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { ClipboardCopy, Square } from 'lucide-react'
+import { ClipboardCopy, RotateCcw, Square } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
+import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
 import type {
   BlockGutterItem,
   BlockGutterItemContribution,
@@ -23,10 +24,12 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { showError } from '@/utils/toast.js'
 import { activityStateFor, chipActivityDetails, chipStateFor, chipTitle, compactActivityLabel, type ActivityState, type ChipState } from './chipState.ts'
 import { clearAskedAgent, isAskedAgent, subscribeAskedAgent } from './askedStore.ts'
 import { cancelAgent } from './cancelAgent.ts'
 import { agentResumeCommandForProperties, copyAgentResumeCommand } from './resumeCommand.ts'
+import { canRetryAgent, retryAgent } from './retryAgent.ts'
 
 /** One clock serves the elapsed run time and activity age. */
 const useRunningClock = (running: boolean): number => {
@@ -92,6 +95,7 @@ const chipBody = (chip: ChipState, activity: ActivityState | null) => {
 
 type ChipViewState = ChipState & {
   resumeCommand: string | null
+  retryable: boolean
 }
 
 const AgentStatusChipMenu = ({
@@ -105,8 +109,10 @@ const AgentStatusChipMenu = ({
   const activity = activityStateFor(chip, nowMs)
   const title = chipTitle(chip, activity, nowMs)
   const className = `${CHIP_CLASS}${activity?.stalled ? ' text-amber-700 dark:text-amber-400 ring-1 ring-amber-500' : ''}`
+  const readOnly = useIsReadOnly(block.repo)
+  const canRetry = chip.retryable && !readOnly
   const canStop = chip.kind === 'running' && !chip.cancelling
-  if (!chip.resumeCommand && !canStop) {
+  if (!chip.resumeCommand && !canStop && !canRetry) {
     return (
       <span
         title={title}
@@ -138,6 +144,14 @@ const AgentStatusChipMenu = ({
             {chip.executorLabel} · {chipActivityDetails(chip, activity, nowMs)}
           </DropdownMenuLabel>
         )}
+        {canRetry && (
+          <DropdownMenuItem onSelect={() => {
+            void retryAgent(block).catch(() => showError("Couldn't queue the Agent retry."))
+          }}>
+            <RotateCcw className="h-4 w-4" />
+            Retry
+          </DropdownMenuItem>
+        )}
         {chip.resumeCommand && (
           <DropdownMenuItem onSelect={() => { void copyAgentResumeCommand(block) }}>
             <ClipboardCopy className="h-4 w-4" />
@@ -164,7 +178,7 @@ const AgentStatusChipItem: BlockRenderer = ({block}) => {
     selector: doc => {
       const properties = doc?.properties as Record<string, unknown> | undefined
       const chip = chipStateFor(properties)
-      return chip ? {...chip, resumeCommand: agentResumeCommandForProperties(properties)} : null
+      return chip ? {...chip, resumeCommand: agentResumeCommandForProperties(properties), retryable: canRetryAgent(doc)} : null
     },
   })
   const asked = useSyncExternalStore(subscribeAskedAgent, () => isAskedAgent(block.id))
@@ -174,7 +188,7 @@ const AgentStatusChipItem: BlockRenderer = ({block}) => {
     if (propsChip) clearAskedAgent(block.id)
   }, [propsChip, block.id])
 
-  const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null} : null)
+  const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null, retryable: false} : null)
   if (!chip) return null
 
   return <AgentStatusChipMenu key={`${chip.kind}:${chip.cancelling}`} chip={chip} block={block} />

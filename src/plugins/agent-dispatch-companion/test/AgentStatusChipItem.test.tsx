@@ -1,16 +1,26 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import type { BlockGutterItem } from '@/extensions/blockInteraction.js'
 
-const { useHandleMock } = vi.hoisted(() => ({ useHandleMock: vi.fn() }))
+const { useHandleMock, retryAgentMock } = vi.hoisted(() => ({
+  useHandleMock: vi.fn(),
+  retryAgentMock: vi.fn(async () => {}),
+}))
 vi.mock('@/hooks/block.js', () => ({ useHandle: useHandleMock }))
+vi.mock('../retryAgent.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../retryAgent.ts')>(),
+  retryAgent: retryAgentMock,
+}))
 
 import { agentStatusChipContribution } from '../AgentStatusChip.tsx'
 import { clearAskedAgent, isAskedAgent, markAskedAgent } from '../askedStore.ts'
 
-const block = { id: 'block-1' } as Block
+const block = {
+  id: 'block-1',
+  repo: {isReadOnly: false, onReadOnlyChange: () => () => {}},
+} as unknown as Block
 
 const Chip = (() => {
   const item = agentStatusChipContribution({ isTopLevel: false } as never) as BlockGutterItem
@@ -42,6 +52,21 @@ describe('AgentStatusChipItem', () => {
     const { container } = render(<Chip block={block} />)
     expect(chipNode(container)?.getAttribute('data-agent-dispatch-chip')).toBe('done')
     expect(container.textContent).toContain('Codex')
+  })
+
+  it('offers Retry on a failed chip even when there is no session to resume', () => {
+    withProperties({
+      'agent:status': 'error',
+      'agent:watcher': 'review',
+      'agent:error': 'Authentication expired',
+    })
+    render(<Chip block={block} />)
+
+    const trigger = screen.getByRole('button', {name: /Authentication expired/})
+    fireEvent.pointerDown(trigger, {button: 0, ctrlKey: false, pointerType: 'mouse'})
+    fireEvent.click(screen.getByRole('menuitem', {name: 'Retry'}))
+
+    expect(retryAgentMock).toHaveBeenCalledExactlyOnceWith(block)
   })
 
   it('updates the running activity age and warning on the mounted chip', () => {
