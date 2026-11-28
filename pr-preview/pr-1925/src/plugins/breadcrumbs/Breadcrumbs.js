@@ -1,1 +1,1 @@
-export{$O as Breadcrumbs}from"../../../chunks/app-D4v4kqTY.js";
+export{$O as Breadcrumbs}from"../../../chunks/app-Bs0NPOmG.js";

@@ -1,1 +1,1 @@
-export{K_t as SYSTEM_AUTHOR_PREFIX,q_t as isSystemAuthor,J_t as systemAuthor}from"../../../chunks/app-D4v4kqTY.js";
+export{q_t as SYSTEM_AUTHOR_PREFIX,J_t as isSystemAuthor,Y_t as systemAuthor}from"../../../chunks/app-Bs0NPOmG.js";
