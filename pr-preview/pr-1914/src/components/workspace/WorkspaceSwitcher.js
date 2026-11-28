@@ -1,1 +1,1 @@
-export{Tk as WorkspaceSwitcher}from"../../../chunks/app-CzemfkPg.js";
+export{Tk as WorkspaceSwitcher}from"../../../chunks/app-Bb_Mjsf2.js";
