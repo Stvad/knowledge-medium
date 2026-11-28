@@ -206,9 +206,13 @@ it.each(['pending', 'quarantined'] as const)(
   'refuses to bootstrap a copied cursor when a writer has a %s upload', async state => {
     localStorage.setItem(tokenKey(config), config.accessToken)
     localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S1'}))
-    await sender.repo.tx(tx => tx.create({
-      workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'waiting for upload',
+    const id = await sender.repo.tx(tx => tx.create({
+      workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'uploaded',
     }), {scope: ChangeScope.BlockDefault})
+    await upload(sender)
+    await download(sender)
+    expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [id])).toBeTruthy()
+    await sender.repo.tx(tx => tx.update(id, {content: 'waiting for upload'}), {scope: ChangeScope.BlockDefault})
     expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeTruthy()
     if (state === 'quarantined') await quarantineSenderUploads()
     await expect(publishDeviceCheckpoint(sender.repo, config)).rejects.toThrow(/uploads/i)
@@ -567,4 +571,15 @@ it('holds the processed message identity when a local edit removes its Matrix me
   await download(receiver)
   expect(await poll(receiver, [since => response(since, stream)])).toEqual(['S0', 'S1'])
   expect(await messages(receiver)).toEqual(stream)
+})
+
+it('does not schedule checkpoint publication for a message without an event identity', async () => {
+  await seed()
+  const write = vi.spyOn(receiver.repo, 'tx')
+  const body = {next_batch: 'S1', rooms: {join: {[config.roomId]: {
+    timeline: {events: [{type: 'm.room.message', content: {body: 'missing identity'}}]},
+  }}}}
+  expect(await poll(receiver, [() => body])).toEqual(['S0', 'S1'])
+  expect(write).not.toHaveBeenCalled()
+  expect(await checkpoint(receiver)).toBe('S0')
 })
