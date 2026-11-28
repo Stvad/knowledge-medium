@@ -33,7 +33,8 @@ import {
   projectedPropertyDefinitionFieldId,
   type ProjectedPropertyDefinition,
 } from '@/data/propertyDefinitionRegistry'
-import {requirePropertyRegistryFor} from '@/data/internals/propertyKeyScan'
+import {definitionNameOf, readLivePropertyDefinitionNames, requirePropertyRegistryFor} from '@/data/internals/propertyKeyScan'
+import {readLiveRowsForIds} from '@/data/internals/kernelQueries'
 import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
 import {peekRowProperty} from '@/data/rowProperty'
 import {
@@ -297,19 +298,54 @@ export interface AddSchemaArgs {
 
 type OnSchemaCreate = (tx: Tx, fieldId: string) => Promise<void>
 
-/** Promotion after a rename or deletion requires writers to have synced that history before choosing a slot. */
+export class PromotionViewGapError extends Error {
+  override readonly name = 'PromotionViewGapError'
+}
+
+const assertPromotionCanMint = async (repo: Repo, workspaceId: string, tx?: Tx): Promise<void> => {
+  const gap = await repo.workspaceViewGap(workspaceId, tx)
+  if (gap) throw new PromotionViewGapError(`Cannot promote a new property because this device is not caught up. ${gap.reason}`)
+}
+
+const promotionHolders = async (repo: Repo, workspaceId: string, names: readonly string[], tx?: Tx) => {
+  const byName = tx
+    ? await tx.livePropertyDefinitionNames(workspaceId, names)
+    : await readLivePropertyDefinitionNames(repo.db, workspaceId, names)
+  const ids = [...byName.values()].flat()
+  const stored = tx ? await tx.liveRowsForIds(workspaceId, ids) : await readLiveRowsForIds(repo.db, workspaceId, ids)
+  const holders = new Map<string | undefined, BlockData[]>()
+  for (const row of stored) {
+    const metadata = parsePropertyDefinitionMetadata(row)
+    // A seed only claims its declared name. An unreadable claimant reserves its stored name.
+    const name = metadata
+      ? effectivePropertyDefinitionName(metadata, requirePropertyRegistryFor(repo, workspaceId).seedsByKey)
+      : definitionNameOf(row.properties)
+    const group = holders.get(name) ?? []
+    group.push(row)
+    holders.set(name, group)
+  }
+  return holders
+}
+
+/** Check the whole import before its first write, including definitions that have arrived ahead of projection. */
+export const preflightPropertyPromotion = async (
+  repo: Repo, workspaceId: string, names: readonly string[],
+): Promise<'reuse' | 'mint'> => {
+  const normalized = names.map(name => name.trim())
+  const holders = await promotionHolders(repo, workspaceId, normalized)
+  if (normalized.every(name => holders.has(name))) return 'reuse'
+  await assertPromotionCanMint(repo, workspaceId)
+  return 'mint'
+}
+
+/** A rename uploaded after our last checkpoint, or a download yet to start just after connecting, can still escape the check. */
 const promotionSlot = async (repo: Repo, tx: Tx, workspaceId: string, name: string) => {
   // A live same-name definition at the derived id is reused with its stored codec, including before projection.
   // A legacy random-id claimant owns the name on exactly the same terms and keeps all of its field rows.
-  const holders = (await tx.livePropertyDefinitionNames(workspaceId, [name])).get(name)
-  const registry = requirePropertyRegistryFor(repo, workspaceId)
-  const stored = await tx.liveRowsForIds(workspaceId, holders ?? [])
-  // A seed answers only to its declared name. An unreadable claimant still reserves its stored name.
-  const existing = stored.map(row => projectDefinition(row, repo)).filter(definition =>
-    !isParsedPropertyDefinition(definition) ||
-    effectivePropertyDefinitionName(definition.metadata, registry.seedsByKey) === name)
-  if (existing.length) return {existing} as const
+  const existing = (await promotionHolders(repo, workspaceId, [name], tx)).get(name)
+  if (existing) return {existing: existing.map(row => projectDefinition(row, repo))} as const
 
+  await assertPromotionCanMint(repo, workspaceId, tx)
   const namespace = await derivedIdNamespaceInTx(tx, tx.meta.user.id, workspaceId, PROMOTION_NAMESPACE)
   for (let slot = 0; ; slot++) {
     const id = promotedPropertyDefinitionId(namespace, workspaceId, name, slot)
@@ -491,7 +527,9 @@ export class UserSchemasService {
       }
       assertGeneration('creation')
       if (creation === 'promotion') {
-        await resolveDerivedIdNamespace(this.repo, workspaceId, PROMOTION_NAMESPACE)
+        if (await preflightPropertyPromotion(this.repo, workspaceId, [name]) === 'mint') {
+          await resolveDerivedIdNamespace(this.repo, workspaceId, PROMOTION_NAMESPACE)
+        }
       } else {
         assertNameAvailable()
       }

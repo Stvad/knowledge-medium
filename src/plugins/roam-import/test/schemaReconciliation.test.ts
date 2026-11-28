@@ -4,6 +4,8 @@ import {v5 as uuidv5} from 'uuid'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import {propertyChangeScopeProp, seedKeyProp, showPropertiesProp} from '@/data/properties'
 import {seedWorkspaceRow, storeWorkspaceKey, stubLocalStorage} from '@/data/test/e2eeFixtures'
+import {withOuterReadsRefused} from '@/data/test/refuseOuterReads'
+import {PromotionViewGapError} from '@/data/userSchemasService'
 import {requireWorkspaceKeys} from '@/sync/keys/openWorkspaceKeys'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {deriveWorkspaceIdNamespace} from '@/sync/crypto/derivedIdNamespace'
@@ -56,6 +58,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 afterEach(async () => {
+  vi.restoreAllMocks()
   env.dispose()
   await env.h.cleanup()
 })
@@ -256,7 +259,7 @@ describe('automatic promotion identity', () => {
 
   // Raw sync-shaped writes leave the projector behind the durable row.
   const placeDefinition = async (id: string, storedName: string, deleted = false) => {
-    await env.repo.projectors.whenPrimed(WS)
+    await env.repo.projectors.whenPrimed(env.repo.activeWorkspaceId!)
     await env.repo.mutate.createChild({id, parentId: env.repo.propertiesPageId!})
     await env.repo.db.writeTransaction(tx => tx.execute(
       'UPDATE blocks SET properties_json = ?, deleted = ? WHERE id = ?',
@@ -335,6 +338,58 @@ describe('automatic promotion identity', () => {
     expect(await env.repo.db.get('SELECT deleted FROM blocks WHERE id = ?', [owner])).toEqual({deleted: 1})
     expect(await env.repo.undo()).toBe(false)
     expect(await env.repo.db.get('SELECT deleted FROM blocks WHERE id = ?', [id])).toEqual({deleted: 0})
+  })
+
+  it('reuses an unprojected definition on a locked, disconnected device', async () => {
+    const id = 'offline-definition'
+    const ws = 'locked-holder-workspace'
+    env.repo.setActiveWorkspaceId(ws)
+    await getOrCreatePropertiesPage(env.repo, ws)
+    await placeDefinition(id, name)
+    await seedWorkspaceRow(env.h.db, ws, env.repo.user.id, 'e2ee')
+    await expect(requireWorkspaceKeys(getWorkspaceKeyStore(), env.repo.user.id, ws)).rejects.toThrow(/unlock/)
+
+    const keyRead = vi.spyOn(getWorkspaceKeyStore(), 'get')
+    const gap = vi.spyOn(env.repo, 'syncViewGap').mockResolvedValue('disconnected')
+
+    expect(await register()).toBe(id)
+    expect(env.repo.propertySchemas.get(name)?.codec.type).toBe('number')
+    expect(keyRead).not.toHaveBeenCalled()
+    expect(gap).not.toHaveBeenCalled()
+  })
+
+  it('refuses a stale mint before unlocking the namespace or opening a write transaction', async () => {
+    await seedWorkspaceRow(env.h.db, WS, env.repo.user.id, 'e2ee')
+    const namespace = vi.spyOn(env.h.db, 'getOptional')
+    const keyRead = vi.spyOn(getWorkspaceKeyStore(), 'get')
+    const tx = vi.spyOn(env.repo, 'tx')
+    vi.spyOn(env.repo, 'syncViewGap').mockResolvedValue('download in progress')
+    await expect(env.repo.userSchemas.ensurePromotedSchema({name, presetId: 'string'})).rejects.toMatchObject({
+      name: 'PromotionViewGapError', message: expect.stringMatching(/not caught up.*download in progress/i),
+    })
+    expect(tx).not.toHaveBeenCalled()
+    expect(namespace.mock.calls.some(([sql]) => sql.includes('encryption_mode'))).toBe(false)
+    expect(keyRead).not.toHaveBeenCalled()
+  })
+
+  it('refuses inside the write transaction if the device falls behind after preflight', async () => {
+    const {repo} = env
+    const ws = 'newly-sealed-workspace'
+    repo.setActiveWorkspaceId(ws)
+    await getOrCreatePropertiesPage(repo, ws)
+    expect(await repo.workspaceViewGap(ws)).toBeNull()
+    const write = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementationOnce(async (fn, opts) => {
+      // Both the mode and the staged rows can change while the writer waits for the lock.
+      await seedWorkspaceRow(env.h.db, ws, repo.user.id, 'e2ee')
+      await env.h.db.execute("INSERT INTO blocks_synced_changes (id, op) VALUES ('late-definition', 'upsert')")
+      return write(fn, opts)
+    })
+    await withOuterReadsRefused(env.h.db, async () => {
+      await expect(repo.userSchemas.ensurePromotedSchema({name, presetId: 'string'}))
+        .rejects.toBeInstanceOf(PromotionViewGapError)
+    })
+    expect(await env.h.db.getAll('SELECT id FROM blocks WHERE parent_id = ?', [repo.propertiesPageId])).toEqual([])
   })
 
   it('derives the sealed slot from the workspace key and trimmed, case-sensitive registry name', async () => {

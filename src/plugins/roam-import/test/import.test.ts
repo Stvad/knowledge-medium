@@ -22,6 +22,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { addBlockTypeToProperties, aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -180,6 +181,33 @@ const readBlock = (id: string) =>
     deleted: 0 | 1
   }>('SELECT id, parent_id, content, properties_json, references_json, deleted FROM blocks WHERE id = ?', [id])
 
+const stageUnverifiedDownload = async () => {
+  const id = 'unverified-download'
+  await env.h.db.writeTransaction(async tx => {
+    await tx.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+      id,
+      workspaceId: WORKSPACE,
+      parentId: null,
+      orderKey: 'a0',
+      content: 'Unverified download',
+      properties: {},
+      references: [],
+      createdAt: 1,
+      updatedAt: 1,
+      userUpdatedAt: 1,
+      createdBy: USER_ID,
+      updatedBy: USER_ID,
+      deleted: false,
+    }))
+    await tx.execute('DELETE FROM blocks_synced_changes WHERE id = ?', [id])
+  })
+  expect(await env.repo.workspaceViewGap(WORKSPACE)).toEqual({
+    reason: expect.stringContaining('have not been verified locally'),
+    transient: false,
+  })
+  return id
+}
+
 const readChildren = (parentId: string) =>
   env.h.db.getAll<{id: string, content: string}>(
     'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
@@ -257,7 +285,73 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(page?.updated_at).toBeGreaterThan(1_600_000_000_000)
   })
 
-  it('keeps reference-looking text when registration adopts a synced string definition', async () => {
+  it('refuses a new property before reconciling pages or writing rows while the view is stale', async () => {
+    const oldName = 'roam:existing'
+    await env.repo.whenPropertyDefinitionsReady(WORKSPACE)
+    const oldId = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!})
+    await env.h.db.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [
+      JSON.stringify({types: ['property-schema'], 'property-schema:name': oldName, 'property-schema:preset': 'string'}),
+      oldId,
+    ])
+    expect(env.repo.propertySchemas.has(oldName)).toBe(false)
+    const unverifiedId = await stageUnverifiedDownload()
+    const before = await env.h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    const onProgress = vi.fn()
+    const pages: RoamExport = [
+      {title: 'Target', uid: 'newTarget'},
+      {title: 'Owner', uid: 'newOwner', children: [
+        {string: 'existing:: known', uid: 'existingAttribute'},
+        {string: 'link:: [[Target]]', uid: 'newLink'},
+      ]},
+    ]
+    const options = {workspaceId: WORKSPACE, currentUserId: USER_ID}
+
+    const preview = await importRoam(pages, env.repo, {...options, dryRun: true})
+    expect(preview.dryRun).toBe(true)
+    await expect(importRoam(pages, env.repo, {...options, onProgress})).rejects.toThrow(
+      /have not been verified locally/,
+    )
+    expect(onProgress.mock.calls.flat().join(' ')).not.toContain('Reconciling')
+    expect(await env.h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute('DELETE FROM blocks_synced WHERE id = ?', [unverifiedId])
+      await tx.execute('DELETE FROM blocks_synced_changes WHERE id = ?', [unverifiedId])
+    })
+    expect(await env.repo.workspaceViewGap(WORKSPACE)).toBeNull()
+
+    await importRoam(pages, env.repo, options)
+    const page = await readBlock(roamBlockId(WORKSPACE, 'newOwner'))
+    const targetId = roamBlockId(WORKSPACE, 'newTarget')
+    expect(JSON.parse(page!.properties_json)['roam:link']).toEqual([targetId])
+    expect(JSON.parse(page!.references_json)).toContainEqual(expect.objectContaining({
+      id: targetId, alias: targetId, sourceField: 'roam:link',
+    }))
+  })
+
+  it('aborts content writes when the view becomes stale after preflight', async () => {
+    expect(await env.repo.workspaceViewGap(WORKSPACE)).toBeNull()
+    const before = await env.h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    let staged: Promise<string> | undefined
+    const imported = importRoam([{
+      title: 'Late download',
+      uid: 'lateDownloadPage',
+      children: [{string: 'label:: imported value', uid: 'lateDownloadLabel'}],
+    }], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+      onProgress: message => {
+        if (message.startsWith('Reconciling ')) staged = stageUnverifiedDownload()
+      },
+    })
+
+    await expect(imported).rejects.toThrow(/have not been verified locally/)
+    expect(staged).toBeDefined()
+    await staged
+    expect(await env.h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
+  it('keeps reference-looking text when a stale view still has a synced string definition', async () => {
     const name = 'roam:label'
     await env.repo.whenPropertyDefinitionsReady(WORKSPACE)
     const id = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!})
@@ -265,6 +359,7 @@ describe('importRoam', {timeout: 30_000}, () => {
       'UPDATE blocks SET properties_json = ? WHERE id = ?',
       [JSON.stringify({types: ['property-schema'], 'property-schema:name': name, 'property-schema:preset': 'string'}), id],
     ))
+    await stageUnverifiedDownload()
     expect(env.repo.propertySchemas.has(name)).toBe(false)
     await importRoam([
       {title: 'Target', uid: 'labelTarget'},

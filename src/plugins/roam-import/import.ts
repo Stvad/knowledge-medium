@@ -57,6 +57,7 @@ import {
 } from '@/data/aliasSeatNamespace'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { Repo } from '@/data/repo'
+import { preflightPropertyPromotion } from '@/data/userSchemasService'
 import { awaitWriteAheadHeadroom, runBulkWrite } from '@/data/writeAheadLog'
 import {
   parseRoamImportReferences,
@@ -201,6 +202,38 @@ export const importRoam = async (
     `${plan.aliasesUsed.size} aliases, ${plan.placeholders.length} placeholders ` +
     `(${sinceLastPhase()})`)
 
+  // Refuse a promotion that would mint a new definition before resolving any workspace aliases.
+  const allPlannedBlocks: BlockData[] = []
+  for (const desc of plan.descendants) allPlannedBlocks.push(desc.data)
+  for (const page of plan.pages) {
+    if (page.data) allPlannedBlocks.push(page.data)
+    else if (Object.keys(page.promotedFromChildren).length > 0) {
+      allPlannedBlocks.push({
+        id: page.blockId,
+        workspaceId: options.workspaceId,
+        parentId: null,
+        orderKey: 'a0',
+        content: page.title,
+        properties: page.promotedFromChildren,
+        references: [],
+        createdAt: 0,
+        updatedAt: 0,
+        userUpdatedAt: 0,
+        createdBy: options.currentUserId,
+        updatedBy: options.currentUserId,
+        deleted: false,
+      })
+    }
+  }
+  const reconciliation = collectSchemaReconciliationPlan(allPlannedBlocks, repo)
+  if (!options.dryRun) {
+    await preflightPropertyPromotion(
+      repo,
+      options.workspaceId,
+      reconciliation.toRegister.map(({name}) => name),
+    )
+  }
+
   // 1. Reconcile pages against the live workspace so we know which
   //    plannedIds get rerouted to existing alias-pages.
   log(`Reconciling ${plan.pages.length} pages against existing workspace…`)
@@ -248,35 +281,7 @@ export const importRoam = async (
     log(`Found ${typeCandidates.length} isa:: type candidates`)
   }
 
-  // Phase 4 schema reconciliation: classify every property name across
-  // the planned blocks and register a property schema for each
-  // unregistered name BEFORE content writes start. This way the
-  // descendant-chunk loop below sees a fully-populated property-schema
-  // registry; values encode through the registered codecs from the
-  // first write.
-  const allPlannedBlocks: BlockData[] = []
-  for (const desc of plan.descendants) allPlannedBlocks.push(desc.data)
-  for (const page of plan.pages) {
-    if (page.data) allPlannedBlocks.push(page.data)
-    else if (Object.keys(page.promotedFromChildren).length > 0) {
-      allPlannedBlocks.push({
-        id: page.blockId,
-        workspaceId: options.workspaceId,
-        parentId: null,
-        orderKey: 'a0',
-        content: page.title,
-        properties: page.promotedFromChildren,
-        references: [],
-        createdAt: 0,
-        updatedAt: 0,
-        userUpdatedAt: 0,
-        createdBy: options.currentUserId,
-        updatedBy: options.currentUserId,
-        deleted: false,
-      })
-    }
-  }
-  const reconciliation = collectSchemaReconciliationPlan(allPlannedBlocks, repo)
+  // Register schemas before normalizing their values or writing imported content.
   if (reconciliation.skippedReserved.length > 0) {
     plan.diagnostics.push(
       `Skipped reserved names during schema reconciliation: ${reconciliation.skippedReserved.join(', ')}`,

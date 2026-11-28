@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest'
 import { v5 as uuidv5 } from 'uuid'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { ChangeScope } from '@/data/api'
+import { PromotionViewGapError } from '@/data/userSchemasService'
 import { propertyNameProp } from '@/data/properties'
 import { propertyFieldContent } from '@/data/propertyChildren'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -104,16 +105,49 @@ const liveDefinitions = ({db}: Replica, propertiesPageId: string) => db.getAll<{
   [propertiesPageId, '$.' + JSON.stringify(propertyNameProp.name), NAME],
 )
 
-it.each(['A', 'B'] as const)('converges when replica %s uploads the new attribute first', async firstWriter => {
+const syncedReplicas = async () => {
   let serverClock = 1_800_000_000_000
   const server = createFakeSyncServer({now: () => ++serverClock})
   const a = await createReplica(replicaDbs[0], 'A', 1_700_000_000_000)
   const b = await createReplica(replicaDbs[1], 'B', 1_700_000_000_500)
-  const [first, second] = firstWriter === 'A' ? [a, b] : [b, a]
   const propertiesPage = await getOrCreatePropertiesPage(a.repo, WORKSPACE)
   await upload(a, server)
   await download(a, server)
   await download(b, server)
+  return {a, b, server, propertiesPage}
+}
+
+it.each(['rename', 'deletion'] as const)('retries after downloading an unseen %s', async change => {
+  const {a, b, server, propertiesPage} = await syncedReplicas()
+  const disconnected = vi.spyOn(b.repo, 'syncViewGap').mockResolvedValue('disconnected')
+  const original = await a.repo.userSchemas.ensurePromotedSchema({name: NAME, presetId: 'string'})
+  await upload(a, server)
+  await download(a, server)
+  await a.repo.tx(async tx => {
+    if (change === 'deletion') await tx.delete(original.fieldId)
+    else await tx.setProperty(original.fieldId, propertyNameProp, 'test:archived')
+  }, {scope: ChangeScope.BlockDefault})
+  await upload(a, server)
+
+  await expect(ingest(b)).rejects.toBeInstanceOf(PromotionViewGapError)
+  expect(await b.db.getAll('SELECT id FROM blocks WHERE id = ?', [OWNER])).toEqual([])
+  expect(await liveDefinitions(b, propertiesPage.id)).toEqual([])
+
+  await download(b, server)
+  disconnected.mockRestore()
+  const replacement = await ingest(b)
+  expect(replacement).not.toBe(original.fieldId)
+  await upload(b, server)
+  await download(a, server)
+  expect(await liveDefinitions(a, propertiesPage.id)).toEqual([{id: replacement}])
+  expect(await ownerStructure(a)).toMatchObject([{
+    content: propertyFieldContent(replacement), values: [{content: ORIGINAL}],
+  }])
+})
+
+it.each(['A', 'B'] as const)('converges when replica %s uploads the new attribute first', async firstWriter => {
+  const {a, b, server, propertiesPage} = await syncedReplicas()
+  const [first, second] = firstWriter === 'A' ? [a, b] : [b, a]
 
   const definitionA = await ingest(a)
   const definitionB = await ingest(b)

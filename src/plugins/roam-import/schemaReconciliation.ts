@@ -16,6 +16,7 @@
  *  reject the raw token strings on first read.
  */
 
+import {PromotionViewGapError} from '@/data/userSchemasService'
 import type { AnyPropertySchema, BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
@@ -291,6 +292,7 @@ export const applySchemaReconciliation = async (
     try {
       await repo.userSchemas.ensurePromotedSchema({name, presetId, config})
     } catch (err) {
+      if (err instanceof PromotionViewGapError) throw err
       const message = err instanceof Error ? err.message : String(err)
       diagnostics.push(`Failed to register schema "${name}" (preset ${presetId}): ${message}`)
     }
@@ -542,6 +544,7 @@ export const ensurePromotedPropertySchemas = async (
       await repo.userSchemas.ensurePromotedSchema(
         {name: entry.name, presetId, config})
     } catch (err) {
+      if (err instanceof PromotionViewGapError) throw err
       notes.push(
         `Could not register promoted property ${JSON.stringify(entry.name)} `
         + `(preset ${presetId}): ${err instanceof Error ? err.message : String(err)}`,
