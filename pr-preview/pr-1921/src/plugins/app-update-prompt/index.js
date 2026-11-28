@@ -1,1 +1,0 @@
-export{CL as appUpdatePromptExtension}from"../../../chunks/app-CcTNgYAa.js";

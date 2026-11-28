@@ -1,1 +1,0 @@
-export{iL as editorAutocompleteExtension}from"../../chunks/app-CcTNgYAa.js";

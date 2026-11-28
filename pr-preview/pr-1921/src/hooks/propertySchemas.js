@@ -1,1 +1,0 @@
-export{pX as usePropertySchemas}from"../../chunks/app-CcTNgYAa.js";

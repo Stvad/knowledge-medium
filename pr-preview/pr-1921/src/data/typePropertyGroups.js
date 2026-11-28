@@ -1,1 +1,0 @@
-export{qG as typePropertyGroups}from"../../chunks/app-CcTNgYAa.js";

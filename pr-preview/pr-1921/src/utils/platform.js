@@ -1,1 +1,0 @@
-export{XJ as isIOS,ZJ as isMacPlatform}from"../../chunks/app-CcTNgYAa.js";

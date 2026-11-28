@@ -1,1 +1,0 @@
-export{pnt as loadTypeIdsByBlock}from"../../chunks/app-CcTNgYAa.js";

@@ -1,1 +1,0 @@
-export{M5 as instrumentAdapter}from"../../../chunks/app-CcTNgYAa.js";

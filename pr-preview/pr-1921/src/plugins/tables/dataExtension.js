@@ -1,1 +1,0 @@
-export{pQ as tablesDataExtension}from"../../../chunks/app-CcTNgYAa.js";

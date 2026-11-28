@@ -1,1 +1,0 @@
-export{EV as GESTURE_ACTIVE,DV as GESTURE_CANCEL,OV as GESTURE_IDLE,kV as NO_BLOCK_GESTURES_ATTRIBUTE,AV as TOUCH_HOLD_MS,jV as TOUCH_SLOP_PX,MV as allowsBlockGestures,NV as continuousGestureRecognizersFacet,PV as createBlockGestureController,FV as enabledTouchAction,IV as suppressNextClick,LV as unionTouchAction,RV as useContinuousGestures}from"../../chunks/app-CcTNgYAa.js";

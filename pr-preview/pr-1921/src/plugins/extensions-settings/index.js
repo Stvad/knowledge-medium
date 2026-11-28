@@ -1,1 +1,0 @@
-export{mv as extensionsOverridesProp,hv as extensionsPrefsType,Br as extensionsSettingsPlugin}from"../../../chunks/app-CcTNgYAa.js";

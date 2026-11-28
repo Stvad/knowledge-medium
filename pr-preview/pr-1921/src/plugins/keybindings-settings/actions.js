@@ -1,1 +1,0 @@
-export{QP as openKeybindingsSettingsAction}from"../../../chunks/app-CcTNgYAa.js";

@@ -1,1 +1,0 @@
-export{EI as BlockEmbed}from"../../../chunks/app-CcTNgYAa.js";

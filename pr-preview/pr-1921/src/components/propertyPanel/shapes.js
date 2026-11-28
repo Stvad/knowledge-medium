@@ -1,1 +1,0 @@
-export{_X as propertyShapeLabel}from"../../../chunks/app-CcTNgYAa.js";

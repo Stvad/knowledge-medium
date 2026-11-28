@@ -1,1 +1,0 @@
-export{FA as PendingInvitations}from"../../../chunks/app-CcTNgYAa.js";

@@ -1,1 +1,0 @@
-export{lR as dynamicExtensionsExtension,uR as isExtensionContribution}from"../../chunks/app-CcTNgYAa.js";

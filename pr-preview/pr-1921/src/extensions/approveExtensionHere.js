@@ -1,1 +1,0 @@
-export{gL as approveExtensionHere}from"../../chunks/app-CcTNgYAa.js";

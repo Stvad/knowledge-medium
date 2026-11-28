@@ -1,1 +1,0 @@
-export{k4 as annotationMarginOpenProp,A4 as annotationMarginShareProp}from"../../../chunks/app-CcTNgYAa.js";

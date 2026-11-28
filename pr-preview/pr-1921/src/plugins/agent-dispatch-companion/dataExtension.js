@@ -1,1 +1,0 @@
-export{G8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CcTNgYAa.js";

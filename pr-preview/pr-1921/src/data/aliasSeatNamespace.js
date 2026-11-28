@@ -1,1 +1,0 @@
-export{upt as aliasSeatNamespacesInTx,dpt as resolveAliasSeatNamespaces}from"../../chunks/app-CcTNgYAa.js";

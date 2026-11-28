@@ -1,1 +1,0 @@
-export{znt as assertAliasClaimable,Bnt as claimedAliases}from"../../chunks/app-CcTNgYAa.js";

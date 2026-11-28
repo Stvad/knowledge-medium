@@ -1,1 +1,0 @@
-export{SG as BlockProperties}from"../../chunks/app-CcTNgYAa.js";

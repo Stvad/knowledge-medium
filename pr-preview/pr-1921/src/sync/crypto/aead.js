@@ -1,1 +1,0 @@
-export{Pot as open,Fot as seal}from"../../../chunks/app-CcTNgYAa.js";

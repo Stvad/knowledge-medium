@@ -1,1 +1,0 @@
-export{Wpt as deriveWorkspaceIdNamespace}from"../../../chunks/app-CcTNgYAa.js";

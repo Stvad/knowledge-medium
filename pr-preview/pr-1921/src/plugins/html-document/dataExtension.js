@@ -1,1 +1,0 @@
-export{L$ as htmlDocumentDataExtension}from"../../../chunks/app-CcTNgYAa.js";

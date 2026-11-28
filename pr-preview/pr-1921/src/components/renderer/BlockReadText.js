@@ -1,1 +1,0 @@
-export{qU as BlockReadText}from"../../../chunks/app-CcTNgYAa.js";

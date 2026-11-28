@@ -1,1 +1,0 @@
-export{ZG as declarationOnlyDefinitionForName,QG as declarationOnlyStatusText}from"../../../chunks/app-CcTNgYAa.js";

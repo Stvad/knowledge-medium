@@ -1,1 +1,0 @@
-export{JG as addProperty,YG as deleteProperty,XG as writeProperty}from"../../../chunks/app-CcTNgYAa.js";

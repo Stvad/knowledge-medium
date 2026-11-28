@@ -1,1 +1,0 @@
-export{c8 as aliasDataExtension}from"../../../chunks/app-CcTNgYAa.js";

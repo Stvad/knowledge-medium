@@ -1,1 +1,0 @@
-export{X_t as defineQuery}from"../../../chunks/app-CcTNgYAa.js";

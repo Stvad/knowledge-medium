@@ -1,1 +1,0 @@
-export{$C as richPasteDecisionContribution}from"../../../chunks/app-CcTNgYAa.js";

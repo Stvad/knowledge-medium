@@ -1,1 +1,0 @@
-export{OG as PropertyRow,kG as PropertyValueCell}from"../../../chunks/app-CcTNgYAa.js";

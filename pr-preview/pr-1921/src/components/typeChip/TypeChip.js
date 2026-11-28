@@ -1,1 +1,0 @@
-export{FI as TypeChip}from"../../../chunks/app-CcTNgYAa.js";

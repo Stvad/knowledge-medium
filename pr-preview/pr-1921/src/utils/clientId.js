@@ -1,1 +1,0 @@
-export{Tdt as deviceSurface,Edt as getClientId,Ddt as getDeviceLabel,Odt as isClientIdPersistent,kdt as resetClientIdCache}from"../../chunks/app-CcTNgYAa.js";

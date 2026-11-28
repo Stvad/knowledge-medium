@@ -1,1 +1,0 @@
-export{A3 as RAW_CHARACTER_COUNT_PROFILE_ID,j3 as WORDS_COUNT_PROFILE_ID,M3 as charExcludeProp,N3 as charLimitProp,P3 as charProfileProp,F3 as charScopeProp}from"../../../chunks/app-CcTNgYAa.js";

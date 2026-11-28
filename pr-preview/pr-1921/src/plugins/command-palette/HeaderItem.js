@@ -1,1 +1,0 @@
-export{kF as CommandPaletteHeaderItem}from"../../../chunks/app-CcTNgYAa.js";
