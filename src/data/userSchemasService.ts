@@ -308,11 +308,9 @@ const assertPromotionCanMint = async (repo: Repo, workspaceId: string, tx?: Tx):
 }
 
 const promotionHolders = async (repo: Repo, workspaceId: string, names: readonly string[], tx?: Tx) => {
-  const byName = tx
-    ? await tx.livePropertyDefinitionNames(workspaceId, names)
-    : await readLivePropertyDefinitionNames(repo.db, workspaceId, names)
-  const ids = [...byName.values()].flat()
-  const stored = tx ? await tx.liveRowsForIds(workspaceId, ids) : await readLiveRowsForIds(repo.db, workspaceId, ids)
+  const db = tx?.readDb ?? repo.db
+  const byName = await readLivePropertyDefinitionNames(db, workspaceId, names)
+  const stored = await readLiveRowsForIds(db, workspaceId, [...byName.values()].flat())
   const holders = new Map<string | undefined, BlockData[]>()
   for (const row of stored) {
     const metadata = parsePropertyDefinitionMetadata(row)

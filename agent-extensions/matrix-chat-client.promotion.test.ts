@@ -290,6 +290,7 @@ describe('matrix ingest into a child-backed workspace', () => {
     expect(await repo.workspaceViewGap(WS)).toMatchObject({transient: true, reason: expect.stringContaining('draining into')})
     expect(repo.propertySchemas.get('matrix:note')).toBeUndefined()
     await pollOnce()
+    expect(diagnostics.getSnapshot()?.detail).toMatch(/not caught up.*draining into/i)
     expect(since).toEqual(['cursor-0'])
     expect(savedCursor()).toBe('cursor-0')
     expect(await messageRows(rootId)).toEqual([])
