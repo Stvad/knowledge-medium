@@ -1,1 +1,1 @@
-export{r8 as aliasDataExtension}from"../../../chunks/app-qRlX8gxn.js";
+export{r8 as aliasDataExtension}from"../../../chunks/app-DAdoOGsM.js";

@@ -1,1 +1,1 @@
-export{qL as extensionPromptDiagnosticContribution,JL as extensionPromptDiagnosticSource}from"../../../chunks/app-qRlX8gxn.js";
+export{qL as extensionPromptDiagnosticContribution,JL as extensionPromptDiagnosticSource}from"../../../chunks/app-DAdoOGsM.js";
