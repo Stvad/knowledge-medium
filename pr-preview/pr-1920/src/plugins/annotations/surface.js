@@ -1,1 +1,1 @@
-export{Qg as AnnotationSurfaceContext,$g as providedHere,e_ as useAnnotationSurface}from"../../../chunks/app-Jg2pOety.js";
+export{Qg as AnnotationSurfaceContext,$g as providedHere,e_ as useAnnotationSurface}from"../../../chunks/app-BRSevbJc.js";

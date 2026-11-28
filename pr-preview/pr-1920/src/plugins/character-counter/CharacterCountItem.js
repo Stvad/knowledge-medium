@@ -1,1 +1,1 @@
-export{Kn as characterCountItemContribution}from"../../../chunks/app-Jg2pOety.js";
+export{Kn as characterCountItemContribution}from"../../../chunks/app-BRSevbJc.js";

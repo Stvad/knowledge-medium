@@ -1,1 +1,1 @@
-export{Jr as extensionsSyncEffect,Yr as overridesEqual,Xr as readOverridesFromBlock,Zr as reconcileOverrides}from"../../../chunks/app-Jg2pOety.js";
+export{Jr as extensionsSyncEffect,Yr as overridesEqual,Xr as readOverridesFromBlock,Zr as reconcileOverrides}from"../../../chunks/app-BRSevbJc.js";

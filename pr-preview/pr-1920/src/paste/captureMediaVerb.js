@@ -1,1 +1,1 @@
-export{GH as captureMediaVerb}from"../../chunks/app-Jg2pOety.js";
+export{KH as captureMediaVerb}from"../../chunks/app-BRSevbJc.js";

@@ -1,1 +1,1 @@
-export{cmt as classifyOccupant,lmt as derivedBlockId,umt as propertyChildBlockId,dmt as stateChildBlockId,fmt as userStateRootBlockIds}from"../../chunks/app-Jg2pOety.js";
+export{pmt as PROMOTION_NAMESPACE,mmt as classifyOccupant,hmt as derivedBlockId,gmt as promotedPropertyDefinitionId,_mt as propertyChildBlockId,vmt as stateChildBlockId,ymt as userStateRootBlockIds}from"../../chunks/app-BRSevbJc.js";

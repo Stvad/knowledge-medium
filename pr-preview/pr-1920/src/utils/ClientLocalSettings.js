@@ -1,1 +1,1 @@
-export{BR as ClientLocalSettings,VR as clientLocalSettings}from"../../chunks/app-Jg2pOety.js";
+export{BR as ClientLocalSettings,VR as clientLocalSettings}from"../../chunks/app-BRSevbJc.js";
