@@ -1,1 +1,1 @@
-export{tft as MIGRATIONS_PAGE_ALIAS,nft as getOrCreateMigrationsPage,rft as migrationsPageBlockId,ift as migrationsPageSpec}from"../../chunks/app-odBvD6o4.js";
+export{nft as MIGRATIONS_PAGE_ALIAS,rft as getOrCreateMigrationsPage,ift as migrationsPageBlockId,aft as migrationsPageSpec}from"../../chunks/app-CsaqKFAa.js";

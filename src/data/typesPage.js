@@ -1,1 +1,1 @@
-export{ppt as getOrCreateTypesPage,mpt as typesPageBlockId,hpt as typesPageSpec}from"../../chunks/app-odBvD6o4.js";
+export{mpt as getOrCreateTypesPage,hpt as typesPageBlockId,gpt as typesPageSpec}from"../../chunks/app-CsaqKFAa.js";
