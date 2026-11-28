@@ -7,9 +7,10 @@
  *  A top-right gutter item: `BlockGutterHost` places it, and with no chip
  *  the item renders null. */
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { ClipboardCopy, Square } from 'lucide-react'
+import { ClipboardCopy, RotateCcw, Square } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
+import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
 import type {
   BlockGutterItem,
   BlockGutterItemContribution,
@@ -23,10 +24,12 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { activityStateFor, chipActivityDetails, chipStateFor, chipTitle, compactActivityLabel, type ActivityState, type ChipState } from './chipState.ts'
+import { showError } from '@/utils/toast.js'
+import { AGENT_PROPS, activityStateFor, chipActivityDetails, chipStateFor, chipTitle, compactActivityLabel, type ActivityState, type ChipState } from './chipState.ts'
 import { clearAskedAgent, isAskedAgent, subscribeAskedAgent } from './askedStore.ts'
 import { cancelAgent } from './cancelAgent.ts'
 import { agentResumeCommandForProperties, copyAgentResumeCommand } from './resumeCommand.ts'
+import { hasLegacyMentionReply, retryAgent, retrySourceFor, type RetrySource } from './retryAgent.ts'
 
 /** One clock serves the elapsed run time and activity age. */
 const useRunningClock = (running: boolean): number => {
@@ -62,7 +65,7 @@ const RunningChip = ({ chip, activity }: { chip: ChipState; activity: ActivitySt
   )
 }
 
-const chipBody = (chip: ChipState, activity: ActivityState | null) => {
+const chipBody = (chip: ChipState, activity: ActivityState | null, retryPending: boolean) => {
   switch (chip.kind) {
     case 'queued':
       return (
@@ -84,7 +87,7 @@ const chipBody = (chip: ChipState, activity: ActivityState | null) => {
       return (
         <>
           <span className="text-red-600">⚠</span>
-          <ChipLabel>{chip.executorLabel}</ChipLabel>
+          <ChipLabel>{retryPending ? 'Retry pending' : chip.executorLabel}</ChipLabel>
         </>
       )
   }
@@ -92,28 +95,34 @@ const chipBody = (chip: ChipState, activity: ActivityState | null) => {
 
 type ChipViewState = ChipState & {
   resumeCommand: string | null
+  retrySource: RetrySource | null
+  retryRequested: boolean
 }
+
+type ChipMenuProps = {chip: ChipViewState; block: Block}
 
 const AgentStatusChipMenu = ({
   chip,
   block,
-}: {
-  chip: ChipViewState
-  block: Block
-}) => {
+  supportsRetry,
+}: ChipMenuProps & {supportsRetry: boolean}) => {
   const nowMs = useRunningClock(chip.kind === 'running' && !chip.cancelling)
   const activity = activityStateFor(chip, nowMs)
-  const title = chipTitle(chip, activity, nowMs)
+  const statusTitle = chipTitle(chip, activity, nowMs)
+  const retryPending = supportsRetry && chip.retryRequested
+  const title = retryPending ? `${statusTitle} · Retry requested` : statusTitle
   const className = `${CHIP_CLASS}${activity?.stalled ? ' text-amber-700 dark:text-amber-400 ring-1 ring-amber-500' : ''}`
+  const readOnly = useIsReadOnly(block.repo)
+  const canRetry = supportsRetry && !retryPending && !readOnly
   const canStop = chip.kind === 'running' && !chip.cancelling
-  if (!chip.resumeCommand && !canStop) {
+  if (!chip.resumeCommand && !canStop && !canRetry) {
     return (
       <span
         title={title}
         data-agent-dispatch-chip={chip.kind}
         className={className}
       >
-        {chipBody(chip, activity)}
+        {chipBody(chip, activity, retryPending)}
       </span>
     )
   }
@@ -129,7 +138,7 @@ const AgentStatusChipMenu = ({
           onClick={event => event.stopPropagation()}
           className={`${className} hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
-          {chipBody(chip, activity)}
+          {chipBody(chip, activity, retryPending)}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
@@ -137,6 +146,14 @@ const AgentStatusChipMenu = ({
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
             {chip.executorLabel} · {chipActivityDetails(chip, activity, nowMs)}
           </DropdownMenuLabel>
+        )}
+        {canRetry && (
+          <DropdownMenuItem onSelect={() => {
+            void retryAgent(block).catch(() => showError("Couldn't request the Agent retry."))
+          }}>
+            <RotateCcw className="h-4 w-4" />
+            Retry
+          </DropdownMenuItem>
         )}
         {chip.resumeCommand && (
           <DropdownMenuItem onSelect={() => { void copyAgentResumeCommand(block) }}>
@@ -155,16 +172,30 @@ const AgentStatusChipMenu = ({
   )
 }
 
+const LegacyAgentStatusChipMenu = ({chip, block, replyKey}: ChipMenuProps & {replyKey: string}) => {
+  const supportsRetry = useHandle(block.repo.query.children({id: block.id, propertyChildren: 'none'}), {
+    selector: children => hasLegacyMentionReply(children, replyKey),
+  })
+  return <AgentStatusChipMenu chip={chip} block={block} supportsRetry={supportsRetry} />
+}
+
 /** Optimistic "queued" shown between the Ask Agent action and the
  *  daemon's claim writing real props. */
-const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', activityAtMs: null, cancelling: false}
+const OPTIMISTIC_QUEUED: ChipViewState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', activityAtMs: null, cancelling: false, resumeCommand: null, retrySource: null, retryRequested: false}
 
 const AgentStatusChipItem: BlockRenderer = ({block}) => {
   const propsChip = useHandle(block, {
     selector: doc => {
-      const properties = doc?.properties as Record<string, unknown> | undefined
+      const properties = doc?.properties
       const chip = chipStateFor(properties)
-      return chip ? {...chip, resumeCommand: agentResumeCommandForProperties(properties)} : null
+      if (!chip) return null
+      const retryAt = properties?.[AGENT_PROPS.retryAt]
+      return {
+        ...chip,
+        resumeCommand: agentResumeCommandForProperties(properties),
+        retrySource: retrySourceFor(doc),
+        retryRequested: chip.kind === 'error' && typeof retryAt === 'number' && Number.isFinite(retryAt) && retryAt > 0,
+      }
     },
   })
   const asked = useSyncExternalStore(subscribeAskedAgent, () => isAskedAgent(block.id))
@@ -174,10 +205,13 @@ const AgentStatusChipItem: BlockRenderer = ({block}) => {
     if (propsChip) clearAskedAgent(block.id)
   }, [propsChip, block.id])
 
-  const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null} : null)
+  const chip = propsChip ?? (asked ? OPTIMISTIC_QUEUED : null)
   if (!chip) return null
 
-  return <AgentStatusChipMenu key={`${chip.kind}:${chip.cancelling}`} chip={chip} block={block} />
+  if (chip.retrySource?.kind === 'legacy') {
+    return <LegacyAgentStatusChipMenu chip={chip} block={block} replyKey={chip.retrySource.replyKey} />
+  }
+  return <AgentStatusChipMenu key={`${chip.kind}:${chip.cancelling}`} chip={chip} block={block} supportsRetry={chip.retrySource?.kind === 'mention'} />
 }
 
 const statusChipItem: BlockGutterItem = {corner: 'top-right', component: AgentStatusChipItem}

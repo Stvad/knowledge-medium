@@ -64,10 +64,16 @@ export const MAX_ATTEMPTS = 3
  *  edit means the user went on writing, so the ask stops overriding the hold. */
 export const ASK_COVERS_EDIT_MS = 1_000
 
-const askCoversLatestEdit = (source: BlockView): boolean => {
-  const askedAt = prop(source, PROPS.askedAt)
-  return typeof askedAt === 'number'
-    && (source.editedAtMs ?? Number.POSITIVE_INFINITY) <= askedAt + ASK_COVERS_EDIT_MS
+export const retryRequestedAt = (source: BlockView): number => {
+  const stamp = prop(source, PROPS.retryAt)
+  return typeof stamp === 'number' && Number.isFinite(stamp) ? stamp : 0
+}
+
+const requestCoversLatestEdit = (source: BlockView): boolean => {
+  const retryAt = retryRequestedAt(source)
+  const requestedAt = retryAt > 0 ? retryAt : prop(source, PROPS.askedAt)
+  return typeof requestedAt === 'number'
+    && (source.editedAtMs ?? Number.POSITIVE_INFINITY) <= requestedAt + ASK_COVERS_EDIT_MS
 }
 
 export interface PendingArgs {
@@ -101,11 +107,11 @@ export interface PendingArgs {
  * - wait out the settle window so an edit's last write isn't missed.
  */
 export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = null, editHoldMs = 0, baselineMs}: PendingArgs): PendingDecision => {
-  if (isTerminalTask(source)) {
-    return {pending: false, reason: prop(source, PROPS.reply) ? 'is-reply' : 'already-processed'}
-  }
-
   const status = prop(source, PROPS.status)
+  if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
+  if (status === 'done' || (status === 'error' && retryRequestedAt(source) <= 0)) {
+    return {pending: false, reason: 'already-processed'}
+  }
   if (hasFreshRunningClaim(source, nowMs)) return {pending: false, reason: 'already-processed'}
   if (status === 'running' && taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
   // `queued` is seen-but-unclaimed: it goes through every gate below.
@@ -120,7 +126,7 @@ export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = 
   }
 
   const editedAgoMs = typeof source.editedAtMs === 'number' ? nowMs - source.editedAtMs : Number.POSITIVE_INFINITY
-  if (typeof editingActiveAtMs === 'number' && !askCoversLatestEdit(source)
+  if (typeof editingActiveAtMs === 'number' && !requestCoversLatestEdit(source)
     && Math.min(editedAgoMs, nowMs - editingActiveAtMs) < editHoldMs) {
     return {pending: false, reason: 'being-edited'}
   }

@@ -26,6 +26,7 @@ export const PROPS = {
   resumeOptions: 'agent:resume-options',
   /** Watcher name that claimed the block. */
   watcher: 'agent:watcher',
+  watcherKind: 'agent:watcher-kind',
   /** Executor that claimed the block, used by synced UI chips. */
   executor: 'agent:executor',
   /** Last status-transition timestamp (ms). */
@@ -52,6 +53,8 @@ export const PROPS = {
   cancel: 'agent:cancel',
   /** When the UI's Ask Agent gesture last fired: an explicit "go". */
   askedAt: 'agent:asked-at',
+  /** When the UI requested a retry of the existing failed mention. */
+  retryAt: 'agent:retry-at',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'

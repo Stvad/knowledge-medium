@@ -21,8 +21,10 @@ import {
   agentAttemptsProp,
   agentCancelProp,
   agentErrorProp,
+  agentRetryAtProp,
   agentStatusProp,
   agentUpdatedAtProp,
+  agentWatcherKindProp,
   agentWatcherProp,
 } from './schema.ts'
 import { markAskedAgent } from './askedStore.ts'
@@ -50,7 +52,9 @@ const REQUEUE_CLEARED_PROPS = [
   // clears agent:cancel on every terminal write, but drop it here too so
   // a re-queue can't hand a leftover flag to the fresh run).
   agentCancelProp,
+  agentRetryAtProp,
   agentWatcherProp,
+  agentWatcherKindProp,
 ] as const
 
 export const contentWithAgentMention = (content: string): string => {

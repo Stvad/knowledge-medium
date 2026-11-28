@@ -1,25 +1,35 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import type { BlockGutterItem } from '@/extensions/blockInteraction.js'
 
-const { useHandleMock } = vi.hoisted(() => ({ useHandleMock: vi.fn() }))
+const { useHandleMock, retryAgentMock } = vi.hoisted(() => ({
+  useHandleMock: vi.fn(),
+  retryAgentMock: vi.fn(async () => {}),
+}))
 vi.mock('@/hooks/block.js', () => ({ useHandle: useHandleMock }))
+vi.mock('../retryAgent.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../retryAgent.ts')>(),
+  retryAgent: retryAgentMock,
+}))
 
 import { agentStatusChipContribution } from '../AgentStatusChip.tsx'
 import { clearAskedAgent, isAskedAgent, markAskedAgent } from '../askedStore.ts'
 
-const block = { id: 'block-1' } as Block
+const block = {
+  id: 'block-1',
+  repo: {isReadOnly: false, onReadOnlyChange: () => () => {}, query: {children: () => 'children'}},
+} as unknown as Block
 
 const Chip = (() => {
   const item = agentStatusChipContribution({ isTopLevel: false } as never) as BlockGutterItem
   return item.component
 })()
 
-const withProperties = (properties: Record<string, unknown> | undefined) =>
-  useHandleMock.mockImplementation((_handle: unknown, options: { selector: (doc: unknown) => unknown }) =>
-    options.selector(properties ? { properties } : undefined))
+const withProperties = (properties: Record<string, unknown> | undefined, children: unknown[] = []) =>
+  useHandleMock.mockImplementation((handle: unknown, options: { selector: (doc: unknown) => unknown }) =>
+    options.selector(handle === 'children' ? children : properties ? {id: block.id, properties} : undefined))
 
 const chipNode = (container: HTMLElement) => container.querySelector('[data-agent-dispatch-chip]')
 
@@ -42,6 +52,54 @@ describe('AgentStatusChipItem', () => {
     const { container } = render(<Chip block={block} />)
     expect(chipNode(container)?.getAttribute('data-agent-dispatch-chip')).toBe('done')
     expect(container.textContent).toContain('Codex')
+  })
+
+  it('offers Retry on a failed chip even when there is no session to resume', () => {
+    withProperties({
+      'agent:status': 'error',
+      'agent:watcher': 'review',
+      'agent:watcher-kind': 'backlinks',
+      'agent:error': 'Authentication expired',
+    })
+    render(<Chip block={block} />)
+
+    const trigger = screen.getByRole('button', {name: /Authentication expired/})
+    fireEvent.pointerDown(trigger, {button: 0, ctrlKey: false, pointerType: 'mouse'})
+    fireEvent.click(screen.getByRole('menuitem', {name: 'Retry'}))
+
+    expect(retryAgentMock).toHaveBeenCalledExactlyOnceWith(block)
+  })
+
+  it('keeps the failure visible until the watcher accepts the retry', () => {
+    withProperties({
+      'agent:status': 'error',
+      'agent:watcher': 'review',
+      'agent:watcher-kind': 'backlinks',
+      'agent:error': 'Authentication expired',
+      'agent:retry-at': 500,
+    })
+    const {container} = render(<Chip block={block} />)
+
+    expect(chipNode(container)?.getAttribute('data-agent-dispatch-chip')).toBe('error')
+    expect(chipNode(container)?.getAttribute('title')).toContain('Authentication expired · Retry requested')
+    expect(screen.getByText('Retry pending')).toBeVisible()
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it.each([
+    {kind: undefined, replyKey: 'reply:block-1:1', offersRetry: true},
+    {kind: undefined, replyKey: 'row-reply:block-1:1', offersRetry: false},
+    {kind: 'query', replyKey: 'reply:block-1:1', offersRetry: false},
+  ])('shows Retry only for a mention failure ($kind, $replyKey)', ({kind, replyKey, offersRetry}) => {
+    withProperties({
+      'agent:status': 'error',
+      'agent:watcher': 'review',
+      'agent:watcher-kind': kind,
+      'agent:attempts': 1,
+    }, [{properties: {'agent:reply': true, 'agent:subtreeKey': replyKey}}])
+    render(<Chip block={block} />)
+
+    expect(Boolean(screen.queryByRole('button', {name: /task actions/}))).toBe(offersRetry)
   })
 
   it('updates the running activity age and warning on the mounted chip', () => {

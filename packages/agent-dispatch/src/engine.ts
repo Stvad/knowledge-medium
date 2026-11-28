@@ -4,6 +4,7 @@
  * decisions live in watchers.ts and every side effect sits behind an
  * injected dependency, so the whole flow is testable with in-memory fakes.
  */
+import {randomUUID} from 'node:crypto'
 import os from 'node:os'
 import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
@@ -14,7 +15,7 @@ import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunR
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { QueryRow } from './queryDiff.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, hasFreshRunningClaim, isMention, isTerminalTask, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, hasFreshRunningClaim, isMention, isTerminalTask, MAX_ATTEMPTS, MAX_CURSOR_IDS, retryRequestedAt, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt, renderRowTaskPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
@@ -304,9 +305,9 @@ export const createEngine = (deps: EngineDeps) => {
     if (!fresh || pendingDecision(task, fresh).reason !== expected) return
     const reason = expected === 'cancelled' ? 'cancelled'
       : `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
-    await graph.setTaskProps(sourceId, {status: 'error', error: reason, cancel: null, activity: null, nowMs: now()})
-    if (postsReply(task)) await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`, {
-      replyKey: `park:${sourceId}`, shape: 'block', final: true,
+    await graph.setTaskProps(sourceId, {status: 'error', watcherKind: watcher.kind, error: reason, cancel: null, activity: null, nowMs: now()})
+    if (postsReply(task)) await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}.`, {
+      replyKey: `park:${sourceId}:${randomUUID()}`, shape: 'block', final: true,
     }).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
@@ -407,6 +408,7 @@ export const createEngine = (deps: EngineDeps) => {
       })
     if (!pending) return refundLaunch(launchStamp)
     const {block, decision, ancestorBlocks} = pending
+    const acceptedRetry = retryRequestedAt(block) > 0 ? {retryAt: 0, cancel: null} : {}
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
@@ -419,7 +421,8 @@ export const createEngine = (deps: EngineDeps) => {
       if (block.properties?.[PROPS.status] === 'queued') return
       log(`[${watcher.name}] ${sourceId} waiting: its thread's session ${session} is still running`)
       await graph.setTaskProps(sourceId, {
-        status: 'queued', watcher: watcher.name, executor: runner.executor, activity: THREAD_BUSY_ACTIVITY, nowMs: now(),
+        status: 'queued', watcher: watcher.name, watcherKind: watcher.kind, executor: runner.executor, activity: THREAD_BUSY_ACTIVITY, nowMs: now(),
+        ...acceptedRetry,
       })
       return
     }
@@ -446,7 +449,8 @@ export const createEngine = (deps: EngineDeps) => {
     // re-enter the reply write and clobber the answer.
     let terminalReplyDelivered = false
     const attempt = taskAttempts(block) + 1
-    const replyKey = task.kind === 'row' ? `row-reply:${sourceId}:${attempt}` : `reply:${sourceId}:${attempt}`
+    // Ask Agent can reset a mention's attempt count while its earlier reply keys remain.
+    const replyKey = task.kind === 'row' ? `row-reply:${sourceId}:${attempt}` : `reply:${sourceId}:${attempt}:${randomUUID()}`
     const replyShape = task.kind === 'row' || task.watcher.splitReply ? 'outline' : 'block'
     // Abort handle for THIS run — a cancel request (agent:cancel, detected
     // in the tick) aborts it, killing the child. `signal.aborted` after the
@@ -488,7 +492,8 @@ export const createEngine = (deps: EngineDeps) => {
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, error: null, nowMs: claimStamp,
+        status: 'running', watcher: watcher.name, watcherKind: watcher.kind, executor: runner.executor, attempts: attempt, activity: null, error: null, nowMs: claimStamp,
+        ...acceptedRetry,
       })
 
       claimed = true
