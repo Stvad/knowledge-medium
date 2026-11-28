@@ -63,6 +63,7 @@ import { propertyFieldContent } from '@/data/propertyChildren.js'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.js'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
+import { diagnosticsFacet, type DiagnosticSourceContribution } from '@/plugins/diagnostics/facet.js'
 
 import matrixContributions, {
   autoStartProp,
@@ -71,6 +72,7 @@ import matrixContributions, {
   matrixIngestEffect,
   messageNodeId,
   nextBatchKey,
+  pollLoop,
   tokenKey,
   roomIdProp,
 } from './matrix-chat-client.tsx'
@@ -250,6 +252,66 @@ describe('Matrix setup in a child-backed workspace', () => {
 })
 
 describe('matrix ingest into a child-backed workspace', () => {
+  it('retries a message from the saved cursor after the workspace view catches up', async () => {
+    const repo = await setup()
+    await configureIngest(repo)
+    const eventId = '$evt-view-gap'
+    const batch = syncBody('cursor-1', [messageEvent(eventId, '- hello\n  - note:: from the room')])
+    const rootId = messageNodeId(WS, eventId, [0])
+    const diagnostics = matrixContributions.find(c => c.facet.id === diagnosticsFacet.id)!.value as DiagnosticSourceContribution
+    const since: Array<string | undefined> = []
+    const pollOnce = async () => {
+      const controller = new AbortController()
+      let delivered = false
+      const unsubscribe = diagnostics.subscribe(() => {
+        if (diagnostics.getSnapshot()?.severity === 'warning') queueMicrotask(() => controller.abort())
+      })
+      try {
+        await pollLoop(repo, {...destination, accessToken: 'fixture', autoStart: true}, controller.signal, {
+          http: {authedRequest: async (_method: string, _path: string, query: {since?: string}) => {
+            since.push(query.since)
+            if (!delivered && query.since === 'cursor-0') {
+              delivered = true
+              return batch
+            }
+            controller.abort()
+            return {}
+          }},
+        })
+      } finally {
+        unsubscribe()
+        controller.abort()
+      }
+    }
+
+    await sharedDb.db.execute(
+      "INSERT INTO blocks_synced_changes (id, op) VALUES ('pending-definition', 'upsert')",
+    )
+    expect(await repo.workspaceViewGap(WS)).toMatchObject({transient: true, reason: expect.stringContaining('draining into')})
+    expect(repo.propertySchemas.get('matrix:note')).toBeUndefined()
+    await pollOnce()
+    expect(diagnostics.getSnapshot()?.detail).toMatch(/not caught up.*draining into/i)
+    expect(since).toEqual(['cursor-0'])
+    expect(savedCursor()).toBe('cursor-0')
+    expect(await messageRows(rootId)).toEqual([])
+    expect(repo.userSchemas.getSchemaBlockId('matrix:note')).toBeUndefined()
+
+    await sharedDb.db.execute("DELETE FROM blocks_synced_changes WHERE id = 'pending-definition'")
+    expect(await repo.workspaceViewGap(WS)).toBeNull()
+    await pollOnce()
+    expect(since).toEqual(['cursor-0', 'cursor-0', 'cursor-1'])
+    expect(savedCursor()).toBe('cursor-1')
+    expect(await cellBag(rootId)).toMatchObject({'matrix:note': 'from the room'})
+    const fieldId = repo.userSchemas.getSchemaBlockId('matrix:note')
+    expect(fieldId).toBeDefined()
+    const rows = await messageRows(rootId)
+    expect(rows.map(row => row.content)).not.toContain('note:: from the room')
+    const fields = rows.filter(row =>
+      row.parent_id === rootId && row.is_field_form === 1 && row.content === propertyFieldContent(fieldId!))
+    expect(fields).toHaveLength(1)
+    expect(await childContents(fields[0].id)).toEqual(['from the room'])
+  })
+
   // Both tests settle in ~150ms each when the guard holds. The budget is sized
   // for the FAILING shape instead: a rejected write backs the poll off 5s
   // before retrying, so a regression has to be given room to be observed

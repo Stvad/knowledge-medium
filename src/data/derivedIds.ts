@@ -94,6 +94,16 @@ const STATE_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
 export const stateChildBlockId = (parentId: string, content: string): string =>
   derivedBlockId({namespace: STATE_CHILD_NS, key: `${parentId}:${content}`})
 
+export const PROMOTION_NAMESPACE = {
+  label: 'km/property-promotion-ns/v1',
+  plaintextNamespace: uuidv5('urn:knowledge-medium:property-promotion:v1', uuidv5.URL),
+}
+
+/** Successive identities for automatic promotion of a registry name (case-sensitive, trimmed by addSchema). */
+export const promotedPropertyDefinitionId = (
+  namespace: string, workspaceId: string, name: string, slot: number,
+): string => derivedBlockId({namespace, key: JSON.stringify([workspaceId, name, slot])})
+
 /** The state roots under one user page — what a reader must walk down
  *  from to recognize app-owned state, and the reason the list of paths
  *  is declared next to nothing else. */

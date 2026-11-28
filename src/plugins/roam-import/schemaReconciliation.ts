@@ -16,6 +16,7 @@
  *  reject the raw token strings on first read.
  */
 
+import {PromotionViewGapError} from '@/data/userSchemasService'
 import type { AnyPropertySchema, BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
@@ -274,7 +275,7 @@ export const collectSchemaReconciliationPlan = (
 }
 
 /** Apply phase: register every classified schema synchronously through
- *  `userSchemas.addSchema`. Each call persists a property-schema block
+ *  `userSchemas.ensurePromotedSchema`. Each call persists a property-schema block
  *  under the workspace's Properties page AND adds the runtime
  *  contribution before content blocks are written. Failures are
  *  logged into `diagnostics` and the schema is skipped — content blocks
@@ -289,8 +290,9 @@ export const applySchemaReconciliation = async (
     const {name, presetId} = entry
     const config = entry.targetTypes ? {targetTypes: entry.targetTypes} : undefined
     try {
-      await repo.userSchemas.addSchema({name, presetId, config})
+      await repo.userSchemas.ensurePromotedSchema({name, presetId, config})
     } catch (err) {
+      if (err instanceof PromotionViewGapError) throw err
       const message = err instanceof Error ? err.message : String(err)
       diagnostics.push(`Failed to register schema "${name}" (preset ${presetId}): ${message}`)
     }
@@ -493,12 +495,9 @@ export { isRegistrablePropertyName } from '@/data/userSchemasService'
  *    `normalizeRefPropertyValues`. A streaming consumer has neither, so
  *    registering refList would store token strings under a codec that
  *    rejects them on read.
- *  - **Two devices meeting one new key before syncing can still disagree**
- *    if they happen to observe different shapes first; the registry keeps one
- *    definition per name, so the loser's cells would not decode. Not
- *    corrupting — the values are intact and the definition is editable — and
- *    `kmagent audit-properties` surfaces it. Converging this properly needs a
- *    deterministic definition id, which is an `addSchema` API change.
+ *  - **Independent samples can infer different presets.** The first uploaded
+ *    create selects the stored codec for the shared definition. Writers that
+ *    need different shapes must sync the definition before importing them.
  *
  *  This does NOT delete anything from `bags`. A key it cannot register is
  *  reported and left alone: the helper cannot know whether its caller kept
@@ -542,9 +541,10 @@ export const ensurePromotedPropertySchemas = async (
     const presetId = entry.presetId === 'refList' ? 'string-list' as const : entry.presetId
     const config = entry.targetTypes ? {targetTypes: entry.targetTypes} : undefined
     try {
-      await repo.userSchemas.addSchema(
-        config ? {name: entry.name, presetId, config} : {name: entry.name, presetId})
+      await repo.userSchemas.ensurePromotedSchema(
+        {name: entry.name, presetId, config})
     } catch (err) {
+      if (err instanceof PromotionViewGapError) throw err
       notes.push(
         `Could not register promoted property ${JSON.stringify(entry.name)} `
         + `(preset ${presetId}): ${err instanceof Error ? err.message : String(err)}`,
