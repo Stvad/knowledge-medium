@@ -52,7 +52,11 @@ const ReadSelectionMenuItems = ({gestures, target}: {
       >
         <gesture.icon className="mr-2 h-4 w-4"/>
         {gesture.label}
-        {hint && <ContextMenuShortcut aria-hidden="true" className="pl-4">{hint}</ContextMenuShortcut>}
+        {hint && (
+          <ContextMenuShortcut aria-hidden="true" className="pl-4" title="Use on the selection with the menu closed">
+            {hint}
+          </ContextMenuShortcut>
+        )}
       </ContextMenuItem>
     )
   })

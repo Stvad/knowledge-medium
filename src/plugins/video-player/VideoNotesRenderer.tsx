@@ -262,7 +262,7 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
             type="button"
             variant="ghost"
             size="icon"
-            label="Close video notes view"
+            operation="close"
             className="pointer-events-auto"
             onClick={() => {
               if (!panelId) return

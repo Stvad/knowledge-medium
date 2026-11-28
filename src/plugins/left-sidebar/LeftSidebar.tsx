@@ -43,6 +43,11 @@ function useShortcutsBlock(): Block {
 
 const LEFT_SIDEBAR_ACTION_EVENT = 'left-sidebar-action'
 
+function sidebarActionTitle(label: string, action: ActionConfig): string {
+  const hint = formatActionKeyHint(action)
+  return shortcutTitle(label, hint && `app shortcut ${hint}`)
+}
+
 function useRegisteredAction(actionId: string): ActionConfig | undefined {
   return useEffectiveActions().find(action => action.id === actionId)
 }
@@ -95,7 +100,7 @@ function SidebarAction({
       className="flex h-11 w-full items-center gap-3 rounded-md px-2 text-left text-sm text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
       onClick={run}
       disabled={disabled}
-      title={shortcutTitle(label ?? action.description, formatActionKeyHint(action))}
+      title={sidebarActionTitle(label ?? action.description, action)}
     >
       <Icon className="h-5 w-5 shrink-0 text-muted-foreground"/>
       <span className="min-w-0 truncate">{label ?? action.description}</span>
@@ -121,7 +126,7 @@ function SearchSidebarAction({
       className="flex h-12 w-full items-center gap-3 rounded-full border border-border px-4 text-left text-sm text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
       onClick={run}
       disabled={disabled}
-      title={shortcutTitle('Jump to...', formatActionKeyHint(action))}
+      title={sidebarActionTitle('Jump to...', action)}
     >
       <Icon className="h-5 w-5 shrink-0"/>
       <span>Jump to...</span>
@@ -276,6 +281,7 @@ function NewNodeFooter({
         className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-muted px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
         onClick={run}
         disabled={disabled}
+        title={sidebarActionTitle(action.description, action)}
       >
         <Icon className="h-5 w-5"/>
         <span>{action.description}</span>

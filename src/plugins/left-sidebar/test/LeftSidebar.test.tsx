@@ -171,7 +171,7 @@ describe('LeftSidebarCoreSection shortcut hints', () => {
     act(() => leftSidebarToggle.open())
 
     const jumpTo = await screen.findByRole('button', {name: 'Jump to...'})
-    expect(jumpTo).toHaveAttribute('title', 'Jump to... (Ctrl+P)')
+    expect(jumpTo).toHaveAttribute('title', 'Jump to... (app shortcut Ctrl+P)')
 
     act(() => {
       runtime.setRuntimeContributions(keybindingOverridesFacet, KEYBINDING_OVERRIDE_USER_SOURCE, [{
@@ -181,6 +181,6 @@ describe('LeftSidebarCoreSection shortcut hints', () => {
       }])
     })
 
-    expect(jumpTo).toHaveAttribute('title', 'Jump to... (R)')
+    expect(jumpTo).toHaveAttribute('title', 'Jump to... (app shortcut R)')
   })
 })

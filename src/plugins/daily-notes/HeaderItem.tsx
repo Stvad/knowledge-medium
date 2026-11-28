@@ -9,13 +9,13 @@ import type { MouseEvent } from 'react'
 import { CalendarDays } from 'lucide-react'
 import { useRepo } from '@/context/repo.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
-import { useActionKeyHints, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
+import { useActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { OPEN_DAILY_NOTE_PICKER_ACTION_ID, resolveCurrentDailyNoteIso } from './actions.ts'
 
 export function DailyNotePickerHeaderItem() {
-  const hint = useActionKeyHints(ActionContextTypes.GLOBAL).get(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
+  const hint = useActionKeyHint(ActionContextTypes.GLOBAL, OPEN_DAILY_NOTE_PICKER_ACTION_ID)
   const repo = useRepo()
 
   const handleClick = async (event: MouseEvent<HTMLButtonElement>) => {

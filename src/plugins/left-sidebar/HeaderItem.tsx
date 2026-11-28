@@ -1,11 +1,11 @@
 import { PanelLeftOpen } from 'lucide-react'
 import { ActionContextTypes } from '@/shortcuts/types.js'
-import { useActionKeyHints, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
+import { useActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
 import { OPEN_LEFT_SIDEBAR_ACTION_ID } from './actions.ts'
 import { leftSidebarToggle } from './toggleStore.ts'
 
 export function LeftSidebarHeaderItem() {
-  const hint = useActionKeyHints(ActionContextTypes.GLOBAL).get(OPEN_LEFT_SIDEBAR_ACTION_ID)
+  const hint = useActionKeyHint(ActionContextTypes.GLOBAL, OPEN_LEFT_SIDEBAR_ACTION_ID)
   return (
     <button
       type="button"

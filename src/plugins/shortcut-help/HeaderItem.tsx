@@ -1,9 +1,9 @@
 import { ActionContextTypes } from '@/shortcuts/types.js'
-import { useActionKeyHints, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
+import { useActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
 import { SHORTCUT_HELP_ACTION_ID, shortcutHelpToggle } from './toggleStore.ts'
 
 export function ShortcutHelpHeaderItem() {
-  const hint = useActionKeyHints(ActionContextTypes.GLOBAL).get(SHORTCUT_HELP_ACTION_ID)
+  const hint = useActionKeyHint(ActionContextTypes.GLOBAL, SHORTCUT_HELP_ACTION_ID)
   return (
     <button
       type="button"

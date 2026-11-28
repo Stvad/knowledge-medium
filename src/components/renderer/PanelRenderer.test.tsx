@@ -324,18 +324,22 @@ describe('PanelRenderer', () => {
 
     await renderPanelInLayoutSession(env.panel.id, {canMaximizePanel: true, canClosePanel: true})
     const maximize = await screen.findByRole('button', {name: 'Maximize panel'})
-    expect(maximize).toHaveAttribute('title', 'Maximize panel (F8)')
-    expect(screen.getByRole('button', {name: 'Close panel'})).toHaveAttribute('title', 'Close panel (F10)')
+    expect(maximize).toHaveAttribute('title', 'Maximize panel (F8 in edit mode or Vim normal mode)')
+    const close = screen.getByRole('button', {name: 'Close panel'})
+    expect(close).toHaveAttribute('title', 'Close panel (F10 in edit mode or Vim normal mode)')
 
     setOverrides([
       {...normal, binding: {keys: 'F8'}},
       {...edit, binding: {keys: 'F9'}},
+      {actionId: 'close_current_panel', binding: {keys: '$mod+w'}},
+      {actionId: 'edit.cm.close_current_panel', binding: {keys: '$mod+w'}},
     ])
-    expect(maximize).toHaveAttribute('title', 'Maximize panel (F8 in normal mode, F9 in edit mode)')
+    expect(maximize).toHaveAttribute('title', 'Maximize panel (F8 in Vim normal mode, F9 in edit mode)')
+    expect(close.getAttribute('title')).toContain('Your browser may close the tab')
 
     await act(() => env.panel.set(panelMaximizedProp, true))
     const restore = await screen.findByRole('button', {name: 'Restore panel'})
-    expect(restore).toHaveAttribute('title', 'Restore panel (F8 in normal mode, F9 in edit mode)')
+    expect(restore).toHaveAttribute('title', 'Restore panel (F8 in Vim normal mode, F9 in edit mode)')
 
     setOverrides([
       {...normal, binding: {unbound: true}},

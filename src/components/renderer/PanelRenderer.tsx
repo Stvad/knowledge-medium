@@ -14,12 +14,13 @@ import {
 } from '@/data/properties.js'
 import { useIsActivePanel, useSelectionState } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
-import { formatActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
+import { getActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
 import {
   CLOSE_CURRENT_PANEL_ACTION_ID,
   EDIT_MODE_CM_ACTION_PREFIX,
   TOGGLE_MAXIMIZE_PANEL_ACTION_ID,
 } from '@/shortcuts/defaultShortcuts.js'
+import { formatChord } from '@/shortcuts/formatChord.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { useEffectiveActions } from '@/shortcuts/useActionDiscovery.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types'
@@ -86,14 +87,16 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
 const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-480px)))]'
 
 const panelActionHint = (actions: readonly ActionConfig[], id: string): string | undefined => {
-  const normal = formatActionKeyHint(actions.find(action =>
-    action.context === ActionContextTypes.NORMAL_MODE && action.id === id,
-  ))
-  const edit = formatActionKeyHint(actions.find(action =>
-    action.context === ActionContextTypes.EDIT_MODE_CM && action.id === `${EDIT_MODE_CM_ACTION_PREFIX}.${id}`,
-  ))
-  if (normal === edit) return normal
-  return [normal && `${normal} in normal mode`, edit && `${edit} in edit mode`].filter(Boolean).join(', ')
+  const normal = getActionKeyHint(actions, ActionContextTypes.NORMAL_MODE, id)
+  const edit = getActionKeyHint(actions, ActionContextTypes.EDIT_MODE_CM, `${EDIT_MODE_CM_ACTION_PREFIX}.${id}`)
+  if (!normal && !edit) return undefined
+  const hint = normal === edit
+    ? `${normal} in edit mode or Vim normal mode`
+    : [normal && `${normal} in Vim normal mode`, edit && `${edit} in edit mode`].filter(Boolean).join(', ')
+  if ([normal, edit].includes(formatChord('$mod+w'))) {
+    return `${hint}. Your browser may close the tab`
+  }
+  return hint
 }
 
 export function PanelRenderer({block}: BlockRendererProps) {

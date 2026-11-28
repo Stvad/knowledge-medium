@@ -415,11 +415,20 @@ describe('enter affordance gating', () => {
     </BlockContextProvider>,
   )
 
-  it('shows the enter button when the ui-state block is a panel row', () => {
+  it('shows the enter button and its shortcut when the panel has no notes view open', async () => {
+    await repo.block(PANEL).set(panelViewModeProp, undefined)
     renderContent()
     expect(screen.getByLabelText('Open video notes view')).toHaveAttribute('title',
       `Open video notes view (${formatChord('Alt+Shift+n')} while the video block or a note is focused)`,
     )
+  })
+
+  it('omits the open hint inside a notes view where the shortcut would close it', () => {
+    // A nested video inherits the panel row. Its render context has the notes
+    // view mode cleared so it can still render the inline player.
+    expect(repo.block(PANEL).peekProperty(panelViewModeProp)).toBe(VIDEO_NOTES_VIEW_MODE)
+    renderContent()
+    expect(screen.getByLabelText('Open video notes view')).toHaveAttribute('title', 'Open video notes view')
   })
 
   it('hides the enter button on non-panel surfaces where entering would silently no-op', async () => {

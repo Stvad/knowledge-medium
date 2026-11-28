@@ -1,12 +1,12 @@
 import { Clock } from 'lucide-react'
 import { useRepo } from '@/context/repo.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
-import { useActionKeyHints, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
+import { useActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
 import { useBlockOpener } from '@/utils/navigation.js'
 import { OPEN_RECENTS_ACTION_ID, openRecentsPage } from './target.js'
 
 export function RecentsHeaderItem() {
-  const hint = useActionKeyHints(ActionContextTypes.GLOBAL).get(OPEN_RECENTS_ACTION_ID)
+  const hint = useActionKeyHint(ActionContextTypes.GLOBAL, OPEN_RECENTS_ACTION_ID)
   const repo = useRepo()
   const openBlock = useBlockOpener({plainClick: 'navigator'})
 
