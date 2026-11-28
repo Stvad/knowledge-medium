@@ -1,1 +1,1 @@
-export{VR as EffectReconciler,HR as LiveRuntimeHandle}from"../../chunks/app-BBNYzX6z.js";
+export{GR as EffectReconciler,KR as LiveRuntimeHandle}from"../../chunks/app-BSx8WeSP.js";

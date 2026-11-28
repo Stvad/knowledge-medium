@@ -1,1 +1,1 @@
-export{DC as MOVE_BLOCKS_ACTION_ID,OC as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,kC as moveBlockAction,AC as moveBlocksAction,jC as runMoveFlow}from"../../../chunks/app-BBNYzX6z.js";
+export{kC as MOVE_BLOCKS_ACTION_ID,AC as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,jC as moveBlockAction,MC as moveBlocksAction,NC as runMoveFlow}from"../../../chunks/app-BSx8WeSP.js";

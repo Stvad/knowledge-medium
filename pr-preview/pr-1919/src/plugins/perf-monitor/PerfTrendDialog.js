@@ -1,1 +1,1 @@
-export{ti as PerfTrendDialog}from"../../../chunks/app-BBNYzX6z.js";
+export{ni as PerfTrendDialog}from"../../../chunks/app-BSx8WeSP.js";

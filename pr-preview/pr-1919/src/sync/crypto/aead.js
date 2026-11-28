@@ -1,1 +1,1 @@
-export{tot as open,not as seal}from"../../../chunks/app-BBNYzX6z.js";
+export{Sot as open,Cot as seal}from"../../../chunks/app-BSx8WeSP.js";

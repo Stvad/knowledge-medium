@@ -1,1 +1,1 @@
-export{ux as BridgePairingDialog}from"../../../chunks/app-BBNYzX6z.js";
+export{fx as BridgePairingDialog}from"../../../chunks/app-BSx8WeSP.js";
