@@ -19,7 +19,10 @@ const deps = {block: new Block(repo, 'row'), uiStateBlock: new Block(repo, 'pane
 const normal = ActionContextTypes.NORMAL_MODE
 const global = ActionContextTypes.GLOBAL
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
 
 function Contexts({modal, scope}: {modal: boolean; scope: string}) {
   const dispatch = useActiveContextsDispatch()
@@ -78,8 +81,9 @@ function setup({always = false, actions = []}: {always?: boolean; actions?: Acti
   return {view, tree, runtime, shell, clicked}
 }
 
-function press(target: HTMLElement, key: string, init: KeyboardEventInit = {}) {
+function press(target: HTMLElement, key: string, {trusted = false, ...init}: KeyboardEventInit & {trusted?: boolean} = {}) {
   const event = new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true, ...init})
+  Object.defineProperty(event, 'isTrusted', {value: trusted})
   // Happy DOM aliases AltGraph to Alt. Model a distinct Option/Alt key.
   const getModifierState = event.getModifierState.bind(event)
   vi.spyOn(event, 'getModifierState').mockImplementation(key => key !== 'AltGraph' && getModifierState(key))
@@ -88,6 +92,53 @@ function press(target: HTMLElement, key: string, init: KeyboardEventInit = {}) {
 }
 
 const hint = (text: string) => screen.getByText(text).getAttribute('data-vim-link-hint')
+
+function pointerDown(target: HTMLElement, pointerType: string) {
+  act(() => target.dispatchEvent(new PointerEvent('pointerdown', {pointerType, bubbles: true})))
+}
+
+it('on a touchscreen shows automatic hints during keyboard use and hides them on touch or pen', () => {
+  vi.spyOn(navigator, 'maxTouchPoints', 'get').mockReturnValue(5)
+  const {shell, clicked} = setup({always: true})
+  expect(hint('First')).toBeNull()
+  press(shell, 'a')
+  press(shell, 'a', {trusted: true, isComposing: true})
+  expect(hint('First')).toBeNull()
+
+  const editor = document.createElement('input')
+  shell.append(editor)
+  act(() => editor.focus())
+  press(editor, 'a', {trusted: true})
+  act(() => shell.focus())
+  expect(hint('First')).toBeNull()
+
+  expect(press(shell, 'a', {trusted: true}).defaultPrevented).toBe(false)
+  expect(clicked).not.toHaveBeenCalled()
+  expect(hint('First')).toBe('a')
+  press(shell, 'a', {trusted: true})
+  expect(clicked).toHaveBeenCalledOnce()
+
+  pointerDown(shell, 'mouse')
+  expect(hint('First')).toBe('a')
+  pointerDown(shell, 'touch')
+  expect(hint('First')).toBeNull()
+  press(shell, 'Escape', {trusted: true})
+  expect(hint('First')).toBe('a')
+  pointerDown(shell, 'pen')
+  expect(hint('First')).toBeNull()
+})
+
+it('opens on the first toggle key on a touchscreen', () => {
+  vi.spyOn(navigator, 'maxTouchPoints', 'get').mockReturnValue(5)
+  const {shell} = setup()
+  expect(hint('First')).toBeNull()
+  press(shell, 'f', {trusted: true})
+  expect(hint('First')).toBe('a')
+  pointerDown(shell, 'touch')
+  expect(hint('First')).toBeNull()
+  press(shell, 'f', {trusted: true})
+  expect(hint('First')).toBe('a')
+})
 
 it('reveals only the focused block’s own visible links and follows through the original click handler', () => {
   const {shell, clicked} = setup()

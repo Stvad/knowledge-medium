@@ -25,7 +25,7 @@ export const vimLinkHintsPlugin = systemToggle({
   systemToggle({
     id: 'system:vim-link-hints/always-show',
     name: 'Always show link hints',
-    description: 'Show link hints when a block gains focus. Toggle link hints hides them until you move.',
+    description: 'Show link hints when a block gains focus. On touchscreens, hints appear while using a keyboard. Toggle link hints hides them until you move.',
     defaultEnabled: false,
   }).of(alwaysShowLinkHintsFacet.of(true)),
 ])
