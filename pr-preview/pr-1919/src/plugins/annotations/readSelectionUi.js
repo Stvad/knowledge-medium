@@ -1,1 +1,1 @@
-export{$m as ReadSelectionMenu,eh as nestedReadSelectionMenuContribution,th as readSelectionShortcutsMount}from"../../../chunks/app-BSx8WeSP.js";
+export{$m as ReadSelectionMenu,eh as nestedReadSelectionMenuContribution,th as readSelectionShortcutsMount}from"../../../chunks/app-CWbVzXEv.js";

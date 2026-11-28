@@ -1,1 +1,1 @@
-export{WG as AddPropertyForm}from"../../../chunks/app-BSx8WeSP.js";
+export{WG as AddPropertyForm}from"../../../chunks/app-CWbVzXEv.js";

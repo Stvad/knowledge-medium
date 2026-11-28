@@ -1,1 +1,1 @@
-export{FR as useOverrides}from"../../chunks/app-BSx8WeSP.js";
+export{FR as useOverrides}from"../../chunks/app-CWbVzXEv.js";

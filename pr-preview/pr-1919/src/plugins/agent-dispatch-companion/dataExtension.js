@@ -1,1 +1,1 @@
-export{I8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-BSx8WeSP.js";
+export{I8 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CWbVzXEv.js";

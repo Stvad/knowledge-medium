@@ -1,1 +1,1 @@
-export{TA as mintCanary,EA as validateCanary}from"../../../chunks/app-BSx8WeSP.js";
+export{TA as mintCanary,EA as validateCanary}from"../../../chunks/app-CWbVzXEv.js";

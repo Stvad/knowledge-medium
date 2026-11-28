@@ -1,1 +1,1 @@
-export{Dk as WorkspaceSwitcher}from"../../../chunks/app-BSx8WeSP.js";
+export{Dk as WorkspaceSwitcher}from"../../../chunks/app-CWbVzXEv.js";

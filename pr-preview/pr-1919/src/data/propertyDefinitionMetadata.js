@@ -1,1 +1,1 @@
-export{Jot as parsePropertyDefinitionMetadata,Yot as propertySchemaOriginForSeedKey}from"../../chunks/app-BSx8WeSP.js";
+export{Jot as parsePropertyDefinitionMetadata,Yot as propertySchemaOriginForSeedKey}from"../../chunks/app-CWbVzXEv.js";
