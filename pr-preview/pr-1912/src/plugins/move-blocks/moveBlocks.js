@@ -1,1 +1,1 @@
-export{IC as moveBlocksTo}from"../../../chunks/app-CMoUDNkU.js";
+export{IC as moveBlocksTo}from"../../../chunks/app-BMlFC6Tg.js";

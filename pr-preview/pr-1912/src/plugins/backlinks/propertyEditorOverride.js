@@ -1,1 +1,1 @@
-export{Qx as dailyNoteBacklinksDefaultsUi}from"../../../chunks/app-CMoUDNkU.js";
+export{Qx as dailyNoteBacklinksDefaultsUi}from"../../../chunks/app-BMlFC6Tg.js";

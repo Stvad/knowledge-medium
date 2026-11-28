@@ -1,1 +1,1 @@
-export{i8 as attachmentCleanerIOContribution,a8 as attachmentsDataExtension}from"../../../chunks/app-CMoUDNkU.js";
+export{o8 as attachmentCleanerIOContribution,s8 as attachmentsDataExtension}from"../../../chunks/app-BMlFC6Tg.js";

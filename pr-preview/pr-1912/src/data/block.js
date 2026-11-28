@@ -1,1 +1,1 @@
-export{Ott as Block,ktt as requireLoadedBlock}from"../../chunks/app-CMoUDNkU.js";
+export{Att as Block,jtt as requireLoadedBlock}from"../../chunks/app-BMlFC6Tg.js";

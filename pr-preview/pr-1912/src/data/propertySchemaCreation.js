@@ -1,1 +1,1 @@
-export{aX as adoptOrCreatePropertySchema}from"../../chunks/app-CMoUDNkU.js";
+export{sX as adoptOrCreatePropertySchema}from"../../chunks/app-BMlFC6Tg.js";
