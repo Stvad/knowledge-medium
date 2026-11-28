@@ -23,7 +23,10 @@ const request = 'Summarize this [[Review Bot]]'
 const failedTask = async (properties: Record<string, unknown> = {}) => {
   const id = await repo.tx(tx => tx.create({
     workspaceId: 'test-workspace', parentId: null, orderKey: 'a0', content: request,
-    properties: {[AGENT_PROPS.status]: 'error', [AGENT_PROPS.watcher]: 'review', ...properties},
+    properties: {
+      [AGENT_PROPS.status]: 'error', [AGENT_PROPS.watcher]: 'review',
+      [AGENT_PROPS.watcherKind]: 'backlinks', ...properties,
+    },
   }), {scope: ChangeScope.BlockDefault})
   return repo.block(id)
 }
@@ -68,6 +71,26 @@ it('does not request a retry without the original watcher', async () => {
   await retryAgent(block)
 
   expect((await block.load())!.properties[AGENT_PROPS.retryAt]).toBeUndefined()
+})
+
+it.each([
+  {kind: undefined, key: 'reply', marker: true, allowed: true},
+  {kind: undefined, key: 'row-reply', marker: true, allowed: false},
+  {kind: undefined, key: 'reply', marker: false, allowed: false},
+  {kind: undefined, key: null, marker: false, allowed: false},
+  {kind: 'query', key: 'reply', marker: true, allowed: false},
+])('uses daemon reply provenance for a legacy failure ($kind, $key, $marker)', async ({kind, key, marker, allowed}) => {
+  const block = await failedTask({[AGENT_PROPS.watcherKind]: kind, [AGENT_PROPS.attempts]: 1})
+  if (key) {
+    await repo.tx(tx => tx.create({
+      workspaceId: 'test-workspace', parentId: block.id, orderKey: 'a0', content: 'Failure reply',
+      properties: {[AGENT_PROPS.reply]: marker, 'agent:subtreeKey': `${key}:${block.id}:1`},
+    }), {scope: ChangeScope.BlockDefault})
+  }
+
+  await retryAgent(block)
+
+  expect((await block.load())!.properties[AGENT_PROPS.retryAt]).toEqual(allowed ? expect.any(Number) : undefined)
 })
 
 it('does not write retry metadata onto a deleted task', async () => {

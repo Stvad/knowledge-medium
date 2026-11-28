@@ -24,6 +24,7 @@ import {
   agentRetryAtProp,
   agentStatusProp,
   agentUpdatedAtProp,
+  agentWatcherKindProp,
   agentWatcherProp,
 } from './schema.ts'
 import { markAskedAgent } from './askedStore.ts'
@@ -53,6 +54,7 @@ const REQUEUE_CLEARED_PROPS = [
   agentCancelProp,
   agentRetryAtProp,
   agentWatcherProp,
+  agentWatcherKindProp,
 ] as const
 
 export const contentWithAgentMention = (content: string): string => {

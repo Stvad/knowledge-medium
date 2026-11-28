@@ -111,6 +111,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/status', 'agent:status', 'string', 'string'],
   ['system:agent-dispatch-companion/property/updated-at', 'agent:updated-at', 'number', 'number'],
   ['system:agent-dispatch-companion/property/watcher', 'agent:watcher', 'string', 'string'],
+  ['system:agent-dispatch-companion/property/watcher-kind', 'agent:watcher-kind', 'string', 'string'],
   ['system:agent-runtime/property/subtree-key', 'agent:subtreeKey', 'string', 'string'],
   ['system:annotations/property/margin-open', 'annotation:marginOpen', 'boolean', 'boolean'],
   ['system:annotations/property/margin-share', 'annotation:marginShare', 'optional-number', 'number'],

@@ -19,7 +19,7 @@ import { clearAskedAgent, isAskedAgent, markAskedAgent } from '../askedStore.ts'
 
 const block = {
   id: 'block-1',
-  repo: {isReadOnly: false, onReadOnlyChange: () => () => {}},
+  repo: {isReadOnly: false, onReadOnlyChange: () => () => {}, query: {children: () => 'children'}},
 } as unknown as Block
 
 const Chip = (() => {
@@ -27,9 +27,9 @@ const Chip = (() => {
   return item.component
 })()
 
-const withProperties = (properties: Record<string, unknown> | undefined) =>
-  useHandleMock.mockImplementation((_handle: unknown, options: { selector: (doc: unknown) => unknown }) =>
-    options.selector(properties ? { properties } : undefined))
+const withProperties = (properties: Record<string, unknown> | undefined, children: unknown[] = []) =>
+  useHandleMock.mockImplementation((handle: unknown, options: { selector: (doc: unknown) => unknown }) =>
+    options.selector(handle === 'children' ? children : properties ? {id: block.id, properties} : undefined))
 
 const chipNode = (container: HTMLElement) => container.querySelector('[data-agent-dispatch-chip]')
 
@@ -58,6 +58,7 @@ describe('AgentStatusChipItem', () => {
     withProperties({
       'agent:status': 'error',
       'agent:watcher': 'review',
+      'agent:watcher-kind': 'backlinks',
       'agent:error': 'Authentication expired',
     })
     render(<Chip block={block} />)
@@ -73,6 +74,7 @@ describe('AgentStatusChipItem', () => {
     withProperties({
       'agent:status': 'error',
       'agent:watcher': 'review',
+      'agent:watcher-kind': 'backlinks',
       'agent:error': 'Authentication expired',
       'agent:retry-at': 500,
     })
@@ -82,6 +84,22 @@ describe('AgentStatusChipItem', () => {
     expect(chipNode(container)?.getAttribute('title')).toContain('Authentication expired · Retry requested')
     expect(screen.getByText('Retry pending')).toBeVisible()
     expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it.each([
+    {kind: undefined, replyKey: 'reply:block-1:1', offersRetry: true},
+    {kind: undefined, replyKey: 'row-reply:block-1:1', offersRetry: false},
+    {kind: 'query', replyKey: 'reply:block-1:1', offersRetry: false},
+  ])('shows Retry only for a mention failure ($kind, $replyKey)', ({kind, replyKey, offersRetry}) => {
+    withProperties({
+      'agent:status': 'error',
+      'agent:watcher': 'review',
+      'agent:watcher-kind': kind,
+      'agent:attempts': 1,
+    }, [{properties: {'agent:reply': true, 'agent:subtreeKey': replyKey}}])
+    render(<Chip block={block} />)
+
+    expect(Boolean(screen.queryByRole('button', {name: /task actions/}))).toBe(offersRetry)
   })
 
   it('updates the running activity age and warning on the mounted chip', () => {

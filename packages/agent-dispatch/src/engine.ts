@@ -305,7 +305,7 @@ export const createEngine = (deps: EngineDeps) => {
     if (!fresh || pendingDecision(task, fresh).reason !== expected) return
     const reason = expected === 'cancelled' ? 'cancelled'
       : `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
-    await graph.setTaskProps(sourceId, {status: 'error', error: reason, cancel: null, activity: null, nowMs: now()})
+    await graph.setTaskProps(sourceId, {status: 'error', watcherKind: watcher.kind, error: reason, cancel: null, activity: null, nowMs: now()})
     if (postsReply(task)) await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}.`, {
       replyKey: `park:${sourceId}:${randomUUID()}`, shape: 'block', final: true,
     }).catch(() => {})
@@ -421,7 +421,7 @@ export const createEngine = (deps: EngineDeps) => {
       if (block.properties?.[PROPS.status] === 'queued') return
       log(`[${watcher.name}] ${sourceId} waiting: its thread's session ${session} is still running`)
       await graph.setTaskProps(sourceId, {
-        status: 'queued', watcher: watcher.name, executor: runner.executor, activity: THREAD_BUSY_ACTIVITY, nowMs: now(),
+        status: 'queued', watcher: watcher.name, watcherKind: watcher.kind, executor: runner.executor, activity: THREAD_BUSY_ACTIVITY, nowMs: now(),
         ...acceptedRetry,
       })
       return
@@ -492,7 +492,7 @@ export const createEngine = (deps: EngineDeps) => {
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, error: null, nowMs: claimStamp,
+        status: 'running', watcher: watcher.name, watcherKind: watcher.kind, executor: runner.executor, attempts: attempt, activity: null, error: null, nowMs: claimStamp,
         ...acceptedRetry,
       })
 

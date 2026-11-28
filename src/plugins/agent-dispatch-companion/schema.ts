@@ -59,6 +59,16 @@ export const agentWatcherProp = seedProperty({
   hidden: true,
 })
 
+export const agentWatcherKindProp = seedProperty({
+  seedKey: 'system:agent-dispatch-companion/property/watcher-kind',
+  revision: 1,
+  name: 'agent:watcher-kind',
+  preset: 'string',
+  defaultValue: '',
+  changeScope: scope,
+  hidden: true,
+})
+
 export const agentSessionProp = seedProperty({
   seedKey: 'system:agent-dispatch-companion/property/session',
   revision: 1,
@@ -172,6 +182,7 @@ export const agentProtocolSeeds = [
   agentStatusProp,
   agentExecutorProp,
   agentWatcherProp,
+  agentWatcherKindProp,
   agentSessionProp,
   agentResumeOptionsProp,
   agentUpdatedAtProp,

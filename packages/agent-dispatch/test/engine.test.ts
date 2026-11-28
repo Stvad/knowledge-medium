@@ -74,6 +74,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
         [PROPS.status]: args.status,
         [PROPS.updatedAt]: args.nowMs,
         ...(args.watcher !== undefined ? {[PROPS.watcher]: args.watcher} : {}),
+        ...(args.watcherKind !== undefined ? {[PROPS.watcherKind]: args.watcherKind} : {}),
         ...(args.executor !== undefined ? {[PROPS.executor]: args.executor} : {}),
         ...(args.session ? {[PROPS.session]: args.session} : {}),
         ...(args.resumeOptions ? {[PROPS.resumeOptions]: args.resumeOptions} : {}),
@@ -1053,7 +1054,9 @@ describe('mention lifecycle', () => {
     await engine.tick()
     await engine.drain()
     const block = blocks.get('b-1')!
-    expect(block.properties).toMatchObject({[PROPS.status]: 'error', [PROPS.watcher]: 'review', [PROPS.attempts]: 1})
+    expect(block.properties).toMatchObject({
+      [PROPS.status]: 'error', [PROPS.watcher]: 'review', [PROPS.watcherKind]: 'backlinks', [PROPS.attempts]: 1,
+    })
     expect(reconciles[0].markdown).toContain('Authentication expired')
 
     await engine.tick()
@@ -2743,7 +2746,7 @@ describe('query row tasks', () => {
     expect(blocks.get('retry')?.properties).toMatchObject({[PROPS.status]: 'done', [PROPS.attempts]: 2})
   })
 
-  it('preserves the failure when a chip requests a retry of a SQL task', async () => {
+  it('preserves a SQL task failure carrying a mention retry request', async () => {
     const failure = {
       [PROPS.status]: 'error', [PROPS.watcher]: 'inbox', [PROPS.attempts]: 3,
       [PROPS.error]: 'Authentication expired', [PROPS.retryAt]: NOW,

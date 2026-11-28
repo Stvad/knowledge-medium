@@ -26,6 +26,7 @@ export const PROPS = {
   resumeOptions: 'agent:resume-options',
   /** Watcher name that claimed the block. */
   watcher: 'agent:watcher',
+  watcherKind: 'agent:watcher-kind',
   /** Executor that claimed the block, used by synced UI chips. */
   executor: 'agent:executor',
   /** Last status-transition timestamp (ms). */

@@ -43,7 +43,7 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 ## Upgrade to 0.9.12
 
-Restart the daemon on 0.9.12 to use **Retry** from a failed mention's status chip. The request stays pending until the named watcher finds the mention and has a run slot. The new attempt keeps previous replies and resumes the existing session when that watcher supports resume. Scheduled SQL row tasks keep their failure details and their separate automatic retry policy.
+Restart the daemon on 0.9.12 to use **Retry** from a failed mention's status chip. The request stays pending until the named watcher finds the mention and has a run slot. The new attempt keeps previous replies and resumes the existing session when that watcher supports resume. For tasks from older releases, the original reply identifies the failed mention. Scheduled SQL row tasks use their existing automatic retry policy.
 
 ## Upgrade to 0.9.11
 
