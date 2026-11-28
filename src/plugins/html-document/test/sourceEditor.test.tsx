@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import {forceParsing} from '@codemirror/language'
 import {describe, expect, it, vi} from 'vitest'
 import {doc, press, setupBlockUi} from '@/test/blockUiFixture.tsx'
 import {HtmlSourceEditor} from '../HtmlDocumentContent.tsx'
@@ -16,6 +17,8 @@ describe('the HTML source editor', () => {
     ['Shift+Enter', {shiftKey: true}],
   ])('%s adds a line and stays in the editor', async (_name, init) => {
     const view = await open('<p>'.length)
+    // Enter computes indentation from the syntax tree available at keydown.
+    await vi.waitFor(() => expect(forceParsing(view, view.state.doc.length)).toBe(true))
     press(view, 'Enter', init)
     expect(doc(view)).toBe('<p>\n  hi</p>')
     expect(reachedWindow()).toEqual([])
