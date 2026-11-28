@@ -1,1 +1,1 @@
-export{IB as formatActionKeyHint,LB as getActionKeyHint,RB as keyHintsByActionId,zB as shortcutTitle,BB as useActionKeyHint,VB as useActionKeyHints}from"../../chunks/app-KZm-JQK3.js";
+export{IB as formatActionKeyHint,LB as getActionKeyHint,RB as keyHintsByActionId,zB as shortcutTitle,BB as useActionKeyHint,VB as useActionKeyHints}from"../../chunks/app-D4v4kqTY.js";

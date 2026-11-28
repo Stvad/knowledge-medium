@@ -1,1 +1,1 @@
-export{EG as BlockProperties}from"../../chunks/app-KZm-JQK3.js";
+export{EG as BlockProperties}from"../../chunks/app-D4v4kqTY.js";
