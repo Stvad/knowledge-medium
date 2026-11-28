@@ -59,6 +59,16 @@ export const agentWatcherProp = seedProperty({
   hidden: true,
 })
 
+export const agentWatcherKindProp = seedProperty({
+  seedKey: 'system:agent-dispatch-companion/property/watcher-kind',
+  revision: 1,
+  name: 'agent:watcher-kind',
+  preset: 'string',
+  defaultValue: '',
+  changeScope: scope,
+  hidden: true,
+})
+
 export const agentSessionProp = seedProperty({
   seedKey: 'system:agent-dispatch-companion/property/session',
   revision: 1,
@@ -157,11 +167,22 @@ export const agentCancelProp = seedProperty({
   hidden: true,
 })
 
+export const agentRetryAtProp = seedProperty({
+  seedKey: 'system:agent-dispatch-companion/property/retry-at',
+  revision: 1,
+  name: 'agent:retry-at',
+  preset: 'number',
+  defaultValue: 0,
+  changeScope: scope,
+  hidden: true,
+})
+
 /** Every agent-protocol seed, in `AGENT_PROPS` order. */
 export const agentProtocolSeeds = [
   agentStatusProp,
   agentExecutorProp,
   agentWatcherProp,
+  agentWatcherKindProp,
   agentSessionProp,
   agentResumeOptionsProp,
   agentUpdatedAtProp,
@@ -172,4 +193,5 @@ export const agentProtocolSeeds = [
   agentActivityAtProp,
   agentAskedAtProp,
   agentCancelProp,
+  agentRetryAtProp,
 ] as const

@@ -6,7 +6,7 @@
  */
 import { withContributorId, type BridgeClient } from '@knowledge-medium/agent-cli/client'
 import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
-import { PROPS, type Executor, type TaskStatus } from './config.js'
+import { PROPS, type Executor, type TaskStatus, type Watcher } from './config.js'
 import type { AgentResumeOptions } from './resumeCommand.js'
 import { MEMORY_BLOCK_TITLE, type MemoryEntry } from './memory.js'
 
@@ -31,8 +31,9 @@ export interface MemoryScope {
 
 interface TaskPropsWrite {
   status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
+  watcherKind?: Watcher['kind'],
   resumeOptions?: AgentResumeOptions | null,
-  attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
+  attempts?: number, activity?: string | null, cancel?: string | null, retryAt?: number, nowMs: number,
 }
 
 /** Blocks of memory a run's prompt shows (about 50 short lines). */
@@ -75,6 +76,7 @@ export const createGraph = (bridgeClient: BridgeClient) => {
       [PROPS.updatedAt]: args.nowMs,
     }
     if (args.watcher !== undefined) properties[PROPS.watcher] = args.watcher
+    if (args.watcherKind !== undefined) properties[PROPS.watcherKind] = args.watcherKind
     if (args.executor !== undefined) properties[PROPS.executor] = args.executor
     if (args.session !== undefined && args.session !== null) properties[PROPS.session] = args.session
     if (args.resumeOptions !== undefined && args.resumeOptions !== null) properties[PROPS.resumeOptions] = args.resumeOptions
@@ -87,6 +89,7 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     // Clear the cancel REQUEST on terminal writes so a satisfied/stale
     // cancel never re-cancels a later rerun.
     if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
+    if (args.retryAt !== undefined) properties[PROPS.retryAt] = args.retryAt
     await writeTaskProps(id, properties)
   }
 
