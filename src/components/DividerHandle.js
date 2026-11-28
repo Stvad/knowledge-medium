@@ -1,1 +1,1 @@
-export{GB as DIVIDER_HANDLE_WIDTH_PX,KB as DividerHandle}from"../../chunks/app-BDPhr5j0.js";
+export{GB as DIVIDER_HANDLE_WIDTH_PX,KB as DividerHandle}from"../../chunks/app-xi0lFqes.js";
