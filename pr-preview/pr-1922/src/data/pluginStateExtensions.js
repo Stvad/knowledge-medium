@@ -1,1 +1,0 @@
-export{b6 as pluginPrefsExtension,x6 as pluginUIStateExtension}from"../../chunks/app-DU4h-_RX.js";

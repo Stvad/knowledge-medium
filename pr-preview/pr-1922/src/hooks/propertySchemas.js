@@ -1,1 +1,0 @@
-export{_X as usePropertySchemas}from"../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{E3 as characterCounterDataExtension}from"../../../chunks/app-DU4h-_RX.js";

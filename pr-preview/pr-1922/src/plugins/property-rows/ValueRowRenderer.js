@@ -1,1 +1,0 @@
-export{hc as propertyReadContentContribution}from"../../../chunks/app-DU4h-_RX.js";

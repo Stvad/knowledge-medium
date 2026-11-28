@@ -1,1 +1,0 @@
-export{vk as LeftSidebar,mk as LeftSidebarHeaderItem,hk as OPEN_LEFT_SIDEBAR_ACTION_ID,gk as leftSidebarActions,lk as leftSidebarCoreSection,uk as leftSidebarHeaderItem,dk as leftSidebarMount,fk as leftSidebarPlugin,Tk as leftSidebarSectionsFacet,pk as leftSidebarShortcutsSection,_k as openLeftSidebarAction}from"../../../chunks/app-DU4h-_RX.js";

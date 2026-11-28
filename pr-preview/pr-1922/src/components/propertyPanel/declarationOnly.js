@@ -1,1 +1,0 @@
-export{tK as declarationOnlyDefinitionForName,nK as declarationOnlyStatusText}from"../../../chunks/app-DU4h-_RX.js";

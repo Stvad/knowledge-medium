@@ -1,1 +1,0 @@
-export{I5 as instrumentAdapter}from"../../../chunks/app-DU4h-_RX.js";

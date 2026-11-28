@@ -1,1 +1,0 @@
-export{GF as SWIPE_QUICK_ACTIONS_GESTURE_ID,KF as SWIPE_TRIGGER_PX,qF as swipeRecognizer}from"../../../chunks/app-DU4h-_RX.js";

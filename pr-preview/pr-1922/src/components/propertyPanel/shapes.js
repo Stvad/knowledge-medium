@@ -1,1 +1,0 @@
-export{xX as propertyShapeLabel}from"../../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{ML as checkForAppUpdate,NL as registerServiceWorker}from"../chunks/app-DU4h-_RX.js";

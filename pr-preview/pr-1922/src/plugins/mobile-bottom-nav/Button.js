@@ -1,1 +1,0 @@
-export{UO as MobileBottomNavButton}from"../../../chunks/app-DU4h-_RX.js";

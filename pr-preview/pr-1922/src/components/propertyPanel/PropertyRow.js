@@ -1,1 +1,0 @@
-export{MG as PropertyRow,NG as PropertyValueCell}from"../../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{B7 as FacetBridge}from"../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{qI as BlockPasteShellDecorator,JI as blockPasteShellDecorator}from"../../chunks/app-DU4h-_RX.js";

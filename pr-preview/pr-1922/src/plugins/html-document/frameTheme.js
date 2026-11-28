@@ -1,1 +1,0 @@
-export{Cn as useFrameThemeCss}from"../../../chunks/app-DU4h-_RX.js";

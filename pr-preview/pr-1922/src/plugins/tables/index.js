@@ -1,1 +1,0 @@
-export{go as tablesPlugin}from"../../../chunks/app-DU4h-_RX.js";

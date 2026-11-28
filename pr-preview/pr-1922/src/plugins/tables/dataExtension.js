@@ -1,1 +1,0 @@
-export{_Q as tablesDataExtension}from"../../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{g1 as geoDataExtension}from"../../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{FC as MoveDestinationPicker}from"../../../chunks/app-DU4h-_RX.js";

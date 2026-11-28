@@ -1,1 +1,0 @@
-export{eY as isIOS,tY as isMacPlatform}from"../../chunks/app-DU4h-_RX.js";

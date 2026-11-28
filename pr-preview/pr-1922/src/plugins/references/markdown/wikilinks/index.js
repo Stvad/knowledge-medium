@@ -1,1 +1,0 @@
-export{IS as wikilinkMarkdownExtension}from"../../../../../chunks/app-DU4h-_RX.js";

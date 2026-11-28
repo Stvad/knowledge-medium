@@ -1,1 +1,0 @@
-export{XO as PromotableBreadcrumbList}from"../../../chunks/app-DU4h-_RX.js";

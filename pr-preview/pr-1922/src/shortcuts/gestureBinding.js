@@ -1,1 +1,0 @@
-export{GL as gestureBindingDescriptor,KL as matchesGestureEvent}from"../../chunks/app-DU4h-_RX.js";

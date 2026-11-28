@@ -1,1 +1,0 @@
-export{Xs as QueryText}from"../../../../chunks/app-DU4h-_RX.js";

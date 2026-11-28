@@ -1,1 +1,0 @@
-export{qN as CompactReferenceLink}from"../../../chunks/app-DU4h-_RX.js";

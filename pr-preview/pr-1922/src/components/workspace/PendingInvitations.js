@@ -1,1 +1,0 @@
-export{FA as PendingInvitations}from"../../../chunks/app-DU4h-_RX.js";

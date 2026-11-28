@@ -1,1 +1,0 @@
-export{Mm as quotedInFooterContribution}from"../../../chunks/app-DU4h-_RX.js";

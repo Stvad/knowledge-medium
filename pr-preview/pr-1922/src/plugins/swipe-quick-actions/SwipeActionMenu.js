@@ -1,1 +1,0 @@
-export{WF as SwipeActionMenu}from"../../../chunks/app-DU4h-_RX.js";

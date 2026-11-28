@@ -1,1 +1,0 @@
-export{NS as referencesPlugin}from"../../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{QC as richPastePlugin}from"../../../chunks/app-DU4h-_RX.js";

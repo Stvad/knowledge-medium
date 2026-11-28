@@ -1,1 +1,0 @@
-export{dG as defineVariant,fG as defineVariantFacet}from"../../chunks/app-DU4h-_RX.js";

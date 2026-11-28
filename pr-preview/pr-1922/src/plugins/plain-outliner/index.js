@@ -1,1 +1,0 @@
-export{tk as plainOutlinerPlugin}from"../../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{dv as extensionApiCatalog,fv as extensionApiRuntimeExports}from"../../chunks/app-DU4h-_RX.js";

@@ -1,1 +1,0 @@
-export{XG as buildPropertyPanelSections}from"../../chunks/app-DU4h-_RX.js";

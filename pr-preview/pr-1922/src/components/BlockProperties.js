@@ -1,1 +1,0 @@
-export{EG as BlockProperties}from"../../chunks/app-DU4h-_RX.js";

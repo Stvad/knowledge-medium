@@ -1,1 +1,0 @@
-export{kF as CommandPaletteHeaderItem}from"../../../chunks/app-DU4h-_RX.js";

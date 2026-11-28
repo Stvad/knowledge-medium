@@ -1,1 +1,0 @@
-export{ty as authorIdOf}from"../../../chunks/app-DU4h-_RX.js";

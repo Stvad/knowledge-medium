@@ -1,1 +1,0 @@
-export{X1 as matchCharTrigger}from"../../chunks/app-DU4h-_RX.js";

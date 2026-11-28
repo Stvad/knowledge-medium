@@ -1,1 +1,0 @@
-export{nQ as staticDataExtensions}from"../../chunks/app-DU4h-_RX.js";

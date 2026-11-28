@@ -1,1 +1,0 @@
-export{Jpt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DU4h-_RX.js";
