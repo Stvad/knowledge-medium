@@ -1,1 +1,0 @@
-export{d4 as adoptTypedBlock,f4 as createTypedChild,Amt as derivedBlockId,p4 as getOrCreateTypedChild}from"../../chunks/app-DENLERP0.js";

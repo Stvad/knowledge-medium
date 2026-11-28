@@ -1,1 +1,0 @@
-export{C6 as pluginPrefsExtension,w6 as pluginUIStateExtension}from"../../chunks/app-DENLERP0.js";

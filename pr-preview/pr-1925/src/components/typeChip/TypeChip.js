@@ -1,1 +1,0 @@
-export{RI as TypeChip}from"../../../chunks/app-DENLERP0.js";

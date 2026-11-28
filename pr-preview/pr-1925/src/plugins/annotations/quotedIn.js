@@ -1,1 +1,0 @@
-export{Mm as quotedInFooterContribution}from"../../../chunks/app-DENLERP0.js";

@@ -1,1 +1,0 @@
-export{ent as kernelDataExtension}from"../../chunks/app-DENLERP0.js";

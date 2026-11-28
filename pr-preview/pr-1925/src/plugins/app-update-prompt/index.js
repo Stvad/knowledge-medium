@@ -1,1 +1,0 @@
-export{EL as appUpdatePromptExtension}from"../../../chunks/app-DENLERP0.js";

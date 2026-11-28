@@ -1,1 +1,0 @@
-export{QO as usePromotableBreadcrumb}from"../../../chunks/app-DENLERP0.js";

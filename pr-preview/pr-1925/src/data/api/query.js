@@ -1,1 +1,0 @@
-export{ovt as defineQuery}from"../../../chunks/app-DENLERP0.js";

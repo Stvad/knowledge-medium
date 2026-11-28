@@ -1,1 +1,0 @@
-export{Drt as agree,Ort as pluralize}from"../../chunks/app-DENLERP0.js";

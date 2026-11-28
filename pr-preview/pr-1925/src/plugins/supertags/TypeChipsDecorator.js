@@ -1,1 +1,0 @@
-export{an as typeChipsDecoratorContribution}from"../../../chunks/app-DENLERP0.js";

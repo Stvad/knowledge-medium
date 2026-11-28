@@ -1,1 +1,0 @@
-export{K7 as FacetBridge}from"../../chunks/app-DENLERP0.js";

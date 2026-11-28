@@ -1,1 +1,0 @@
-export{rk as BreadcrumbList}from"../../../chunks/app-DENLERP0.js";

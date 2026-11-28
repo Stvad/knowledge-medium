@@ -1,1 +1,0 @@
-export{SX as PropertyShapeButton,CX as PropertyShapeGlyph}from"../../../chunks/app-DENLERP0.js";

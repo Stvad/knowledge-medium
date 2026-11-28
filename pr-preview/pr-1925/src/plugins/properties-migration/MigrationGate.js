@@ -1,1 +1,0 @@
-export{Vc as MigrationGate}from"../../../chunks/app-DENLERP0.js";

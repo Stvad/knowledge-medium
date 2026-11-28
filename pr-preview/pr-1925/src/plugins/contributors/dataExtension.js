@@ -1,1 +1,0 @@
-export{c3 as contributorsDataExtension}from"../../../chunks/app-DENLERP0.js";

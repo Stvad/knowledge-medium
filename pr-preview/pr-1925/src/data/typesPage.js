@@ -1,1 +1,0 @@
-export{mpt as getOrCreateTypesPage,hpt as typesPageBlockId,gpt as typesPageSpec}from"../../chunks/app-DENLERP0.js";

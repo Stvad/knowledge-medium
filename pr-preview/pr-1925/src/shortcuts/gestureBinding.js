@@ -1,1 +1,0 @@
-export{JL as gestureBindingDescriptor,YL as matchesGestureEvent}from"../../chunks/app-DENLERP0.js";

@@ -1,1 +1,0 @@
-export{g8 as aliasDataExtension}from"../../../chunks/app-DENLERP0.js";

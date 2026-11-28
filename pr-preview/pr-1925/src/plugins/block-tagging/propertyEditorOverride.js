@@ -1,1 +1,0 @@
-export{ep as blockTagsConfigUi}from"../../../chunks/app-DENLERP0.js";

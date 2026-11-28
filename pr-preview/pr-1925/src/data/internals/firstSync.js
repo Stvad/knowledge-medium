@@ -1,1 +1,0 @@
-export{art as onFirstSync,ort as onSyncSettled}from"../../../chunks/app-DENLERP0.js";

@@ -1,1 +1,0 @@
-export{k3 as characterCounterDataExtension}from"../../../chunks/app-DENLERP0.js";

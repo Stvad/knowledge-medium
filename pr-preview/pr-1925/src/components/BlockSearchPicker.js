@@ -1,1 +1,0 @@
-export{WC as BlockSearchPicker}from"../../chunks/app-DENLERP0.js";

@@ -1,1 +1,0 @@
-export{r2 as annotationsDataExtension}from"../../../chunks/app-DENLERP0.js";

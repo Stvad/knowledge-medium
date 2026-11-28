@@ -1,1 +1,0 @@
-export{gvt as CORE_BLOCK_DELETED_EVENT,_vt as CORE_BLOCK_MERGED_EVENT,vvt as CORE_BLOCK_SPLIT_EVENT}from"../../../chunks/app-DENLERP0.js";

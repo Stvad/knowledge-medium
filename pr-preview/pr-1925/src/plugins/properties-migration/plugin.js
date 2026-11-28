@@ -1,1 +1,0 @@
-export{Bc as propertiesMigrationPlugin}from"../../../chunks/app-DENLERP0.js";

@@ -1,1 +1,0 @@
-export{yR as extensionDisplayName,bR as extensionName,xR as shownExtensionSource,SR as userExtensionShellToggle,CR as userExtensionToggle}from"../../chunks/app-DENLERP0.js";

@@ -1,1 +1,0 @@
-export{iK as declarationOnlyDefinitionForName,aK as declarationOnlyStatusText}from"../../../chunks/app-DENLERP0.js";

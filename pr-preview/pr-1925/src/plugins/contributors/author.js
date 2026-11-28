@@ -1,1 +1,0 @@
-export{iy as authorIdOf}from"../../../chunks/app-DENLERP0.js";

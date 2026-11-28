@@ -1,1 +1,0 @@
-export{MF as CommandPaletteHeaderItem}from"../../../chunks/app-DENLERP0.js";

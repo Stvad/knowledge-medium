@@ -1,1 +1,0 @@
-export{go as tablesPlugin}from"../../../chunks/app-DENLERP0.js";

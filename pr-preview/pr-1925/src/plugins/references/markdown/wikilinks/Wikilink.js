@@ -1,1 +1,0 @@
-export{BS as Wikilink}from"../../../../../chunks/app-DENLERP0.js";

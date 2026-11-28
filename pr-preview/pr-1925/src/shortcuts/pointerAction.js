@@ -1,1 +1,0 @@
-export{XL as dispatchPointerAction,ZL as setPointerActionDispatcher}from"../../chunks/app-DENLERP0.js";

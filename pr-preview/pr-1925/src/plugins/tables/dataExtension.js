@@ -1,1 +1,0 @@
-export{bQ as tablesDataExtension}from"../../../chunks/app-DENLERP0.js";

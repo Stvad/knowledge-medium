@@ -1,1 +1,0 @@
-export{Kl as dataIntegrityPlugin}from"../../../chunks/app-DENLERP0.js";

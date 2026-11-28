@@ -1,1 +1,0 @@
-export{$vt as CHANGE_SCOPE_POLICIES,eyt as ChangeScope,tyt as isChangeScope,nyt as policyForScope,ryt as scopeAllowedInReadOnly,iyt as scopeIsUndoable,ayt as scopePoliciesEquivalent,oyt as scopeUploadsToServer,syt as sourceForScope}from"../../../chunks/app-DENLERP0.js";

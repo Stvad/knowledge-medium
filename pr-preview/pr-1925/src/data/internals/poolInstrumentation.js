@@ -1,1 +1,0 @@
-export{H5 as instrumentAdapter}from"../../../chunks/app-DENLERP0.js";
