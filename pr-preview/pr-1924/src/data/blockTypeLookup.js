@@ -1,1 +1,1 @@
-export{bnt as loadTypeIdsByBlock}from"../../chunks/app-BuZ8Aj1z.js";
+export{Snt as loadTypeIdsByBlock}from"../../chunks/app-BoNXuy6s.js";

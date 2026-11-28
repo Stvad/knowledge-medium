@@ -1,1 +1,1 @@
-export{zH as canConvertEmptyChildBlockToProperty,BH as convertEmptyChildBlockToProperty}from"../../chunks/app-BuZ8Aj1z.js";
+export{BH as canConvertEmptyChildBlockToProperty,VH as convertEmptyChildBlockToProperty}from"../../chunks/app-BoNXuy6s.js";

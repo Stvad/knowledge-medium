@@ -1,1 +1,1 @@
-export{TB as exampleExtensions,EB as insertExampleExtensionsUnder}from"../../chunks/app-BuZ8Aj1z.js";
+export{EB as exampleExtensions,DB as insertExampleExtensionsUnder}from"../../chunks/app-BoNXuy6s.js";

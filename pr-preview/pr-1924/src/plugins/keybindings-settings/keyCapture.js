@@ -1,1 +1,1 @@
-export{CP as chordFromEvent,rY as isMacPlatform,wP as isModifierOnly,TP as modifierPreview,ZJ as normalizeChord}from"../../../chunks/app-BuZ8Aj1z.js";
+export{wP as chordFromEvent,iY as isMacPlatform,TP as isModifierOnly,EP as modifierPreview,QJ as normalizeChord}from"../../../chunks/app-BoNXuy6s.js";

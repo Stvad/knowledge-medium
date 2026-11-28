@@ -1,1 +1,1 @@
-export{Nj as OPEN_RECENTS_ACTION_ID,Pj as openRecentsPage}from"../../../chunks/app-BuZ8Aj1z.js";
+export{Pj as OPEN_RECENTS_ACTION_ID,Fj as openRecentsPage}from"../../../chunks/app-BoNXuy6s.js";

@@ -1,1 +1,1 @@
-export{sU as BlockEditor}from"../../chunks/app-BuZ8Aj1z.js";
+export{cU as BlockEditor}from"../../chunks/app-BoNXuy6s.js";
