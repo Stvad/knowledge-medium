@@ -43,7 +43,7 @@ function makePrefs(workspaceId: string) {
   const data = {workspaceId}
   const listeners = new Set<(row: typeof data) => void>()
   return {
-    id: workspaceId, data,
+    id: workspaceId, data, status: () => 'ready',
     load: async () => data,
     peek: () => data,
     get: (prop: {name: string}) => values.get(prop.name),
@@ -252,7 +252,32 @@ describe('Matrix device authorization', () => {
     expect(authedRequest.mock.calls[1][2].since).toBe('shared-position')
   })
 
-  it.each([['stop', 'matrix.stop'], ['initialization', 'matrix.publish-position']])(
+  it('resumes the paused destination from the settings Restart button', async () => {
+    const repo = makeRepo()
+    const prefs = repo.prefs.get(a.workspaceId)!
+    const set = vi.spyOn(prefs, 'set')
+    localStorage.setItem(tokenKey(a), 'bound')
+    localStorage.setItem(stoppedKey(a), '1')
+    localStorage.setItem(stoppedKey(otherWorkspace), '1')
+    const editor = contributions.map(c => c.value).find(c => 'Editor' in c && c.label === 'Matrix') as {
+      Editor: ComponentType<{block: typeof prefs, value: boolean, onChange: () => void}>
+    }
+    render(createElement(editor.Editor, {block: prefs, value: true, onChange: vi.fn()}))
+    const get = vi.spyOn(prefs, 'get')
+    stop = matrixIngestEffect.start({repo})
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith(autoStartProp))
+    expect(authedRequest).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Restart ingest'}))
+    expect(localStorage.getItem(stoppedKey(a))).toBeNull()
+    expect(localStorage.getItem(stoppedKey(otherWorkspace))).toBe('1')
+    expect(localStorage.getItem(tokenKey(a))).toBe('bound')
+    expect(set).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(authedRequest).toHaveBeenCalledOnce())
+    expect(authedRequest.mock.calls[0][2].since).toBe('shared-position')
+  })
+
+  it.each([['start', 'matrix.start'], ['stop', 'matrix.stop'], ['initialization', 'matrix.publish-position']])(
     'ignores %s without an active workspace', async (_, action) => {
       const repo = makeRepo()
       repo.setActiveWorkspaceId('')

@@ -2,8 +2,10 @@
 import { act, render, screen } from '@testing-library/react'
 import { Suspense } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
+import * as provider from '@/data/repoProvider'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { RepoProvider, createRepoBoot, useRepo } from '@/context/repo.tsx'
 
 vi.mock('@/components/Login', () => ({
@@ -52,6 +54,28 @@ describe('RepoProvider', () => {
 })
 
 describe('createRepoBoot', () => {
+  describe('default initialization', () => {
+    let h: TestDb
+    beforeAll(async () => { h = await createTestDb() })
+    beforeEach(async () => {
+      await resetTestDb(h.db)
+      vi.spyOn(provider, 'ensurePowerSyncReady').mockResolvedValue()
+      vi.spyOn(provider, 'getPowerSyncDb').mockReturnValue(h.db as unknown as ReturnType<typeof provider.getPowerSyncDb>)
+    })
+    afterEach(() => vi.restoreAllMocks())
+    afterAll(async () => { await h.cleanup() })
+
+    it.each([false, true])('preserves the configured sync mode while disconnected (remote sync %s)', async useRemoteSync => {
+      const repo = await createRepoBoot(async () => {})(user, useRemoteSync)
+      try {
+        expect(h.db.currentStatus.connected).toBe(false)
+        expect(repo.localOnly).toBe(!useRemoteSync)
+      } finally {
+        repo.stopSyncObserver()
+      }
+    })
+  })
+
   it('resolves only after the layout is prepared, and a prepare failure fails the boot', async () => {
     const repo = {} as Repo
     const order: string[] = []

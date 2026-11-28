@@ -418,6 +418,11 @@ const matrixDiagnosticSource: DiagnosticSourceContribution = {
 
 const validBatch = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
 
+const syncPosition = (body: {next_batch?: unknown} | null | undefined): string => {
+  if (!validBatch(body?.next_batch)) throw new Error('Matrix returned an invalid sync position.')
+  return body.next_batch
+}
+
 const decodeNextBatch = (raw: string | null): string | null => {
   if (!raw) return null
   try {
@@ -438,23 +443,47 @@ export const checkpointId = (config: MatrixDestination) =>
   pluginBlockId(config.workspaceId, MATRIX_NS, 'checkpoint:' + destinationKey(config))
 
 const checkpointExists = 'This room already has a shared Matrix checkpoint. Resume ingest.'
-const requireCheckpoint = 'No valid shared Matrix checkpoint. On the original writer, publish its saved position. For a new room, choose Start fresh.'
+const requireCheckpoint = 'No shared Matrix checkpoint yet. On the original writer, publish its saved position. For a new room, choose Start fresh.'
+const damagedCheckpoint = 'Invalid shared Matrix checkpoint. Restore the room checkpoint from a known-good backup.'
 
 const checkpointPosition = (row: BlockData | null, config: MatrixDestination): string => {
-  if (!row || row.deleted || row.workspaceId !== config.workspaceId || !hasBlockType(row, checkpointType.id)) {
-    throw new Error(requireCheckpoint)
+  if (!row) throw new Error(requireCheckpoint)
+  if (row.deleted || row.workspaceId !== config.workspaceId || !hasBlockType(row, checkpointType.id)) {
+    throw new Error(damagedCheckpoint)
   }
   const value = row.properties[checkpointProp.name]
-  if (!validBatch(value)) throw new Error(requireCheckpoint)
+  if (!validBatch(value)) throw new Error(damagedCheckpoint)
   return value
 }
 
+// Dismissing a rejected upload removes its queue entry but leaves the local
+// message intact. Only server echoes can establish that its tree reached peers.
+// The staging table keeps block identities visible in encrypted workspaces too.
+const hasUnconfirmedMessages = (tx: Tx, config: MatrixDestination) => tx.readDb.getOptional(
+  `WITH RECURSIVE room_tree(id) AS (
+     SELECT t.block_id FROM block_types t JOIN blocks b ON b.id = t.block_id
+       WHERE t.type = 'matrix-message' AND t.workspace_id = ?
+         AND COALESCE(json_extract(b.properties_json, '$."matrix-event:room"'),
+                      json_extract(b.properties_json, '$."matrix:roomId"')) = ?
+     UNION
+     SELECT b.id FROM blocks b JOIN room_tree p ON b.parent_id = p.id
+       WHERE b.workspace_id = ? AND b.deleted = 0
+   )
+   SELECT 1 FROM room_tree t WHERE NOT EXISTS (
+     SELECT 1 FROM blocks_synced s WHERE s.id = t.id AND s.workspace_id = ?
+   ) LIMIT 1`,
+  [config.workspaceId, config.roomId, config.workspaceId, config.workspaceId],
+)
+
 const writeCheckpoint = (
-  repo: Repo, config: MatrixConfig, position: string, operation: 'initialize' | 'advance', verify: () => void,
+  repo: Repo, config: MatrixConfig, position: string, operation: 'fresh' | 'adopt' | 'advance', verify: () => void,
 ): Promise<boolean> => repo.tx(async (tx: Tx) => {
   // A refused message transaction can leave the upload queue before later
   // transactions upload. Keep the shared position behind both queues.
-  if (await tx.readDb.getOptional('SELECT 1 FROM ps_crud UNION ALL SELECT 1 FROM ps_crud_rejected LIMIT 1')) return false
+  if (operation !== 'fresh') {
+    if (await tx.readDb.getOptional('SELECT 1 FROM ps_crud UNION ALL SELECT 1 FROM ps_crud_rejected LIMIT 1')) return false
+    if (await hasUnconfirmedMessages(tx, config)) return false
+  }
   const id = checkpointId(config)
   if (operation === 'advance') {
     checkpointPosition(await tx.get(id), config)
@@ -474,12 +503,6 @@ const writeCheckpoint = (
   return true
 }, {scope: ChangeScope.BlockDefault, skipUndo: true, description: 'Save Matrix room checkpoint'})
 
-const createCheckpoint = async (repo: Repo, config: MatrixConfig, position: string, verify: () => void) => {
-  if (!await writeCheckpoint(repo, config, position, 'initialize', verify)) {
-    throw new Error('Wait for device uploads to finish and resolve rejected uploads before publishing a Matrix checkpoint.')
-  }
-}
-
 const verifyDestination = (repo: Repo, config: MatrixConfig) => {
   if (repo.activeWorkspaceId !== config.workspaceId || loadToken(config) !== config.accessToken) {
     throw new Error('The Matrix destination or device credential changed.')
@@ -489,15 +512,16 @@ const verifyDestination = (repo: Repo, config: MatrixConfig) => {
 export const publishDeviceCheckpoint = async (repo: Repo, config: MatrixConfig) => {
   const position = loadNextBatch(config)
   if (!position) throw new Error('This device has no valid saved Matrix position.')
-  await createCheckpoint(repo, config, position, () => verifyDestination(repo, config))
+  if (!await writeCheckpoint(repo, config, position, 'adopt', () => verifyDestination(repo, config))) {
+    throw new Error('Wait for device uploads and server copies of the room messages. Resolve rejected uploads before publishing a Matrix checkpoint.')
+  }
 }
 
 export const startFresh = async (repo: Repo, config: MatrixConfig, signal: AbortSignal, client: any) => {
   if (await repo.load(checkpointId(config))) throw new Error(checkpointExists)
   verifyDestination(repo, config)
   const body = await fetchMatrixSync(config, null, signal, client)
-  if (!validBatch(body?.next_batch)) throw new Error('Matrix returned an invalid sync position.')
-  await createCheckpoint(repo, config, body.next_batch, () => {
+  await writeCheckpoint(repo, config, syncPosition(body), 'fresh', () => {
     signal.throwIfAborted()
     verifyDestination(repo, config)
   })
@@ -1111,7 +1135,7 @@ const isRetryableError = (error: unknown): boolean => {
 }
 
 export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
-  let nextBatch: string | null = null
+  let nextBatch = repo.localOnly ? loadNextBatch(config) : null
   let checkpointDue = false
   // `toasted` gates the one-per-streak toast (loud, actionable errors only);
   // `degraded` tracks whether a warning is currently shown so recovery clears it.
@@ -1131,8 +1155,7 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
       const timeline = syncBody?.rooms?.join?.[config.roomId]?.timeline
       if (timeline && !Array.isArray(timeline.events)) throw new Error('Matrix timeline has no events array')
-      const newBatch = syncBody?.next_batch
-      if (!validBatch(newBatch)) throw new Error('Matrix returned an invalid sync position.')
+      const newBatch = syncPosition(syncBody)
       // With no prev_batch, page from this sync's upper bound. The overlap
       // with its timeline is safe because each message is checked by identity.
       const gap = timeline?.limited
@@ -1147,7 +1170,7 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
         }
       }
 
-      if (checkpointDue) {
+      if (checkpointDue && !repo.localOnly) {
         checkpointDue = !await writeCheckpoint(repo, config, newBatch, 'advance', verifyWorkspace)
       }
       verifyWorkspace()
@@ -1440,6 +1463,11 @@ const subscribeCredential = (notify: () => void) => {
   }
 }
 
+const resumeDevice = (destination: MatrixDestination) => {
+  window.localStorage.removeItem(stoppedKey(destination))
+  requestRestart()
+}
+
 const ConnectedEditor = ({value, onChange, block}: PropertyEditorProps<boolean>) => {
   const prefs = block as Block
   const destination = useHandle(prefs) && destinationFromPrefs(prefs)
@@ -1470,7 +1498,7 @@ const ConnectedEditor = ({value, onChange, block}: PropertyEditorProps<boolean>)
       <Button
         variant='outline'
         size='sm'
-        onClick={requestRestart}
+        onClick={() => resumeDevice(destinationFromPrefs(prefs))}
         disabled={!tokenPresent}
       >Restart ingest</Button>
     </div>
@@ -1521,11 +1549,10 @@ const startAction = {
   context: ActionContextTypes.GLOBAL,
   handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
     const prefs = await prefsBlock(uiStateBlock.repo)
-    if (prefs) {
-      window.localStorage.removeItem(stoppedKey(destinationFromPrefs(prefs)))
-      await prefs.set(autoStartProp, true)
-    }
-    requestRestart()
+    if (!prefs) return
+    const destination = destinationFromPrefs(prefs)
+    await prefs.set(autoStartProp, true)
+    resumeDevice(destination)
   },
 }
 

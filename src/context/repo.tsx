@@ -51,6 +51,7 @@ const initRepo = memoizeAsync(
       ensureHome: (workspaceId) => getOrCreateMigrationsPage(requireRepo(), workspaceId),
     })
     const repo = new Repo({
+      localOnly: !useRemoteSync,
       db,
       cache,
       user: {id: user.id, name: user.name},

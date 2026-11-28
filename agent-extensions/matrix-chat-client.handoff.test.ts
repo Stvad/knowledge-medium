@@ -11,7 +11,7 @@ import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPrope
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets.js'
 import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension.js'
 import {diagnosticsFacet, type DiagnosticSourceContribution} from '@/plugins/diagnostics/facet.js'
-import matrix, {checkpointId, messageNodeId, nextBatchKey, pollLoop, publishDeviceCheckpoint, startFresh, tokenKey} from './matrix-chat-client.tsx'
+import matrix, {appendMatrixMessage, checkpointId, messageNodeId, nextBatchKey, pollLoop, publishDeviceCheckpoint, startFresh, tokenKey} from './matrix-chat-client.tsx'
 
 vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({}))
 
@@ -20,10 +20,10 @@ const diagnostics = matrix.find(c => c.facet.id === diagnosticsFacet.id)!.value 
 const cursorKey = nextBatchKey(config)
 const event = (body: string) => ({type: 'm.room.message', event_id: '$' + body, origin_server_ts: 1_700_000_000_000, content: {body}})
 
-function replica(db: TestDb['db'], tag: string) {
+function replica(db: TestDb['db'], tag: string, localOnly = false) {
   let id = 0
   const {repo, cache} = createTestRepo({
-    db, extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension, dailyNotesDataExtension, ...matrix], newId: () => tag + ++id, backfillSyncGate: () => () => {},
+    db, localOnly, extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension, dailyNotesDataExtension, ...matrix], newId: () => tag + ++id, backfillSyncGate: () => () => {},
   })
   repo.setActiveWorkspaceId(config.workspaceId)
   return {db, repo, cache, downloadCursor: 0}
@@ -157,17 +157,21 @@ it('ingests the handoff gap exactly once when another open tab completes its out
   expect(await messages(receiver)).toEqual(['gap'])
 })
 
-it.each(['pending', 'quarantined'] as const)(
+it.each(['pending', 'quarantined', 'dismissed rejection'] as const)(
   'resumes from the visible checkpoint with a %s sender message upload', async state => {
     await seed()
     const stream = ['in-flight']
     const assertQueue = async () => {
       const id = messageNodeId(config.workspaceId, '$in-flight', [0])
       expect(await sender.db.getOptional("SELECT 1 FROM ps_crud WHERE json_extract(data, '$.id') = ?", [id])).toBeTruthy()
-      if (state === 'quarantined') {
+      if (state !== 'pending') {
         await quarantineSenderUploads()
         expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeNull()
         expect(await sender.db.getOptional("SELECT 1 FROM ps_crud_rejected WHERE json_extract(data, '$.id') = ?", [id])).toBeTruthy()
+        if (state === 'dismissed rejection') {
+          await sender.db.execute('DELETE FROM ps_crud_rejected')
+          expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [id])).toBeNull()
+        }
       }
     }
     expect(await poll(sender, [
@@ -175,6 +179,11 @@ it.each(['pending', 'quarantined'] as const)(
       async since => { await assertQueue(); return response(since, stream) },
     ])).toEqual(['S0', 'S1', 'S1'])
     expect(await messages(sender)).toEqual(stream)
+    if (state !== 'pending') {
+      await upload(sender)
+      await download(receiver)
+    }
+    expect(await checkpoint(receiver)).toBe('S0')
     expect(await checkpoint(sender)).toBe('S0')
     expect(await messages(receiver)).toEqual([])
     localStorage.clear()
@@ -242,7 +251,7 @@ it.each(['workspace', 'credential', 'abort'] as const)(
   },
 )
 
-it('publishes after upload completes and leaves the checkpoint alone over subsequent idle polls', async () => {
+it('publishes after uploaded messages arrive back from the server and skips subsequent idle polls', async () => {
   await seed()
   const stream = ['landed']
   expect(await poll(sender, [
@@ -252,12 +261,17 @@ it('publishes after upload completes and leaves the checkpoint alone over subseq
       await upload(sender)
       return response(since, stream)
     },
+    async since => {
+      expect(await checkpoint(sender)).toBe('S0')
+      await download(sender)
+      return response(since, stream)
+    },
     async () => {
       expect(await checkpoint(sender)).toBe('S1')
       await upload(sender)
       return {next_batch: 'S8'}
     },
-  ])).toEqual(['S0', 'S1', 'S1', 'S8'])
+  ])).toEqual(['S0', 'S1', 'S1', 'S1', 'S8'])
   expect(await checkpoint(sender)).toBe('S1')
   await download(receiver)
   expect(await messages(receiver)).toEqual(stream)
@@ -292,6 +306,7 @@ it('leaves a checkpoint deleted during the poll untouched', async () => {
     since => response(since, stream),
     async since => {
       await upload(sender)
+      await download(sender)
       await sender.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [checkpointId(config)])
       return response(since, stream)
     },
@@ -336,6 +351,7 @@ it('rechecks the active workspace inside the checkpoint advancement transaction'
     since => response(since, stream),
     async since => {
       await upload(sender)
+      await download(sender)
       const write = sender.repo.tx.bind(sender.repo)
       vi.spyOn(sender.repo, 'tx').mockImplementationOnce((fn, opts) => write(async tx => {
         const get = tx.get.bind(tx)
@@ -351,4 +367,143 @@ it('rechecks the active workspace inside the checkpoint advancement transaction'
   ])
   expect(sender.repo.activeWorkspaceId).toBe('other-workspace')
   expect(await checkpoint(sender)).toBe('S0')
+})
+
+const omitDescendantEcho = async (content: string) => {
+  const rows = server.rows()
+  const leaf = rows.find(row => row.content === content)
+  expect(leaf).toBeDefined()
+  const partial = createFakeSyncServer({now: Date.now})
+  await partial.createRows(rows.filter(row => row.id !== leaf!.id))
+  await partial.deliverTo(sender.db, 0)
+  expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [leaf!.parent_id])).toBeTruthy()
+  expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced WHERE id = ?', [leaf!.id])).toBeNull()
+  return leaf!.id as string
+}
+
+it('holds the checkpoint until every message descendant has a server echo', async () => {
+  await seed()
+  const stream = ['- root\n  - child\n    - grandchild']
+  expect(await poll(sender, [
+    since => response(since, stream),
+    async since => {
+      await upload(sender)
+      await omitDescendantEcho('grandchild')
+      return response(since, stream)
+    },
+    async since => {
+      expect(await checkpoint(sender)).toBe('S0')
+      await download(sender)
+      return response(since, stream)
+    },
+  ])).toEqual(['S0', 'S1', 'S1', 'S1'])
+  expect(await checkpoint(sender)).toBe('S1')
+})
+
+it('starts a new room explicitly even while an unrelated edit is waiting to upload', async () => {
+  await sender.repo.tx(tx => tx.create({
+    workspaceId: config.workspaceId, parentId: null, orderKey: 'a0', content: 'unrelated pending edit',
+  }), {scope: ChangeScope.BlockDefault})
+  expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeTruthy()
+  localStorage.setItem(tokenKey(config), config.accessToken)
+  await fresh(since => response(since, []))
+  expect(await checkpoint(sender)).toBe('S0')
+})
+
+it('a permanently local-only device resumes its own position and saves progress across reloads', async () => {
+  localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S0'}))
+  const stream = ['locally ingested']
+  const device = replica(sender.db, 'offline', true)
+  expect(await poll(device, [since => response(since, stream)])).toEqual(['S0', 'S1'])
+  expect(await messages(device)).toEqual(stream)
+  expect(await checkpoint(device)).toBeUndefined()
+  const rebooted = replica(device.db, 'rebooted', true)
+  expect(await poll(rebooted)).toEqual(['S1'])
+  expect(await checkpoint(rebooted)).toBeUndefined()
+})
+
+it('requires a server echo of prior Matrix ingest before bootstrapping from the original writer', async () => {
+  localStorage.setItem(tokenKey(config), config.accessToken)
+  localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S1'}))
+  await appendMatrixMessage(sender.repo, config, event('pre-upgrade'), {}, () => {})
+  await upload(sender)
+  expect(await sender.db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')).toBeNull()
+  await expect(publishDeviceCheckpoint(sender.repo, config)).rejects.toThrow()
+  expect(await checkpoint(sender)).toBeUndefined()
+  await download(sender)
+  await publishDeviceCheckpoint(sender.repo, config)
+  expect(await checkpoint(sender)).toBe('S1')
+})
+
+it('a permanently local-only device can resume a shared baseline and keeps subsequent progress local', async () => {
+  await seed()
+  const device = replica(receiver.db, 'local-only', true)
+  localStorage.removeItem(cursorKey)
+  const stream = ['new']
+  expect(await poll(device, [
+    since => response(since, stream),
+    async since => {
+      await upload(device)
+      await download(device)
+      return response(since, stream)
+    },
+  ])).toEqual(['S0', 'S1', 'S1'])
+  expect(await checkpoint(device)).toBe('S0')
+  expect(await poll(device)).toEqual(['S1'])
+})
+
+it.each([null, '{"nextBatch":""}'])('refuses local-only resume when neither graph nor device has a position (%j)', async raw => {
+  if (raw !== null) localStorage.setItem(cursorKey, raw)
+  const device = replica(sender.db, 'local-only', true)
+  expect(await poll(device)).toEqual([])
+  expect(diagnostics.getSnapshot()?.detail).toMatch(/checkpoint/i)
+  expect(await checkpoint(device)).toBeUndefined()
+})
+
+const adoptPosition = () => {
+  localStorage.setItem(tokenKey(config), config.accessToken)
+  localStorage.setItem(cursorKey, JSON.stringify({nextBatch: 'S1'}))
+  return publishDeviceCheckpoint(sender.repo, config)
+}
+
+it('requires the server copy of a message identified by its legacy room property', async () => {
+  const prior = event('legacy')
+  const id = messageNodeId(config.workspaceId, prior.event_id, [0])
+  await appendMatrixMessage(sender.repo, config, prior, {}, () => {})
+  await sender.db.execute(`UPDATE blocks SET properties_json =
+    json_set(json_remove(properties_json, '$."matrix-event:room"'), '$."matrix:roomId"', ?) WHERE id = ?`, [config.roomId, id])
+  await upload(sender)
+  await expect(adoptPosition()).rejects.toThrow(/uploads|server cop/i)
+  expect(await checkpoint(sender)).toBeUndefined()
+})
+
+it('can publish with an unconfirmed message belonging to another room', async () => {
+  const otherRoom = {...config, roomId: '!elsewhere:matrix.test'}
+  await appendMatrixMessage(sender.repo, otherRoom, event('elsewhere'), {}, () => {})
+  await upload(sender)
+  expect(await sender.db.getOptional('SELECT 1 FROM blocks_synced LIMIT 1')).toBeNull()
+  await adoptPosition()
+  expect(await checkpoint(sender)).toBe('S1')
+})
+
+it('can publish when only a deleted message child lacks an echo', async () => {
+  await appendMatrixMessage(sender.repo, config, event('- root\n  - deleted leaf'), {}, () => {})
+  await upload(sender)
+  const leafId = await omitDescendantEcho('deleted leaf')
+  await sender.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [leafId])
+  await adoptPosition()
+  expect(await checkpoint(sender)).toBe('S1')
+})
+
+it('refuses a server echo whose block id matches but whose workspace differs', async () => {
+  const prior = event('prior')
+  const id = messageNodeId(config.workspaceId, prior.event_id, [0])
+  await appendMatrixMessage(sender.repo, config, prior, {}, () => {})
+  await upload(sender)
+  await server.deliverTo(sender.db, 0)
+  await sender.db.execute('UPDATE blocks_synced SET workspace_id = ? WHERE id = ?', ['elsewhere', id])
+  expect(await sender.db.getOptional('SELECT workspace_id FROM blocks_synced WHERE id = ?', [id]))
+    .toEqual({workspace_id: 'elsewhere'})
+  await expect(adoptPosition()).rejects.toThrow(/uploads|server cop/i)
+  expect(await checkpoint(sender)).toBeUndefined()
 })
