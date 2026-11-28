@@ -5,9 +5,7 @@ import {createTestRepo} from '@/data/test/createTestRepo.js'
 import type {Repo} from '@/data/repo.js'
 import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension.js'
 import {dailyNoteBlockId, todayIso} from '@/plugins/daily-notes/dailyNotes.js'
-import {appendMatrixMessage, messageNodeId} from './matrix-chat-client.tsx'
-
-vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({}))
+import {appendMatrixMessage, messageNodeId, mxcToHttpUrl} from './matrix-chat-client.tsx'
 
 const config = {workspaceId: 'workspace', baseUrl: 'https://matrix.test', roomId: '!room:matrix.test', autoStart: true, accessToken: 'fixture'}
 const event = {event_id: '$event', origin_server_ts: 1700000000000, content: {body: 'new message'}}
@@ -28,7 +26,7 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks())
 
 const ingest = (body = event.content.body) =>
-  appendMatrixMessage(repo, config, {...event, content: {body}}, {}, () => {})
+  appendMatrixMessage(repo, config, {...event, content: {body}}, () => {})
 
 const rawRow = async (
   id: string, properties: Record<string, unknown>,
@@ -104,7 +102,7 @@ it('rechecks an arriving identity under the write lock before creating the day',
 })
 
 it('rechecks before restoring a deleted container when a moved root arrives', async () => {
-  await appendMatrixMessage(repo, config, {...event, event_id: '$first'}, {}, () => {})
+  await appendMatrixMessage(repo, config, {...event, event_id: '$first'}, () => {})
   const parent = (await row(messageNodeId(config.workspaceId, '$first', [0])))!.parent_id!
   await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [parent]))
   const write = repo.tx.bind(repo)
@@ -120,13 +118,13 @@ it('rechecks before restoring a deleted container when a moved root arrives', as
 
 it('skips the identity read for an event without an id', async () => {
   const read = vi.spyOn(repo.db, 'getOptional')
-  await appendMatrixMessage(repo, config, {...event, event_id: ''}, {}, () => {})
+  await appendMatrixMessage(repo, config, {...event, event_id: ''}, () => {})
   expect(read).not.toHaveBeenCalled()
 })
 
 it('stops before the initial identity read when the workspace has changed', async () => {
   const read = vi.spyOn(repo.db, 'getOptional')
-  await expect(appendMatrixMessage(repo, config, event, {}, () => { throw new Error('stopped') }))
+  await expect(appendMatrixMessage(repo, config, event, () => { throw new Error('stopped') }))
     .rejects.toThrow('stopped')
   expect(read).not.toHaveBeenCalled()
 })
@@ -146,4 +144,29 @@ it('bounds the live property lookup by type and workspace and scans only the tom
   const plan = (await h.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${sql}`, params)).map(row => row.detail)
   expect(plan).toContain('SEARCH t USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
   expect(plan).toContain('SCAN blocks USING INDEX idx_blocks_parent_deleted')
+})
+
+it('preserves links to the app origin when ingesting on either runtime', async () => {
+  const original = `[page](${location.origin}/#/workspace/fixture)`
+  await ingest(original)
+  expect(await row(rootId)).toMatchObject({content: original})
+})
+
+it('links Matrix media through the local homeserver without an access token', async () => {
+  await appendMatrixMessage(repo, config, {
+    ...event, content: {msgtype: 'm.image', body: 'photo', url: 'mxc://[2001:db8::1]:8448/e_J5'},
+  }, () => {})
+  expect(await row(rootId)).toMatchObject({
+    content: '![photo](https://matrix.test/_matrix/media/v3/download/[2001:db8::1]:8448/e_J5?allow_redirect=true)',
+  })
+})
+
+it.each(['mxc://', 'mxc://host/id/extra', 'mxc://host/id?x', 'mxc://host/id%2fextra', 'mxc://host/id\n'])(
+  'rejects malformed Matrix media URI %j',
+  uri => expect(mxcToHttpUrl(uri, config.baseUrl)).toBe(''),
+)
+
+it('preserves a direct media URL and leaves a missing URL empty', () => {
+  expect(mxcToHttpUrl('https://media.test/clip', config.baseUrl)).toBe('https://media.test/clip')
+  expect(mxcToHttpUrl(undefined, config.baseUrl)).toBe('')
 })

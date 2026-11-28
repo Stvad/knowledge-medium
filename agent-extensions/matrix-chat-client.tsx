@@ -15,10 +15,11 @@ import {
   type PropertyEditorProps, type Tx,
 } from '@/data/api/index.js'
 import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
-import { getPluginPrefsBlock, pluginPrefsBlockId } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, preferencesRootId, readPluginPref } from '@/data/stateBlocks.js'
 import { pluginBlockId } from '@/extensions/pluginIds.js'
 import { propertyEditorOverridesFacet, definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { DeletedConflictError } from '@/data/api/errors.js'
+import { CallbackSet } from '@/utils/callbackSet.js'
 import { abortableSleep } from '@/utils/abortableSleep.js'
 import { showError, showInfo, showSuccess } from '@/utils/toast.js'
 import { useRepo } from '@/context/repo.js'
@@ -45,7 +46,6 @@ import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
 import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react'
-import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 
 // ---------------------------------------------------------------------------
 // constants
@@ -68,8 +68,6 @@ const TOKEN_PREFIX = 'knowledge-medium:matrix:token:v2:'
 const LEGACY_TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
 const LEGACY_BATCH_PREFIX = 'knowledge-medium:matrix-messages:state:v1:'
 const legacyNextBatchKey = ({baseUrl, roomId}: Pick<MatrixDestination, 'baseUrl' | 'roomId'>) => LEGACY_BATCH_PREFIX + baseUrl + ':' + roomId
-// one-time migration marker (per workspace) — see migrateEventNamespace.
-const MIGRATION_FLAG_PREFIX = 'knowledge-medium:matrix:migrated:event-ns:v1'
 // pre-refactor config blob (homeserver/room/autoStart/token in one localStorage
 // JSON) + a per-device flag for the one-time carry-over (see migrateLegacyConfig).
 const LEGACY_CONFIG_KEY = 'knowledge-medium:matrix-messages:config:v1'
@@ -89,9 +87,11 @@ const subscribeSetupOpen = (notify: () => void) => {
   return () => setupListeners.delete(notify)
 }
 
-// Genuine broadcast: wakes the running ingest effect to restart (not a
-// dialog/toggle), so it stays a window CustomEvent.
-const RESTART_EVENT = 'matrix:ingest:restart'
+// An explicit restart also wakes a poll waiting for a recovered cursor.
+const restartRequests = new CallbackSet('matrix-restart')
+const storageChanges = new CallbackSet('matrix-storage')
+const pollErrors = new CallbackSet<[message: string]>('matrix-poll-error')
+const requestRestart = () => restartRequests.notify()
 
 // ---------------------------------------------------------------------------
 // properties — config lives on the per-plugin prefs block; the access token
@@ -214,16 +214,6 @@ const checkpointType = seedType({
   properties: [homeserverProp, roomIdProp, checkpointProp],
 })
 
-// Mapping for the one-time rename of the legacy `matrix:*` event-metadata
-// keys onto the reserved `matrix-event:*` namespace.
-const EVENT_KEY_RENAMES: ReadonlyArray<readonly [string, string]> = [
-  ['matrix:eventId', eventIdProp.name],
-  ['matrix:roomId', eventRoomProp.name],
-  ['matrix:url', eventUrlProp.name],
-  ['matrix:author', eventAuthorProp.name],
-  ['matrix:timestamp', eventTimestampProp.name],
-]
-
 // ---------------------------------------------------------------------------
 // config / secret storage
 
@@ -253,11 +243,11 @@ export const stoppedKey = (destination: MatrixDestination) =>
 export const nextBatchKey = (destination: MatrixDestination) =>
   `knowledge-medium:matrix-messages:state:v2:${destinationKey(destination)}`
 
-const loadToken = (destination: MatrixDestination) => window.localStorage.getItem(tokenKey(destination))
-const pendingToken = () => window.localStorage.getItem(LEGACY_TOKEN_KEY)
+const loadToken = (destination: MatrixDestination) => localStorage.getItem(tokenKey(destination))
+const pendingToken = () => localStorage.getItem(LEGACY_TOKEN_KEY)
 
 const storageKeys = (prefix: string): string[] => {
-  const storage = window.localStorage
+  const storage = localStorage
   const keys: string[] = []
   for (let i = 0; i < storage.length; i++) {
     const key = storage.key(i)
@@ -267,7 +257,7 @@ const storageKeys = (prefix: string): string[] => {
 }
 
 const legacyCheckpoint = ({baseUrl, roomId}: MatrixDestination): string | null => {
-  const storage = window.localStorage
+  const storage = localStorage
   const current = storage.getItem(legacyNextBatchKey({baseUrl, roomId}))
   if (decodeNextBatch(current)) return current
 
@@ -298,13 +288,13 @@ const clearLegacyTokens = () => {
   const legacy = readLegacyConfig()
   if (legacy?.accessToken) {
     delete legacy.accessToken
-    window.localStorage.setItem(LEGACY_CONFIG_KEY, JSON.stringify(legacy))
+    localStorage.setItem(LEGACY_CONFIG_KEY, JSON.stringify(legacy))
   }
-  window.localStorage.removeItem(LEGACY_TOKEN_KEY)
+  localStorage.removeItem(LEGACY_TOKEN_KEY)
 }
 
 const bindToken = (destination: MatrixDestination, token: string, bindLegacy: boolean) => {
-  const storage = window.localStorage
+  const storage = localStorage
   const checkpointKey = nextBatchKey(destination)
   if (bindLegacy && storage.getItem(checkpointKey) === null) {
     const cursor = legacyCheckpoint(destination)
@@ -316,7 +306,7 @@ const bindToken = (destination: MatrixDestination, token: string, bindLegacy: bo
 
 const forgetDeviceTokens = () => {
   if (!window.confirm('Forget all Matrix tokens in this browser across all workspaces?')) return
-  for (const key of storageKeys(TOKEN_PREFIX)) window.localStorage.removeItem(key)
+  for (const key of storageKeys(TOKEN_PREFIX)) localStorage.removeItem(key)
   clearLegacyTokens()
   requestRestart()
   setSetupOpen(false)
@@ -345,7 +335,7 @@ const destinationFromPrefs = (prefs: Block): MatrixDestination => ({
 
 const loadConfig = (prefs: Block): MatrixConfigCandidate => {
   const destination = destinationFromPrefs(prefs)
-  return {...destination, accessToken: loadToken(destination), autoStart: prefs.get(autoStartProp) && !window.localStorage.getItem(stoppedKey(destination))}
+  return {...destination, accessToken: loadToken(destination), autoStart: prefs.get(autoStartProp) && !localStorage.getItem(stoppedKey(destination))}
 }
 
 const MATRIX_DIAGNOSTIC_ID = 'matrix-chat-client'
@@ -433,11 +423,11 @@ const decodeNextBatch = (raw: string | null): string | null => {
   }
 }
 
-const loadNextBatch = (config: MatrixConfig) => decodeNextBatch(window.localStorage.getItem(nextBatchKey(config)))
+const loadNextBatch = (config: MatrixConfig) => decodeNextBatch(localStorage.getItem(nextBatchKey(config)))
 
 // Preserve the v1 {nextBatch, savedAt} shape so setup can copy a checkpoint verbatim.
 const saveNextBatch = (config: MatrixConfig, nextBatch: string) =>
-  window.localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch, savedAt: Date.now()}))
+  localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch, savedAt: Date.now()}))
 
 export const checkpointId = (config: MatrixDestination) =>
   pluginBlockId(config.workspaceId, MATRIX_NS, 'checkpoint:' + destinationKey(config))
@@ -483,7 +473,7 @@ const advanceCheckpoint = (repo: Repo, config: MatrixConfig, position: string, v
     return null
   }, {scope: ChangeScope.BlockDefault, skipUndo: true, description: 'Advance Matrix room checkpoint'})
 
-export const startFresh = async (repo: Repo, config: MatrixConfig, signal: AbortSignal, client: any) => {
+export const startFresh = async (repo: Repo, config: MatrixConfig, signal: AbortSignal, client: MatrixClient) => {
   const requireNewRoom = async (tx?: Tx) => {
     const gap = await syncGapReason(repo, config.workspaceId, tx)
     if (gap) throw new Error(`Waiting for sync before starting fresh. ${gap}`)
@@ -537,26 +527,41 @@ const buildSyncQueryParams = (config: MatrixConfig, since: string | null) => {
   return queryParams
 }
 
-const createMatrixClient = (config: MatrixConfig) =>
-  matrixSdk.createClient({
-    baseUrl: config.baseUrl,
-    accessToken: config.accessToken,
-  })
+interface MatrixClient {
+  get: (path: string, query: Record<string, string>, signal: AbortSignal) => Promise<any>
+}
 
-const fetchMatrixSync = (config: MatrixConfig, since: string | null, signal: AbortSignal, matrixClient: any) =>
-  matrixClient.http.authedRequest(
-    'GET',
-    '/sync',
-    buildSyncQueryParams(config, since),
-    undefined,
-    {abortSignal: signal},
-  )
+export const createMatrixClient = (config: MatrixConfig): MatrixClient => ({
+  async get(path, query, signal) {
+    const url = new URL(`/_matrix/client/v3${path}`, config.baseUrl)
+    url.search = new URLSearchParams(query).toString()
+    const response = await fetch(url, {
+      signal,
+      headers: {Accept: 'application/json', Authorization: `Bearer ${config.accessToken}`},
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      cache: 'no-cache',
+    })
+    if (!response.ok) {
+      const body = await response.json().catch(() => null)
+      const details = [body?.errcode, body?.error].filter(part => typeof part === 'string' && part)
+      throw Object.assign(
+        new Error(`Matrix HTTP ${response.status}${details.length ? `: ${details.join(': ')}` : ''}`),
+        {httpStatus: response.status},
+      )
+    }
+    return response.json()
+  },
+})
+
+const fetchMatrixSync = (config: MatrixConfig, since: string | null, signal: AbortSignal, client: MatrixClient) =>
+  client.get('/sync', buildSyncQueryParams(config, since), signal)
 
 // /messages returns newest first. Reverse the complete interval so appending a
 // recovered page never puts it after the more recent page fetched before it.
 const fetchGapEvents = async (
   config: MatrixConfig, start: unknown, since: string, signal: AbortSignal,
-  matrixClient: any, verifyWorkspace: () => void,
+  matrixClient: MatrixClient, verifyWorkspace: () => void,
 ): Promise<any[]> => {
   if (typeof start !== 'string' || !start) throw new Error('Matrix history has an invalid starting token')
   const events: any[] = []
@@ -566,10 +571,10 @@ const fetchGapEvents = async (
     verifyWorkspace()
     if (visited.has(from)) throw new Error('Matrix history pagination repeated a token')
     visited.add(from)
-    const page = await matrixClient.http.authedRequest(
-      'GET', `/rooms/${encodeURIComponent(config.roomId)}/messages`,
+    const page = await matrixClient.get(
+      `/rooms/${encodeURIComponent(config.roomId)}/messages`,
       {from, to: since, dir: 'b', filter: JSON.stringify({types: ['m.room.message']}), limit: '100'},
-      undefined, {abortSignal: signal},
+      signal,
     )
     if (!Array.isArray(page?.chunk)) throw new Error('Matrix history page has no chunk')
     for (const event of page.chunk) events.push(event)
@@ -588,54 +593,42 @@ const eventTimestamp = (event: any): number => {
 // ---------------------------------------------------------------------------
 // message text → markdown
 
-const escapeRegex = (value: unknown) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-const unwrapLinks = (value: unknown): string => {
-  let text = String(value ?? '')
-  text = text.replace(
+const unwrapLinks = (value: unknown): string =>
+  String(value ?? '').replace(
     /\[(.*?)]\(https:\/\/roamresearch\.com\/#\/app\/[^/]+\/page\/[a-zA-Z-_0-9]+?\)/g,
     '$1',
   )
 
-  const origin = window.location?.origin
-  if (origin) {
-    text = text.replace(new RegExp(`\\[(.*?)]\\(${escapeRegex(origin)}\\/[^)]*\\)`, 'g'), '$1')
-  }
+// MXC server names can include a port or a bracketed IPv6 address.
+const mxcPath = /^(?:\[[\dA-Fa-f:.]{2,45}]|[A-Za-z\d.-]{1,255})(?::\d{1,5})?\/[\w-]+$/
 
-  return text
-}
+export const mxcToHttpUrl = (mxcUrl: unknown, baseUrl: string): string => {
+  if (typeof mxcUrl !== 'string') return ''
+  if (!mxcUrl.startsWith('mxc://')) return mxcUrl
 
-const mxcToHttpUrl = (mxcUrl: unknown, matrixClient: any): string => {
-  if (typeof mxcUrl !== 'string' || !mxcUrl.startsWith('mxc://')) return (mxcUrl as string) || ''
-
-  return matrixClient.mxcUrlToHttp(
-    mxcUrl,
-    undefined,
-    undefined,
-    undefined,
-    false,
-    true,
-    false,
-  ) || ''
+  const path = mxcUrl.slice(6)
+  if (mxcPath.exec(path)?.[0] !== path) return ''
+  // Stored links need to work without exposing the device's access token.
+  return new URL(`/_matrix/media/v3/download/${path}?allow_redirect=true`, baseUrl).href
 }
 
 const getMediaLabel = (content: any, fallback: string): string =>
   String(content.body || content.filename || fallback).trim() || fallback
 
-const getMessageText = (event: any, matrixClient: any): string => {
+const getMessageText = (event: any, baseUrl: string): string => {
   const content = event.content && typeof event.content === 'object' ? event.content : {}
   const msgtype = typeof content.msgtype === 'string' ? content.msgtype : 'm.room.message'
 
   if (msgtype === 'm.audio') {
-    return `{{[[audio]]: ${mxcToHttpUrl(content.url, matrixClient)} }}`
+    return `{{[[audio]]: ${mxcToHttpUrl(content.url, baseUrl)} }}`
   }
 
   if (msgtype === 'm.image') {
-    return `![${getMediaLabel(content, 'image')}](${mxcToHttpUrl(content.url, matrixClient)})`
+    return `![${getMediaLabel(content, 'image')}](${mxcToHttpUrl(content.url, baseUrl)})`
   }
 
   if (msgtype === 'm.file' || msgtype === 'm.video') {
-    return `[${getMediaLabel(content, msgtype)}](${mxcToHttpUrl(content.url, matrixClient)})`
+    return `[${getMediaLabel(content, msgtype)}](${mxcToHttpUrl(content.url, baseUrl)})`
   }
 
   if (msgtype === 'm.emote') return `* ${unwrapLinks(content.body)}`
@@ -838,10 +831,10 @@ const flattenBlockDefs = (blocks: BlockDef[]): BlockDef[] =>
 
 const createBlocksFromEvent = (
   event: any,
-  matrixClient: any,
+  baseUrl: string,
   repo: any,
 ): {tree: MessageNode[]; diagnostics: string[]} => {
-  const text = getMessageText(event, matrixClient)
+  const text = getMessageText(event, baseUrl)
   const walk: PromotionWalk = {
     options: matrixPromotionOptions(repo),
     bubbled: new Set<string>(),
@@ -955,7 +948,7 @@ const handledEvent = (
 )
 
 export const appendMatrixMessage = async (
-  repo: any, config: MatrixConfig, event: any, matrixClient: any, verifyWorkspace: () => void,
+  repo: any, config: MatrixConfig, event: any, verifyWorkspace: () => void,
 ): Promise<void> => {
   const eventId = typeof event.event_id === 'string' ? event.event_id : null
   if (!eventId) return
@@ -970,7 +963,7 @@ export const appendMatrixMessage = async (
   // key that lands definition-less is skipped by property migration forever
   // (#501). Built out here so the same tree is registered and then written.
   const {tree: messageTree, diagnostics: promotionDiagnostics} =
-    createBlocksFromEvent(event, matrixClient, repo)
+    createBlocksFromEvent(event, config.baseUrl, repo)
   for (const note of promotionDiagnostics) console.warn('[matrix] promotion:', note)
   verifyWorkspace()
   const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
@@ -1005,59 +998,6 @@ export const appendMatrixMessage = async (
 }
 
 // ---------------------------------------------------------------------------
-// one-time migration: rename legacy `matrix:*` event metadata onto the
-// reserved `matrix-event:*` namespace. Runs once per workspace, scoped to the
-// active workspace, idempotent (per-row recheck + localStorage marker). The
-// discriminator is the camelCased `matrix:eventId`, which only the ingest sets
-// — content promotion lowercases keys, so it can never produce it.
-
-const migrationFlagKey = (workspaceId: string) => `${MIGRATION_FLAG_PREFIX}:${workspaceId}`
-
-const migrateEventNamespace = async (repo: any): Promise<void> => {
-  const workspaceId = repo.activeWorkspaceId
-  if (!workspaceId || repo.isReadOnly) return
-  if (window.localStorage.getItem(migrationFlagKey(workspaceId))) return
-
-  // Candidate roots: carry the legacy key but not the new one yet. The JSON
-  // paths are fixed literals (no user input), so inlining them is safe.
-  const candidates = await repo.db.getAll(
-    `SELECT id FROM blocks
-       WHERE workspace_id = ?
-         AND deleted = 0
-         AND json_extract(properties_json, '$."matrix:eventId"') IS NOT NULL
-         AND json_extract(properties_json, '$."matrix-event:id"') IS NULL`,
-    [workspaceId],
-  ) as Array<{id: string}>
-
-  const BATCH = 200
-  for (let i = 0; i < candidates.length; i += BATCH) {
-    const batch = candidates.slice(i, i + BATCH)
-    await repo.tx(async (tx: any) => {
-      for (const {id} of batch) {
-        const block = await tx.get(id)
-        if (!block || block.deleted) continue
-        // Re-check inside the tx — a concurrent ingest may have raced us.
-        if (block.properties['matrix:eventId'] === undefined) continue
-        if (block.properties[eventIdProp.name] !== undefined) continue
-
-        const next: Record<string, unknown> = {...block.properties}
-        for (const [oldKey, newKey] of EVENT_KEY_RENAMES) {
-          if (!(oldKey in next)) continue
-          if (!(newKey in next)) next[newKey] = next[oldKey]
-          delete next[oldKey]
-        }
-        await tx.update(id, {properties: addBlockTypeToProperties(next, MATRIX_MESSAGE_TYPE)})
-      }
-    }, {scope: ChangeScope.BlockDefault, description: 'matrix: migrate event metadata namespace'})
-  }
-
-  window.localStorage.setItem(migrationFlagKey(workspaceId), new Date().toISOString())
-  if (candidates.length > 0) {
-    showInfo(`Matrix: migrated ${candidates.length} message(s) to the matrix-event namespace.`)
-  }
-}
-
-// ---------------------------------------------------------------------------
 // one-time carry-over from the pre-refactor `.js`, which kept homeserver /
 // room / autoStart / token together in a single localStorage JSON blob. The
 // token can't move into the now-synced prefs block, so it gets its own
@@ -1067,18 +1007,18 @@ const migrateEventNamespace = async (repo: any): Promise<void> => {
 
 const readLegacyConfig = () => {
   try {
-    return JSON.parse(window.localStorage.getItem(LEGACY_CONFIG_KEY) ?? 'null')
+    return JSON.parse(localStorage.getItem(LEGACY_CONFIG_KEY) ?? 'null')
   } catch {
     return null
   }
 }
 
 const migrateLegacyConfig = async (repo: any): Promise<void> => {
-  if (window.localStorage.getItem(LEGACY_CONFIG_FLAG)) return
+  if (localStorage.getItem(LEGACY_CONFIG_FLAG)) return
   const legacy = readLegacyConfig()
   if (legacy && typeof legacy === 'object') {
     if (typeof legacy.accessToken === 'string' && legacy.accessToken && !pendingToken()) {
-      window.localStorage.setItem(LEGACY_TOKEN_KEY, legacy.accessToken)
+      localStorage.setItem(LEGACY_TOKEN_KEY, legacy.accessToken)
     }
     // Seed the prefs block only when this workspace was never configured
     // (empty roomId), so a fresh config on this workspace is never stomped.
@@ -1096,7 +1036,7 @@ const migrateLegacyConfig = async (repo: any): Promise<void> => {
     }
   }
 
-  window.localStorage.setItem(LEGACY_CONFIG_FLAG, new Date().toISOString())
+  localStorage.setItem(LEGACY_CONFIG_FLAG, new Date().toISOString())
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,8 +1044,7 @@ const migrateLegacyConfig = async (repo: any): Promise<void> => {
 
 // Transient failures clear on the next poll, so they should stay out of the
 // user's face — log them, reflect them in diagnostics, but don't toast.
-// This covers network blips (fetch rejects with a TypeError; matrix-js-sdk may
-// rewrap it as a ConnectionError) and server-side conditions that the
+// This covers network blips and server-side conditions that the
 // long-poll naturally rides out (429 rate-limit, 5xx). Actionable errors —
 // a bad/expired token, a malformed request — fall through to the loud path.
 const RETRYABLE_MESSAGE_RE = /failed to fetch|fetch failed|network ?error|load failed/i
@@ -1113,14 +1052,14 @@ const RETRYABLE_MESSAGE_RE = /failed to fetch|fetch failed|network ?error|load f
 const isRetryableError = (error: unknown): boolean => {
   if (error instanceof TypeError) return true
   const name = (error as {name?: unknown})?.name
-  if (name === 'ConnectionError' || name === 'AbortError') return true
+  if (name === 'AbortError') return true
   const status = (error as {httpStatus?: unknown})?.httpStatus
   if (typeof status === 'number') return status === 429 || status >= 500
   const message = error instanceof Error ? error.message : String(error)
   return RETRYABLE_MESSAGE_RE.test(message)
 }
 
-export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
+export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: MatrixClient): Promise<void> => {
   let nextBatch: string | null = null
   let needsCheckpoint = false
   let heldPolls = 0
@@ -1163,7 +1102,7 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
       for (const batch of [gap ?? [], timeline?.events ?? []]) {
         for (const event of batch) {
           if (event?.type === 'm.room.message') {
-            await appendMatrixMessage(repo, config, event, matrixClient, verifyWorkspace)
+            await appendMatrixMessage(repo, config, event, verifyWorkspace)
             needsCheckpoint = true
           }
         }
@@ -1199,7 +1138,7 @@ export const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSig
         // seconds and we don't want to bury the user in toasts.
         if (!toasted) {
           toasted = true
-          showError(`Matrix ingest error: ${message}`)
+          pollErrors.notify(message)
         }
       }
       await abortableSleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
@@ -1219,7 +1158,6 @@ export const matrixIngestEffect = {
     let unsubscribePrefs = () => {}
     let workspaceId: string | null = null
     let generation = 0
-    let cancelled = false
 
     const stop = () => {
       generation++
@@ -1229,7 +1167,6 @@ export const matrixIngestEffect = {
 
     const startPoll = () => {
       stop()
-      if (cancelled) return
       workspaceId = repo.activeWorkspaceId
       const started = generation
       if (!workspaceId) {
@@ -1237,7 +1174,7 @@ export const matrixIngestEffect = {
         return
       }
 
-      const prefs: Block = repo.block(pluginPrefsBlockId(workspaceId, repo.user.id, matrixChatPrefsType.id))
+      const prefs = readPluginPref(repo, preferencesRootId(repo, workspaceId), matrixChatPrefsType)
       let previousFingerprint: string | undefined
       const refresh = () => {
         if (started !== generation) return
@@ -1270,14 +1207,11 @@ export const matrixIngestEffect = {
         })
       }
 
-      const onStorage = (event: StorageEvent) => {
-        if (event.key === null || event.key.startsWith(TOKEN_PREFIX) || event.key.startsWith(STOPPED_PREFIX)) refresh()
-      }
-      window.addEventListener('storage', onStorage)
+      const unsubscribeDevice = storageChanges.add(refresh)
       const unsubscribeBlock = prefs.subscribe(refresh)
       unsubscribePrefs = () => {
         unsubscribeBlock()
-        window.removeEventListener('storage', onStorage)
+        unsubscribeDevice()
       }
       void prefs.load().then(refresh, error => {
         if (started === generation) setMatrixDiagnostic(hardErrorMatrixDiagnostic(String(error)))
@@ -1287,32 +1221,16 @@ export const matrixIngestEffect = {
     const unsubscribe = repo.client.onActingAsChange(() => {
       if (repo.activeWorkspaceId !== workspaceId) startPoll()
     })
-    window.addEventListener(RESTART_EVENT, startPoll)
-
-    void (async () => {
-      try {
-        await migrateLegacyConfig(repo)
-      } catch (error) {
-        console.error('[matrix-messages] legacy-config migration', error)
-      }
-      try {
-        await migrateEventNamespace(repo)
-      } catch (error) {
-        console.error('[matrix-messages] migration', error)
-      }
-      startPoll()
-    })()
+    const unsubscribeRestart = restartRequests.add(startPoll)
+    startPoll()
 
     return () => {
-      cancelled = true
+      unsubscribeRestart()
       unsubscribe()
-      window.removeEventListener(RESTART_EVENT, startPoll)
       stop()
     }
   },
 }
-
-const requestRestart = () => window.dispatchEvent(new CustomEvent(RESTART_EVENT))
 
 // ---------------------------------------------------------------------------
 // setup dialog (homeserver / room / token)
@@ -1325,6 +1243,19 @@ const MatrixSetupDialog = () => {
   const [token, setToken] = useState('')
   const [workspace, setWorkspace] = useState<{id: string, name: string} | null>(null)
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    void migrateLegacyConfig(repo).catch(error => console.error('[matrix-messages] legacy-config migration', error))
+    const onStorage = ({key}: StorageEvent) => {
+      if (key === null || key.startsWith(TOKEN_PREFIX) || key.startsWith(STOPPED_PREFIX)) storageChanges.notify()
+    }
+    window.addEventListener('storage', onStorage)
+    const unsubscribeError = pollErrors.add(message => showError(`Matrix ingest error: ${message}`))
+    return () => {
+      unsubscribeError()
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [repo])
 
   // Load current prefs into the form each time the dialog opens.
   useEffect(() => {
@@ -1455,16 +1386,16 @@ const MatrixSetupDialog = () => {
 // property editors (rendered on the prefs block's property panel)
 
 const subscribeCredential = (notify: () => void) => {
-  window.addEventListener(RESTART_EVENT, notify)
-  window.addEventListener('storage', notify)
+  const offRestart = restartRequests.add(notify)
+  const offStorage = storageChanges.add(notify)
   return () => {
-    window.removeEventListener(RESTART_EVENT, notify)
-    window.removeEventListener('storage', notify)
+    offRestart()
+    offStorage()
   }
 }
 
 const resumeDevice = (destination: MatrixDestination) => {
-  window.localStorage.removeItem(stoppedKey(destination))
+  localStorage.removeItem(stoppedKey(destination))
   requestRestart()
 }
 
@@ -1482,7 +1413,7 @@ const ConnectedEditor = ({value, onChange, block}: PropertyEditorProps<boolean>)
             variant='outline'
             size='sm'
             onClick={() => {
-              window.localStorage.removeItem(tokenKey(destination))
+              localStorage.removeItem(tokenKey(destination))
               onChange(false)
               requestRestart()
               showInfo('Matrix disconnected.')
@@ -1563,7 +1494,7 @@ const stopAction = {
   handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
     const prefs = await prefsBlock(uiStateBlock.repo)
     if (!prefs) return
-    window.localStorage.setItem(stoppedKey(destinationFromPrefs(prefs)), '1')
+    localStorage.setItem(stoppedKey(destinationFromPrefs(prefs)), '1')
     requestRestart()
   },
 }

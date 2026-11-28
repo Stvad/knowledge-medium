@@ -13,8 +13,6 @@ import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension.js'
 import {diagnosticsFacet, type DiagnosticSourceContribution} from '@/plugins/diagnostics/facet.js'
 import matrix, {appendMatrixMessage, checkpointId, messageNodeId, nextBatchKey, pollLoop, startFresh, tokenKey} from './matrix-chat-client.tsx'
 
-vi.mock('https://esm.sh/matrix-js-sdk@38.0.0?bundle', () => ({}))
-
 const config = {workspaceId: 'workspace', baseUrl: 'https://matrix.test', roomId: '!room:matrix.test', accessToken: 'fixture', autoStart: true}
 const diagnostics = matrix.find(c => c.facet.id === diagnosticsFacet.id)!.value as DiagnosticSourceContribution
 const cursorKey = nextBatchKey(config)
@@ -86,9 +84,9 @@ const response = (since: string | undefined, stream: string[]) => ({
 })
 
 const fresh = (device: Replica, reply: (since?: string) => unknown, signal = new AbortController().signal) =>
-  startFresh(device.repo, config, signal, {http: {
-    authedRequest: async (_method: string, _path: string, query: {since?: string}) => reply(query.since),
-  }})
+  startFresh(device.repo, config, signal, {
+    get: async (_path, query) => reply(query.since),
+  })
 
 const seed = async () => {
   await fresh(sender, since => response(since, []))
@@ -109,8 +107,8 @@ const poll = async (device: Replica, replies: ((since: string | undefined) => un
     if (stopOnWarning && diagnostics.getSnapshot()?.severity === 'warning') queueMicrotask(() => controller.abort())
   })
   try {
-    await pollLoop(device.repo, config, controller.signal, {http: {
-      authedRequest: async (_method: string, _path: string, query: {since?: string}) => {
+    await pollLoop(device.repo, config, controller.signal, {
+      get: async (_path, query) => {
         requested.push(query.since)
         const reply = replies.shift()
         if (reply) {
@@ -123,7 +121,7 @@ const poll = async (device: Replica, replies: ((since: string | undefined) => un
         controller.abort()
         return {}
       },
-    }})
+    })
     if (transportError) throw transportError
     expect(replies).toHaveLength(0)
     return requested
@@ -198,7 +196,7 @@ it('refuses Start fresh before the checkpoint downloads and recovers both gap me
 
 const historicalMessage = async (deleted: boolean) => {
   const prior = event('prior')
-  await appendMatrixMessage(receiver.repo, config, prior, {}, () => {})
+  await appendMatrixMessage(receiver.repo, config, prior, () => {})
   if (deleted) await receiver.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [messageNodeId(config.workspaceId, prior.event_id, [0])])
 }
 const rawRoomRow = (workspace: string, properties: Record<string, unknown>, deleted: boolean) =>
