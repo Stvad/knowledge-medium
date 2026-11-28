@@ -2,6 +2,8 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { DailyNotePicker, type DailyNotePickerProps } from '../DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from '../HeaderItem.tsx'
 import { openDialog } from '@/utils/dialogs.js'
@@ -163,6 +165,11 @@ describe('DailyNotePicker', () => {
 })
 
 describe('DailyNotePickerHeaderItem', () => {
+  const renderHeader = () => render(
+    <AppRuntimeContextProvider value={resolveFacetRuntimeSync([])}>
+      <DailyNotePickerHeaderItem/>
+    </AppRuntimeContextProvider>,
+  )
   afterEach(() => {
     cleanup()
     mocks.resolveCurrentDailyNoteIso.mockClear()
@@ -171,7 +178,7 @@ describe('DailyNotePickerHeaderItem', () => {
   })
 
   it('opens the picker dialog from the header button', async () => {
-    render(<DailyNotePickerHeaderItem/>)
+    renderHeader()
     fireEvent.click(screen.getByRole('button', {name: 'Open daily note picker'}))
 
     await waitFor(() => {
@@ -185,7 +192,7 @@ describe('DailyNotePickerHeaderItem', () => {
   it('passes the currently viewed daily note ISO when opening', async () => {
     mocks.resolveCurrentDailyNoteIso.mockImplementation(async () => '2026-03-21')
 
-    render(<DailyNotePickerHeaderItem/>)
+    renderHeader()
     fireEvent.click(screen.getByRole('button', {name: 'Open daily note picker'}))
 
     await waitFor(() => {
@@ -199,7 +206,7 @@ describe('DailyNotePickerHeaderItem', () => {
   // Prev/next moved onto the note's title (DateNavDecorator) — the header
   // must not keep a second, panel-guessing copy of them.
   it('renders only the picker button', () => {
-    render(<DailyNotePickerHeaderItem/>)
+    renderHeader()
 
     expect(screen.getAllByRole('button').map(b => b.getAttribute('aria-label')))
       .toEqual(['Open daily note picker'])

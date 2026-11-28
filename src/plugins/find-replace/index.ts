@@ -11,7 +11,7 @@ import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { Search } from 'lucide-react'
 import { FindReplaceDialog } from './FindReplaceDialog.tsx'
 import { FindReplaceHeaderItem } from './HeaderItem.tsx'
-import { findReplaceToggle } from './toggleStore.ts'
+import { FIND_REPLACE_ACTION_ID, findReplaceToggle } from './toggleStore.ts'
 import { findReplaceDataExtension } from './dataExtension.ts'
 
 export {
@@ -27,7 +27,7 @@ export const findReplaceMount: AppMountContribution = {
   component: FindReplaceDialog,
 }
 
-export const FIND_REPLACE_ACTION_ID = 'find_replace.open'
+export { FIND_REPLACE_ACTION_ID } from './toggleStore.ts'
 
 export const findReplaceAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: FIND_REPLACE_ACTION_ID,

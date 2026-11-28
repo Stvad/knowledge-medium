@@ -1,14 +1,16 @@
 import ReactPlayer from 'react-player'
 import { BlockRendererProps, BlockRenderer } from '@/types.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { useContent } from '@/hooks/block.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import { Button } from '@/components/ui/button.js'
+import { shortcutTitle, useActionKeyHints } from '@/shortcuts/actionKeyHints.js'
 import { PanelRightOpen } from 'lucide-react'
+import { TOGGLE_VIDEO_NOTES_VIEW_ACTION_ID, VIDEO_PLAYER_CONTEXT } from './actions.ts'
 import { registerVideoPlayer } from './registry.ts'
 import { enterVideoNotesView } from './notes.ts'
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
@@ -34,6 +36,17 @@ export const isPlayableVideoBlock = (block: Block): boolean => {
   const blockData = block.peek()
   const url = blockData ? standaloneHttpUrl(blockData.content) : null
   return !!(url && ReactPlayer.canPlay?.(url))
+}
+
+export const VideoNotesViewButton = ({label, ...props}: ComponentProps<typeof Button> & {label: string}) => {
+  const hint = useActionKeyHints(VIDEO_PLAYER_CONTEXT).get(TOGGLE_VIDEO_NOTES_VIEW_ACTION_ID)
+  return (
+    <Button
+      {...props}
+      aria-label={label}
+      title={shortcutTitle(label, hint && `${hint} while the video block or a note is focused`)}
+    />
+  )
 }
 
 /** The shared video CONTENT renderer (the design's arrangement/rendering
@@ -142,12 +155,11 @@ export const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
       </div>
 
       {!inNotesView && canEnterNotesView && (
-        <Button
+        <VideoNotesViewButton
           type="button"
           variant="secondary"
           size="icon"
-          aria-label="Open video notes view"
-          title="Open video notes view"
+          label="Open video notes view"
           className="absolute right-2 top-2 opacity-0 shadow-md transition-opacity group-hover/video-player:opacity-100 focus-visible:opacity-100"
           onClick={() => {
             // uiStateBlock IS the panel row in panel contexts — the enter
@@ -157,7 +169,7 @@ export const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
           }}
         >
           <PanelRightOpen className="h-4 w-4"/>
-        </Button>
+        </VideoNotesViewButton>
       )}
     </div>
   )

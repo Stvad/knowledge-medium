@@ -53,6 +53,7 @@ import {
 } from './dailyNotes.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'
+export const OPEN_DAILY_NOTE_PICKER_ACTION_ID = 'open_daily_note_picker'
 export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
 export const OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID = 'open_previous_daily_note'
 export const OPEN_NEXT_DAILY_NOTE_ACTION_ID = 'open_next_daily_note'

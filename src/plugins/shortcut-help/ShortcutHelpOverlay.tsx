@@ -1,3 +1,4 @@
+import { formatChord } from '@/shortcuts/formatChord.js'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AlertTriangle, ArrowRight, Pencil, RotateCcw, X } from 'lucide-react'
 import {
@@ -28,7 +29,6 @@ import {
   nativeLinkClickGesture,
 } from '@/utils/linkClickGestures.js'
 import { overrideEntryKey, type StoredKeybindingOverride } from '@/plugins/keybindings-settings/config.ts'
-import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
 import {
   previewOverrideConflicts,
   readStoredOverrides,

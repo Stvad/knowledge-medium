@@ -24,6 +24,8 @@ import { PanelRenderer } from './PanelRenderer'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
+import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts'
+import { keybindingOverridesFacet, type KeybindingOverride } from '@/shortcuts/keybindingOverrides'
 import { panelHistory } from '@/utils/panelHistory'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
@@ -302,6 +304,56 @@ describe('PanelRenderer', () => {
     await screen.findByLabelText('Back') // chrome is mounted
     expect(screen.queryByLabelText('Maximize panel')).toBeNull()
     expect(screen.queryByLabelText('Restore panel')).toBeNull()
+  })
+
+  it('shows the current panel bindings by mode and drops cleared shortcuts', async () => {
+    env.runtime = resolveFacetRuntimeSync(defaultActionsExtension({repo: env.repo}))
+    const setOverrides = (overrides: readonly Omit<KeybindingOverride, 'source'>[]) => {
+      act(() => env.runtime.setRuntimeContributions(
+        keybindingOverridesFacet, 'test', overrides.map(override => ({...override, source: 'test'})),
+      ))
+    }
+    const normal = {actionId: 'toggle_maximize_panel', context: ActionContextTypes.NORMAL_MODE}
+    const edit = {actionId: 'edit.cm.toggle_maximize_panel', context: ActionContextTypes.EDIT_MODE_CM}
+    setOverrides([
+      {...normal, binding: {keys: 'F8'}},
+      {...edit, binding: {keys: 'F8'}},
+      {actionId: 'close_current_panel', binding: {keys: 'F10'}},
+      {actionId: 'edit.cm.close_current_panel', binding: {keys: 'F10'}},
+    ])
+
+    await renderPanelInLayoutSession(env.panel.id, {canMaximizePanel: true, canClosePanel: true})
+    const maximize = await screen.findByRole('button', {name: 'Maximize panel'})
+    expect(maximize).toHaveAttribute('title', 'Maximize panel (F8)')
+    expect(screen.getByRole('button', {name: 'Close panel'})).toHaveAttribute('title', 'Close panel (F10)')
+
+    setOverrides([
+      {...normal, binding: {keys: 'F8'}},
+      {...edit, binding: {keys: 'F9'}},
+    ])
+    expect(maximize).toHaveAttribute('title', 'Maximize panel (F8 in normal mode, F9 in edit mode)')
+
+    await act(() => env.panel.set(panelMaximizedProp, true))
+    const restore = await screen.findByRole('button', {name: 'Restore panel'})
+    expect(restore).toHaveAttribute('title', 'Restore panel (F8 in normal mode, F9 in edit mode)')
+
+    setOverrides([
+      {...normal, binding: {unbound: true}},
+      {...edit, binding: {keys: 'F9'}},
+    ])
+    expect(restore).toHaveAttribute('title', 'Restore panel (F9 in edit mode)')
+
+    await act(() => env.repo.block('layout-session').set(activePanelIdProp, 'panel-b'))
+    expect(restore).toHaveAttribute('title', 'Restore panel')
+    expect(screen.getByRole('button', {name: 'Close panel'})).toHaveAttribute('title', 'Close panel')
+
+    await act(() => env.repo.block('layout-session').set(activePanelIdProp, env.panel.id))
+    expect(restore).toHaveAttribute('title', 'Restore panel (F9 in edit mode)')
+    setOverrides([
+      {...normal, binding: {unbound: true}},
+      {...edit, binding: {unbound: true}},
+    ])
+    expect(restore).toHaveAttribute('title', 'Restore panel')
   })
 
   it('does not activate the panel from close pointer events', async () => {

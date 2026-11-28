@@ -20,6 +20,7 @@ import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
+import {keybindingOverridesFacet} from '@/shortcuts/keybindingOverrides.js'
 import {backlinkRenderScopeId, panelRenderScopeId} from '@/utils/renderScope'
 import {showInfo} from '@/utils/toast.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
@@ -27,7 +28,7 @@ import {referencesPlugin} from '@/plugins/references'
 import {LazyBlockEntry} from '@/plugins/backlinks/BlockEntry'
 import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
-import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, runOnReadTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID, type SelectionTarget} from './actions'
+import {annotationActions, COMMENT_ON_READ_SELECTION_ACTION_ID, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, HIGHLIGHT_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, runOnReadTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID, type SelectionTarget} from './actions'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
 import {commentSurfaceContribution, ThreadCard} from './ui'
@@ -229,7 +230,23 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     await renderBlocks('rich')
     fireEvent.contextMenu(selectText('Some'))
     await screen.findByRole('menuitem', {name: 'Copy reference'})
-    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['Comment', 'Highlight', 'Suggest edit', 'Copy reference'])
+    const items = screen.getAllByRole('menuitem')
+    expect(items).toEqual(['Comment', 'Highlight', 'Suggest edit', 'Copy reference'].map(name =>
+      screen.getByRole('menuitem', {name}),
+    ))
+  })
+
+  it('uses the effective read-selection bindings for inline menu hints', async () => {
+    repo.facetRuntime!.setRuntimeContributions(keybindingOverridesFacet, 'test', [
+      {actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, binding: {keys: 'F9'}, source: 'test'},
+      {actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, binding: {unbound: true}, source: 'test'},
+    ])
+    await renderBlocks('rich')
+    fireEvent.contextMenu(selectText('Some'))
+
+    expect(await screen.findByRole('menuitem', {name: 'Comment'})).toHaveTextContent('F9')
+    expect(screen.getByRole('menuitem', {name: 'Highlight'})).toHaveTextContent(/^Highlight$/)
+    expect(screen.getByRole('menuitem', {name: 'Copy reference'})).toHaveTextContent(/^Copy reference$/)
   })
 
   it('leaves the browser menu when no gesture runs on the selected surface', async () => {

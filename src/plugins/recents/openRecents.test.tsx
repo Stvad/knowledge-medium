@@ -13,13 +13,15 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
 import { recentsPageBlockId } from '@/data/recentsPage'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import { panelBlockIds } from '@/utils/panelLayoutProjection'
 import { buildAppHash } from '@/utils/routing'
 import type { User } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { RecentsHeaderItem } from './HeaderItem.tsx'
-import { openRecentsAction } from './index.ts'
+import { openRecentsAction, recentsPlugin } from './index.ts'
 
 const WS = 'ws-recents-open'
 const SWITCHED_TO_WS = 'ws-recents-switched'
@@ -62,7 +64,13 @@ describe('opening Recents when bootstrap skipped the page', () => {
   it('the header button materializes the page, then opens it', async () => {
     expect(await recentsRow()).toBeNull()
 
-    render(<RepoContext value={repo}><RecentsHeaderItem/></RepoContext>)
+    render(
+      <RepoContext value={repo}>
+        <AppRuntimeContextProvider value={resolveFacetRuntimeSync(recentsPlugin({repo}))}>
+          <RecentsHeaderItem/>
+        </AppRuntimeContextProvider>
+      </RepoContext>,
+    )
     fireEvent.click(screen.getByLabelText('Open recents'))
 
     await vi.waitFor(async () => {

@@ -12,6 +12,7 @@ import { PanelRightClose } from 'lucide-react'
 import type { BlockLayout, BlockLayoutContribution } from '@/extensions/blockInteraction.js'
 import {
   isPlayableVideoBlock,
+  VideoNotesViewButton,
   VideoPlayerContentRenderer,
 } from './VideoPlayerRenderer.tsx'
 import { closeVideoNotesView, ensureEditableVideoNoteChild } from './notes.ts'
@@ -257,12 +258,11 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
         data-children-loaded={childIds === undefined ? undefined : 'true'}
       >
         <div className="pointer-events-none sticky top-2 z-10 -mb-9 flex justify-end">
-          <Button
+          <VideoNotesViewButton
             type="button"
             variant="ghost"
             size="icon"
-            aria-label="Close video notes view"
-            title="Close video notes view"
+            label="Close video notes view"
             className="pointer-events-auto"
             onClick={() => {
               if (!panelId) return
@@ -270,7 +270,7 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
             }}
           >
             <PanelRightClose className="h-4 w-4"/>
-          </Button>
+          </VideoNotesViewButton>
         </div>
         {/* Clear the mode for everything nested in the notes region: children
             inherit context, and without this a nested/embedded video block

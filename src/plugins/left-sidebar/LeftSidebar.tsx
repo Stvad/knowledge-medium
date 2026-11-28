@@ -14,10 +14,11 @@ import { OPEN_TODAY_ACTION_ID } from '@/plugins/daily-notes'
 import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
 import { useBlockOpener } from '@/utils/navigation.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
+import { useEffectiveActions } from '@/shortcuts/useActionDiscovery.js'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.js'
+import { formatActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
 import { leftSidebarToggle } from './toggleStore.ts'
 import {
   leftSidebarSectionsFacet,
@@ -43,8 +44,7 @@ function useShortcutsBlock(): Block {
 const LEFT_SIDEBAR_ACTION_EVENT = 'left-sidebar-action'
 
 function useRegisteredAction(actionId: string): ActionConfig | undefined {
-  const runtime = useAppRuntime()
-  return getEffectiveActions(runtime).find(action => action.id === actionId)
+  return useEffectiveActions().find(action => action.id === actionId)
 }
 
 function useSidebarActionRunner({
@@ -95,6 +95,7 @@ function SidebarAction({
       className="flex h-11 w-full items-center gap-3 rounded-md px-2 text-left text-sm text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
       onClick={run}
       disabled={disabled}
+      title={shortcutTitle(label ?? action.description, formatActionKeyHint(action))}
     >
       <Icon className="h-5 w-5 shrink-0 text-muted-foreground"/>
       <span className="min-w-0 truncate">{label ?? action.description}</span>
@@ -120,6 +121,7 @@ function SearchSidebarAction({
       className="flex h-12 w-full items-center gap-3 rounded-full border border-border px-4 text-left text-sm text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
       onClick={run}
       disabled={disabled}
+      title={shortcutTitle('Jump to...', formatActionKeyHint(action))}
     >
       <Icon className="h-5 w-5 shrink-0"/>
       <span>Jump to...</span>

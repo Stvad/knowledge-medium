@@ -13,7 +13,7 @@ import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { Search } from 'lucide-react'
 import { QuickFindHeaderItem } from './HeaderItem.tsx'
 import { QuickFind } from './QuickFind.tsx'
-import { quickFindToggle } from './toggleStore.ts'
+import { QUICK_FIND_ACTION_ID, quickFindToggle } from './toggleStore.ts'
 import { quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
 
 export { QuickFindHeaderItem } from './HeaderItem.tsx'
@@ -25,7 +25,7 @@ export const quickFindMount: AppMountContribution = {
   component: QuickFind,
 }
 
-export const QUICK_FIND_ACTION_ID = 'quick_find'
+export { QUICK_FIND_ACTION_ID } from './toggleStore.ts'
 
 export const quickFindAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: QUICK_FIND_ACTION_ID,

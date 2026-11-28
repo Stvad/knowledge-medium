@@ -20,6 +20,7 @@ import { closeVideoNotesView, enterVideoNotesView, focusVideoNote } from './note
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
 
 export const VIDEO_PLAYER_CONTEXT = 'video-player'
+export const TOGGLE_VIDEO_NOTES_VIEW_ACTION_ID = 'video.toggle_notes_view'
 
 export interface VideoPlayerShortcutDependencies extends BaseShortcutDependencies {
   block: Block
@@ -136,7 +137,7 @@ const insertVideoTimestamp: ActionConfig = {
 }
 
 const toggleVideoNotesView: ActionConfig = {
-  id: 'video.toggle_notes_view',
+  id: TOGGLE_VIDEO_NOTES_VIEW_ACTION_ID,
   description: 'Toggle video notes view',
   context: VIDEO_PLAYER_CONTEXT,
   handler: async (deps) => {

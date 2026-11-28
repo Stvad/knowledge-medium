@@ -9,10 +9,11 @@
  * chord doesn't accidentally fire the action it's about to be bound
  * to.
  */
+import { formatChord } from '@/shortcuts/formatChord.js'
 import {useCallback, useEffect, useRef} from 'react'
 import {Button} from '@/components/ui/button.js'
 import {Kbd} from '@/components/ui/kbd.js'
-import {chordFromEvent, formatChord, isModifierOnly, modifierPreview} from './keyCapture.ts'
+import {chordFromEvent, isModifierOnly, modifierPreview} from './keyCapture.ts'
 
 export interface KeyCaptureInputProps {
   /** Chord string currently displayed while the user holds a partial

@@ -14,8 +14,15 @@ import {
 } from '@/data/properties.js'
 import { useIsActivePanel, useSelectionState } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
+import { formatActionKeyHint, shortcutTitle } from '@/shortcuts/actionKeyHints.js'
+import {
+  CLOSE_CURRENT_PANEL_ACTION_ID,
+  EDIT_MODE_CM_ACTION_PREFIX,
+  TOGGLE_MAXIMIZE_PANEL_ACTION_ID,
+} from '@/shortcuts/defaultShortcuts.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
-import { ActionContextTypes } from '@/shortcuts/types'
+import { useEffectiveActions } from '@/shortcuts/useActionDiscovery.js'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types'
 import { useCallback, useContext, useEffect, useMemo, useRef } from 'react'
 import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { useHandle, usePropertyValue } from '@/hooks/block.js'
@@ -78,6 +85,17 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
  *  `max-w-3xl` frame, capped at PANEL_TEXT_MIN_WIDTH_PX. */
 const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-480px)))]'
 
+const panelActionHint = (actions: readonly ActionConfig[], id: string): string | undefined => {
+  const normal = formatActionKeyHint(actions.find(action =>
+    action.context === ActionContextTypes.NORMAL_MODE && action.id === id,
+  ))
+  const edit = formatActionKeyHint(actions.find(action =>
+    action.context === ActionContextTypes.EDIT_MODE_CM && action.id === `${EDIT_MODE_CM_ACTION_PREFIX}.${id}`,
+  ))
+  if (normal === edit) return normal
+  return [normal && `${normal} in normal mode`, edit && `${edit} in edit mode`].filter(Boolean).join(', ')
+}
+
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [panelViewMode] = usePropertyValue(block, panelViewModeProp)
@@ -100,6 +118,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
 
   const isActivePanel = useIsActivePanel(block)
+  const actions = useEffectiveActions()
+  const shortcutActions = isActivePanel ? actions : []
 
   const {canBack, canForward} = usePanelHistory(block.id)
   const runtime = useAppRuntime()
@@ -254,6 +274,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
      return null
   }
 
+  const maximizeLabel = panelMaximized ? 'Restore panel' : 'Maximize panel'
+  const maximizeHint = panelActionHint(shortcutActions, TOGGLE_MAXIMIZE_PANEL_ACTION_ID)
+  const closeHint = panelActionHint(shortcutActions, CLOSE_CURRENT_PANEL_ACTION_ID)
   const actionButtons = (
     <>
       <Button
@@ -300,8 +323,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
           onClick={() => {
             void togglePanelMaximized(repo, block.id, {canRenderSplit: !isMobileViewport()})
           }}
-          aria-label={panelMaximized ? 'Restore panel' : 'Maximize panel'}
-          title={panelMaximized ? 'Restore panel' : 'Maximize panel'}
+          aria-label={maximizeLabel}
+          title={shortcutTitle(maximizeLabel, maximizeHint)}
         >
           {panelMaximized ? <Minimize2 className="h-4 w-4"/> : <Maximize2 className="h-4 w-4"/>}
         </Button>
@@ -314,6 +337,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
           onPointerDown={handleClosePointerDown}
           onClick={handleClose}
           aria-label="Close panel"
+          title={shortcutTitle('Close panel', closeHint)}
         >
           <X className="h-4 w-4" />
         </Button>

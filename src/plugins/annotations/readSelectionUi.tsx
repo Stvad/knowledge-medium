@@ -5,11 +5,13 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuShortcut,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu.js'
 import type {AppMountContribution} from '@/extensions/core.js'
 import {cachedContentDecorator, type BlockContentDecoratorContribution} from '@/extensions/blockInteraction.js'
 import type {BlockRenderer} from '@/types.js'
+import {useActionKeyHints} from '@/shortcuts/actionKeyHints.js'
 import {useActionContext} from '@/shortcuts/useActionContext.js'
 import {
   READ_SELECTION_CONTEXT,
@@ -17,6 +19,7 @@ import {
   readSelectionTarget,
   reportFailure,
   runOnReadTarget,
+  type ReadSelectionGesture,
   type SelectionTarget,
 } from './actions.ts'
 import {useHoldsReadSelection} from './readSelection.ts'
@@ -31,6 +34,28 @@ const ReadSelectionShortcuts = () => {
 export const readSelectionShortcutsMount: AppMountContribution = {
   id: 'annotations.read-selection-shortcuts',
   component: ReadSelectionShortcuts,
+}
+
+const ReadSelectionMenuItems = ({gestures, target}: {
+  gestures: readonly ReadSelectionGesture[]
+  target: SelectionTarget | string | null
+}) => {
+  const hints = useActionKeyHints(READ_SELECTION_CONTEXT)
+  return gestures.map(gesture => {
+    const hint = hints.get(gesture.actionId)
+    return (
+      <ContextMenuItem
+        key={gesture.actionId}
+        className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+        textValue={gesture.label}
+        onSelect={() => { runOnReadTarget(target, gesture.step).catch(reportFailure) }}
+      >
+        <gesture.icon className="mr-2 h-4 w-4"/>
+        {gesture.label}
+        {hint && <ContextMenuShortcut aria-hidden="true" className="pl-4">{hint}</ContextMenuShortcut>}
+      </ContextMenuItem>
+    )
+  })
 }
 
 /**
@@ -58,16 +83,7 @@ export const ReadSelectionMenu = ({block, children}: {block: Block; children: Re
       <ContextMenuContent
         className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
       >
-        {gestures.map(gesture => (
-          <ContextMenuItem
-            key={gesture.actionId}
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => { runOnReadTarget(target, gesture.step).catch(reportFailure) }}
-          >
-            <gesture.icon className="mr-2 h-4 w-4"/>
-            {gesture.label}
-          </ContextMenuItem>
-        ))}
+        <ReadSelectionMenuItems gestures={gestures} target={target}/>
       </ContextMenuContent>
     </ContextMenu>
   )
