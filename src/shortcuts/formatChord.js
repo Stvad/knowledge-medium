@@ -1,1 +1,1 @@
-export{QB as formatChord}from"../../chunks/app-C1hHvaPz.js";
+export{QB as formatChord}from"../../chunks/app-Dx_uUBLU.js";

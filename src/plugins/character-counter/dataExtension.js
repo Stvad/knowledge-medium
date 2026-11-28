@@ -1,1 +1,1 @@
-export{E3 as characterCounterDataExtension}from"../../../chunks/app-C1hHvaPz.js";
+export{E3 as characterCounterDataExtension}from"../../../chunks/app-Dx_uUBLU.js";

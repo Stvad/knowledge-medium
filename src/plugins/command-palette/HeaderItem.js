@@ -1,1 +1,1 @@
-export{kF as CommandPaletteHeaderItem}from"../../../chunks/app-C1hHvaPz.js";
+export{kF as CommandPaletteHeaderItem}from"../../../chunks/app-Dx_uUBLU.js";
