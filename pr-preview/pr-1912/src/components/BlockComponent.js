@@ -1,1 +1,1 @@
-export{Hz as BlockChildren,Uz as BlockComponent}from"../../chunks/app-BMlFC6Tg.js";
+export{Wz as BlockChildren,Gz as BlockComponent}from"../../chunks/app-CjT-1RjE.js";
