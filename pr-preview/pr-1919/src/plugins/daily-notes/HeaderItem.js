@@ -1,1 +1,1 @@
-export{VN as DailyNotePickerHeaderItem}from"../../../chunks/app-B1GABvzk.js";
+export{VN as DailyNotePickerHeaderItem}from"../../../chunks/app-CMvWWKPp.js";

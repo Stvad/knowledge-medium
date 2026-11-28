@@ -1,1 +1,1 @@
-export{uF as CommandPalette}from"../../../chunks/app-B1GABvzk.js";
+export{uF as CommandPalette}from"../../../chunks/app-CMvWWKPp.js";

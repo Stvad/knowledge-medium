@@ -1,1 +1,1 @@
-export{GL as ExtensionPromptSurface,KL as extensionPromptsExtension}from"../../../chunks/app-B1GABvzk.js";
+export{GL as ExtensionPromptSurface,KL as extensionPromptsExtension}from"../../../chunks/app-CMvWWKPp.js";
