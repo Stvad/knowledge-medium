@@ -1,0 +1,1 @@
+export{k3 as characterCounterDataExtension}from"../../../chunks/app-DnB6vLQt.js";

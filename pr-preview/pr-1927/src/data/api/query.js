@@ -1,0 +1,1 @@
+export{ovt as defineQuery}from"../../../chunks/app-DnB6vLQt.js";

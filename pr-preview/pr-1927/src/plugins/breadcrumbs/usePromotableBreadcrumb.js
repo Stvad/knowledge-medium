@@ -1,0 +1,1 @@
+export{QO as usePromotableBreadcrumb}from"../../../chunks/app-DnB6vLQt.js";

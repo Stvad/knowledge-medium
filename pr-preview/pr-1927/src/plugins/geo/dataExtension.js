@@ -1,0 +1,1 @@
+export{y1 as geoDataExtension}from"../../../chunks/app-DnB6vLQt.js";

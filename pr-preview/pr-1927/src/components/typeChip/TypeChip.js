@@ -1,0 +1,1 @@
+export{RI as TypeChip}from"../../../chunks/app-DnB6vLQt.js";

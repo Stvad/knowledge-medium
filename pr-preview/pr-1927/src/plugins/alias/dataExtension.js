@@ -1,0 +1,1 @@
+export{g8 as aliasDataExtension}from"../../../chunks/app-DnB6vLQt.js";

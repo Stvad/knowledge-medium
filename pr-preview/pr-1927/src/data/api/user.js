@@ -1,0 +1,1 @@
+export{Q_t as SYSTEM_AUTHOR_PREFIX,$_t as isSystemAuthor,evt as systemAuthor}from"../../../chunks/app-DnB6vLQt.js";

@@ -1,0 +1,1 @@
+export{ik as plainOutlinerPlugin}from"../../../chunks/app-DnB6vLQt.js";

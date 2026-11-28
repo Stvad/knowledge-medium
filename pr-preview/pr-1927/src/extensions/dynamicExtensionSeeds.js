@@ -1,0 +1,1 @@
+export{mR as bindExtensionPropertyOverride,hR as bindExtensionPropertySeed,gR as bindExtensionTypeSeed,_R as extensionPropertySeedKey,vR as extensionTypeSeedKey}from"../../chunks/app-DnB6vLQt.js";

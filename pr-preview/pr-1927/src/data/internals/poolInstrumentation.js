@@ -1,0 +1,1 @@
+export{H5 as instrumentAdapter}from"../../../chunks/app-DnB6vLQt.js";

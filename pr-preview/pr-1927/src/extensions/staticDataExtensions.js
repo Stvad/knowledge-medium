@@ -1,0 +1,1 @@
+export{aQ as staticDataExtensions}from"../../chunks/app-DnB6vLQt.js";

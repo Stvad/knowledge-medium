@@ -1,0 +1,1 @@
+export{Kl as dataIntegrityPlugin}from"../../../chunks/app-DnB6vLQt.js";

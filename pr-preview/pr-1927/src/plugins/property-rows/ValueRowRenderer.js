@@ -1,0 +1,1 @@
+export{hc as propertyReadContentContribution}from"../../../chunks/app-DnB6vLQt.js";

@@ -1,0 +1,1 @@
+export{aw as attachmentsPlugin}from"../../../chunks/app-DnB6vLQt.js";

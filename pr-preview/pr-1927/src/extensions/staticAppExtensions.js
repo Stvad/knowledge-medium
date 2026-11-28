@@ -1,0 +1,1 @@
+export{rn as staticAppExtensions}from"../../chunks/app-DnB6vLQt.js";

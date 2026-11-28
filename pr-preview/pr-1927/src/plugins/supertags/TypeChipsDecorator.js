@@ -1,0 +1,1 @@
+export{an as typeChipsDecoratorContribution}from"../../../chunks/app-DnB6vLQt.js";
