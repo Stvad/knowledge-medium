@@ -1,1 +1,0 @@
-export{rp as blockTaggingDataExtension}from"../../../chunks/app-DnB6vLQt.js";

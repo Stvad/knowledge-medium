@@ -1,1 +1,0 @@
-export{qr as ExtensionsSettings}from"../../../chunks/app-DnB6vLQt.js";

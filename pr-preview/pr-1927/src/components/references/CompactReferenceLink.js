@@ -1,1 +1,0 @@
-export{XN as CompactReferenceLink}from"../../../chunks/app-DnB6vLQt.js";

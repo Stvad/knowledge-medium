@@ -1,1 +1,0 @@
-export{_3 as CONTRIBUTOR_TYPE,v3 as attributionCreatorsProp,y3 as attributionEditorsProp,b3 as contributorForProp,x3 as contributorKindOf,S3 as contributorKindProp,C3 as contributorPictureProp,w3 as contributorProfileType,T3 as contributorRoleProp}from"../../../chunks/app-DnB6vLQt.js";

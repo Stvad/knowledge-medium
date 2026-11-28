@@ -1,1 +1,0 @@
-export{ip as blockTaggingPrefsType,ap as blockTagsConfigCodec,op as blockTagsConfigPresetCore,sp as blockTagsConfigProp,cp as isValidTagName,lp as normalizeBlockTagsConfig,up as selectableTagNames,dp as tagNameIssue}from"../../../chunks/app-DnB6vLQt.js";

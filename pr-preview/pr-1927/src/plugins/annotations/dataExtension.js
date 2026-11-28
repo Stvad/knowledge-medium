@@ -1,1 +1,0 @@
-export{r2 as annotationsDataExtension}from"../../../chunks/app-DnB6vLQt.js";

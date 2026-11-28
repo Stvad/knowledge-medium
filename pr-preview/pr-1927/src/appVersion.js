@@ -1,1 +1,0 @@
-export{ld as appVersion}from"../chunks/app-DnB6vLQt.js";

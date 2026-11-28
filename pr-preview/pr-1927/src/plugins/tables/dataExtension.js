@@ -1,1 +1,0 @@
-export{bQ as tablesDataExtension}from"../../../chunks/app-DnB6vLQt.js";

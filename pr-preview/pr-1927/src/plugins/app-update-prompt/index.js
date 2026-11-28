@@ -1,1 +1,0 @@
-export{EL as appUpdatePromptExtension}from"../../../chunks/app-DnB6vLQt.js";

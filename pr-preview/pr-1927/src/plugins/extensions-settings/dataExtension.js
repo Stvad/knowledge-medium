@@ -1,1 +1,0 @@
-export{Vr as extensionsDataExtension}from"../../../chunks/app-DnB6vLQt.js";

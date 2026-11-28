@@ -1,1 +1,0 @@
-export{_v as extensionsOverridesProp,vv as extensionsPrefsType,Br as extensionsSettingsPlugin}from"../../../chunks/app-DnB6vLQt.js";

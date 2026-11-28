@@ -1,1 +1,0 @@
-export{Qr as openExtensionsSettingsAction}from"../../../chunks/app-DnB6vLQt.js";

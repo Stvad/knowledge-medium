@@ -1,1 +1,0 @@
-export{TX as adoptOrCreatePropertySchema}from"../../chunks/app-DnB6vLQt.js";

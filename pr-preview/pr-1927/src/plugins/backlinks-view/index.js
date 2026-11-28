@@ -1,1 +1,0 @@
-export{kx as backlinksViewPlugin}from"../../../chunks/app-DnB6vLQt.js";

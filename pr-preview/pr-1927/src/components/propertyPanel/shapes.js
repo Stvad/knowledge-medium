@@ -1,1 +1,0 @@
-export{wX as propertyShapeLabel}from"../../../chunks/app-DnB6vLQt.js";

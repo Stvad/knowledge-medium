@@ -1,1 +1,0 @@
-export{G$ as htmlDocumentTypeSeed}from"../../../chunks/app-DnB6vLQt.js";
