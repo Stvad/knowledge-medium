@@ -1,1 +1,0 @@
-export{LG as buildPropertyPanelSections}from"../../chunks/app-CMvWWKPp.js";

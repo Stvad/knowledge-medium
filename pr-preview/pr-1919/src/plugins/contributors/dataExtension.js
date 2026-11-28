@@ -1,1 +1,0 @@
-export{K4 as contributorsDataExtension}from"../../../chunks/app-CMvWWKPp.js";

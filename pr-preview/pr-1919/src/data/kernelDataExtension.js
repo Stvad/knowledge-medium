@@ -1,1 +1,0 @@
-export{Ftt as kernelDataExtension}from"../../chunks/app-CMvWWKPp.js";

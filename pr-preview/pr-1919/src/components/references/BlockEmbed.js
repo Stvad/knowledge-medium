@@ -1,1 +1,0 @@
-export{kI as BlockEmbed}from"../../../chunks/app-CMvWWKPp.js";

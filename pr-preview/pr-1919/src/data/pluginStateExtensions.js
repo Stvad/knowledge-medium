@@ -1,1 +1,0 @@
-export{s6 as pluginPrefsExtension,c6 as pluginUIStateExtension}from"../../chunks/app-CMvWWKPp.js";

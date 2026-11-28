@@ -1,1 +1,0 @@
-export{Xs as QueryText}from"../../../../chunks/app-CMvWWKPp.js";

@@ -1,1 +1,0 @@
-export{qR as dynamicExtensionsExtension,JR as isExtensionContribution}from"../../chunks/app-CMvWWKPp.js";

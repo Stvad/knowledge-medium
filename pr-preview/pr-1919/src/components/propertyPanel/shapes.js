@@ -1,1 +1,0 @@
-export{cX as propertyShapeLabel}from"../../../chunks/app-CMvWWKPp.js";

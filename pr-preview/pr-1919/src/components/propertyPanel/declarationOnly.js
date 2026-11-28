@@ -1,1 +1,0 @@
-export{HG as declarationOnlyDefinitionForName,UG as declarationOnlyStatusText}from"../../../chunks/app-CMvWWKPp.js";

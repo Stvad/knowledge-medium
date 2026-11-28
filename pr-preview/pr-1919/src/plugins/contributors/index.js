@@ -1,1 +1,0 @@
-export{f_ as contributorsPlugin}from"../../../chunks/app-CMvWWKPp.js";

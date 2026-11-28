@@ -1,1 +1,0 @@
-export{oX as PropertyShapeButton,sX as PropertyShapeGlyph}from"../../../chunks/app-CMvWWKPp.js";

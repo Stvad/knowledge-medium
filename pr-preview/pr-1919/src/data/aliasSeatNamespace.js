@@ -1,1 +1,0 @@
-export{tpt as aliasSeatNamespacesInTx,npt as resolveAliasSeatNamespaces}from"../../chunks/app-CMvWWKPp.js";

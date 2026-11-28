@@ -1,1 +1,0 @@
-export{Kn as characterCountItemContribution}from"../../../chunks/app-CMvWWKPp.js";

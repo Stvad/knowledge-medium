@@ -1,1 +1,0 @@
-export{n_ as HIGHLIGHT_CLASS,r_ as MOVED_HIGHLIGHT_CLASS,i_ as SUGGESTION_HIGHLIGHT_CLASS,a_ as coveringStyle,o_ as highlightClasses,s_ as highlightField,c_ as highlightRange,l_ as highlightRanges,u_ as threadHighlights,d_ as threadHighlightsContribution}from"../../../chunks/app-CMvWWKPp.js";

@@ -1,1 +1,0 @@
-export{BP as EXTENSIONS_PAGE_TITLE,VP as TUTORIAL_DEFAULT_TITLE,HP as TUTORIAL_VIM_TITLE,zE as onboardingPlugin,zP as seedTutorial}from"../../../chunks/app-CMvWWKPp.js";

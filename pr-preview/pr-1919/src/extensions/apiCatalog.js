@@ -1,1 +1,0 @@
-export{pv as extensionApiCatalog,mv as extensionApiRuntimeExports}from"../../chunks/app-CMvWWKPp.js";

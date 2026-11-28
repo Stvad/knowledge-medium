@@ -1,1 +1,0 @@
-export{XP as openKeybindingsSettingsAction}from"../../../chunks/app-CMvWWKPp.js";

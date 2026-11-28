@@ -1,1 +1,0 @@
-export{UZ as staticDataExtensions}from"../../chunks/app-CMvWWKPp.js";

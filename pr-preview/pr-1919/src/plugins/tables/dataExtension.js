@@ -1,1 +1,0 @@
-export{iQ as tablesDataExtension}from"../../../chunks/app-CMvWWKPp.js";

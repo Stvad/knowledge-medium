@@ -1,1 +1,0 @@
-export{IF as CommandPaletteHeaderItem}from"../../../chunks/app-CMvWWKPp.js";

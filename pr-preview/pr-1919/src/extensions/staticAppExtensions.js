@@ -1,1 +1,0 @@
-export{rn as staticAppExtensions}from"../../chunks/app-CMvWWKPp.js";

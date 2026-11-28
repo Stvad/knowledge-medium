@@ -1,1 +1,0 @@
-export{IA as usePendingInvitations}from"../../chunks/app-CMvWWKPp.js";

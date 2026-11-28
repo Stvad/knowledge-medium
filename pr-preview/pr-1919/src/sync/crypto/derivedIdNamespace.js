@@ -1,1 +1,0 @@
-export{Fpt as deriveWorkspaceIdNamespace}from"../../../chunks/app-CMvWWKPp.js";

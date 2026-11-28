@@ -1,1 +1,0 @@
-export{ar as birthdayPlugin}from"../../../chunks/app-CMvWWKPp.js";
